@@ -1,0 +1,52 @@
+# Web framework
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+
+# Database
+sqlalchemy[asyncio]==2.0.35
+asyncpg==0.29.0
+alembic==1.13.3
+
+# Settings & validation
+pydantic-settings==2.5.2
+pydantic[email]==2.9.2
+
+# Redis
+redis==5.1.0
+
+# Celery & scheduler
+celery==5.4.0
+redbeat==2.2.0
+
+# Payments
+stripe==10.12.0
+
+# HTTP client
+httpx==0.27.2
+
+# Logging
+structlog==24.4.0
+
+# Observability
+opentelemetry-sdk==1.27.0
+opentelemetry-instrumentation-fastapi==0.48b0
+
+# Retry logic
+tenacity==9.0.0
+
+# Auth
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+python-multipart==0.0.12
+
+# PDF generation
+weasyprint==62.3
+
+# AWS
+boto3==1.35.36
+
+# Templating
+jinja2==3.1.4
+
+# Image processing
+Pillow==10.4.0

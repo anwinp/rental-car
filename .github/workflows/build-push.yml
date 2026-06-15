@@ -1,0 +1,70 @@
+name: Build and Push Docker Images to ECR
+
+on:
+  workflow_run:
+    workflows: ["CI — Test, Lint, Type Check"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  id-token: write  # required for OIDC
+  contents: read
+
+jobs:
+  build-push:
+    name: Build and Push
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+
+    outputs:
+      image_tag: ${{ steps.set-tag.outputs.image_tag }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set image tag
+        id: set-tag
+        run: echo "image_tag=sha-${GITHUB_SHA::8}" >> "$GITHUB_OUTPUT"
+
+      - name: Configure AWS credentials (OIDC — no long-lived keys)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_BUILD_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set up Docker Buildx (arm64 for Graviton)
+        uses: docker/setup-buildx-action@v3
+        with:
+          platforms: linux/arm64
+
+      - name: Build and push API image
+        uses: docker/build-push-action@v6
+        with:
+          context: apps/api
+          file: apps/api/Dockerfile
+          platforms: linux/arm64
+          target: runtime
+          push: true
+          tags: |
+            ${{ steps.login-ecr.outputs.registry }}/rcm/api:${{ steps.set-tag.outputs.image_tag }}
+            ${{ steps.login-ecr.outputs.registry }}/rcm/api:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push Worker image
+        uses: docker/build-push-action@v6
+        with:
+          context: apps/api
+          file: apps/api/Dockerfile.worker
+          platforms: linux/arm64
+          target: runtime
+          push: true
+          tags: |
+            ${{ steps.login-ecr.outputs.registry }}/rcm/worker:${{ steps.set-tag.outputs.image_tag }}
+            ${{ steps.login-ecr.outputs.registry }}/rcm/worker:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

@@ -1,0 +1,103 @@
+name: Deploy — Staging → Smoke Tests → Production
+
+on:
+  workflow_run:
+    workflows: ["Build and Push Docker Images to ECR"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    environment: staging
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (staging)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_STAGING_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Run Alembic migrations on staging DB (expand phase)
+        run: |
+          aws ecs run-task \
+            --cluster rcm-staging \
+            --task-definition rcm-staging-migrate \
+            --launch-type FARGATE \
+            --network-configuration "awsvpcConfiguration={subnets=[$STAGING_PRIVATE_SUBNET],securityGroups=[$STAGING_SG],assignPublicIp=DISABLED}" \
+            --overrides '{"containerOverrides":[{"name":"api","command":["alembic","upgrade","head"]}]}'
+
+      - name: Register new ECS task definitions and deploy (CodeDeploy blue/green)
+        run: |
+          echo "Stub: register task definition with image tag from build-push workflow"
+          echo "Stub: create CodeDeploy deployment for rcm-staging-api"
+
+  smoke-tests:
+    name: Smoke Tests on Staging
+    runs-on: ubuntu-latest
+    environment: staging
+    needs: [deploy-staging]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Playwright + chromium
+        run: |
+          npm ci
+          npx playwright install chromium --with-deps
+
+      - name: Run smoke tests
+        run: npx playwright test e2e/tests/smoke/ --project=chromium
+        env:
+          PLAYWRIGHT_BASE_URL: ${{ secrets.STAGING_BASE_URL }}
+
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-staging
+          path: playwright-report/
+          retention-days: 7
+
+  # Approval gate — requires 1 reviewer from production-approvers team
+  # Configured in GitHub Environment "production" settings (not in YAML)
+
+  deploy-prod:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    environment: production  # blocks here for manual approval
+    needs: [smoke-tests]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (production)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_PROD_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Run Alembic migrations on prod DB (expand phase only)
+        run: |
+          echo "Stub: run alembic upgrade head on prod via ECS run-task"
+
+      - name: Deploy to production via CodeDeploy blue/green
+        run: |
+          echo "Stub: register task definition and create CodeDeploy deployment for rcm-prod-api"
+
+      - name: Notify #deployments Slack channel
+        if: always()
+        run: |
+          echo "Stub: POST success/failure notification to Slack"

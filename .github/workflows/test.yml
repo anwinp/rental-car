@@ -1,0 +1,144 @@
+name: CI — Test, Lint, Type Check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  backend-test:
+    name: Backend Test (Python/FastAPI)
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: rcm_test
+          POSTGRES_USER: rcm
+          POSTGRES_PASSWORD: test_password
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+        ports:
+          - "5432:5432"
+
+      redis-avail:
+        image: redis:7
+        options: --health-cmd "redis-cli ping" --health-interval 5s --health-retries 5
+        ports:
+          - "6379:6379"
+
+      redis-broker:
+        image: redis:7
+        options: --health-cmd "redis-cli ping" --health-interval 5s --health-retries 5
+        ports:
+          - "6380:6380"
+
+      redis-sessions:
+        image: redis:7
+        options: --health-cmd "redis-cli ping" --health-interval 5s --health-retries 5
+        ports:
+          - "6381:6381"
+
+    env:
+      DATABASE_URL: postgresql+asyncpg://rcm:test_password@localhost:5432/rcm_test
+      REDIS_AVAIL_URL: redis://localhost:6379/0
+      REDIS_BROKER_URL: redis://localhost:6380/0
+      REDIS_SESSION_URL: redis://localhost:6381/0
+      ENV: test
+      JWT_SECRET_KEY: test-secret-for-ci-only-not-for-production-use-ever
+      JWT_ALGORITHM: HS256
+      STRIPE_SECRET_KEY: sk_test_placeholder
+      STRIPE_WEBHOOK_SECRET: whsec_placeholder
+      AVALARA_ACCOUNT_ID: "0"
+      AVALARA_LICENSE_KEY: placeholder
+      AVALARA_COMPANY_CODE: TEST
+      TWILIO_ACCOUNT_SID: ACplaceholder
+      TWILIO_AUTH_TOKEN: placeholder
+      TWILIO_FROM_NUMBER: "+15550000000"
+      SENDGRID_API_KEY: SG.placeholder
+      AWS_REGION: us-east-1
+      S3_DOCUMENTS_BUCKET: rcm-test-documents
+      S3_PHOTOS_BUCKET: rcm-test-photos
+      S3_REPORTS_BUCKET: rcm-test-reports
+      CORS_ORIGINS: http://localhost:3000
+      APP_VERSION: ci
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: apps/api/requirements*.txt
+
+      - name: Install dependencies
+        run: |
+          pip install -r apps/api/requirements.txt
+          pip install -r apps/api/requirements-dev.txt
+
+      - name: Lint (ruff)
+        run: ruff check apps/api/app/ --select E,W,F
+
+      - name: Type check (mypy)
+        run: mypy apps/api/app/ --ignore-missing-imports
+
+      - name: Run unit tests
+        run: |
+          pytest apps/api/tests/unit/ \
+            -v \
+            --cov=apps/api/app \
+            --cov-report=xml \
+            --cov-fail-under=80 \
+            -x \
+            --asyncio-mode=auto
+
+      - name: Run Alembic migrations
+        working-directory: apps/api
+        run: alembic -c alembic.ini upgrade head
+
+      - name: Alembic lock safety check
+        working-directory: apps/api
+        run: alembic -c alembic.ini upgrade --sql head | python ../../scripts/check_lock_safety.py
+
+      - name: Run integration tests
+        run: |
+          pytest apps/api/tests/integration/ \
+            -v \
+            -m integration \
+            --asyncio-mode=auto
+
+      - name: Upload coverage to Codecov
+        if: always()
+        uses: codecov/codecov-action@v4
+        with:
+          file: coverage.xml
+          fail_ci_if_error: false
+
+  frontend-test:
+    name: Frontend Test (TypeScript/React)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint and type check
+        run: npx turbo run lint typecheck --filter=!@rcm/api-server
+
+      - name: Test with coverage
+        run: npx turbo run test --filter=!@rcm/api-server
+
+      - name: Build (verify no build errors)
+        run: npx turbo run build --filter=!@rcm/api-server

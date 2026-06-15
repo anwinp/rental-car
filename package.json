@@ -1,0 +1,35 @@
+{
+  "name": "rental-car-manager",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev --parallel",
+    "test": "turbo run test",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "type-check": "turbo run type-check",
+    "generate-client": "turbo run generate-client --filter=@rcm/api-client",
+    "clean": "turbo run clean && find . -name 'node_modules' -type d -prune -exec rm -rf '{}' +",
+    "e2e": "playwright test",
+    "e2e:local": "PLAYWRIGHT_BASE_URL=http://localhost:3000 playwright test",
+    "format": "prettier --write .",
+    "storybook": "turbo run storybook",
+    "chromatic": "chromatic --project-token $CHROMATIC_TOKEN",
+    "a11y": "playwright test e2e/accessibility.spec.ts"
+  },
+  "devDependencies": {
+    "turbo": "^2.0.0",
+    "typescript": "^5.6.3",
+    "eslint": "^8.57.0",
+    "prettier": "^3.3.3"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "npm": ">=10.0.0"
+  },
+  "packageManager": "npm@10.8.2"
+}

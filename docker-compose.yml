@@ -1,0 +1,163 @@
+# docker-compose.yml — local dev only; not used in production
+version: '3.9'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: rcm_dev
+      POSTGRES_USER: rcm
+      POSTGRES_PASSWORD: rcm_dev_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rcm -d rcm_dev"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  pgbouncer:
+    image: pgbouncer/pgbouncer:1.22
+    environment:
+      DATABASE_URL: "postgres://rcm:rcm_dev_password@postgres:5432/rcm_dev"
+      POOL_MODE: transaction
+      MAX_CLIENT_CONN: 200
+      DEFAULT_POOL_SIZE: 20
+      SERVER_RESET_QUERY: DISCARD ALL
+      LISTEN_PORT: 5433
+    ports:
+      - "5433:5433"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  redis-avail:
+    image: redis:7-alpine
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru --port 6379
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+
+  redis-broker:
+    image: redis:7-alpine
+    command: redis-server --maxmemory 512mb --maxmemory-policy noeviction --port 6380
+    ports:
+      - "6380:6380"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "6380", "ping"]
+      interval: 5s
+
+  redis-sessions:
+    image: redis:7-alpine
+    command: redis-server --maxmemory 256mb --maxmemory-policy volatile-lru --port 6381
+    ports:
+      - "6381:6381"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "6381", "ping"]
+      interval: 5s
+
+  api:
+    build:
+      context: apps/api
+      dockerfile: Dockerfile
+      target: runtime
+    environment:
+      ENV: development
+      DATABASE_URL: postgresql+asyncpg://rcm:rcm_dev_password@pgbouncer:5433/rcm_dev
+      REDIS_AVAIL_URL: redis://redis-avail:6379/0
+      REDIS_BROKER_URL: redis://redis-broker:6380/0
+      REDIS_SESSION_URL: redis://redis-sessions:6381/0
+      JWT_SECRET_KEY: dev-secret-change-in-production-must-be-at-least-64-chars
+      JWT_ALGORITHM: HS256
+      CORS_ORIGINS: http://localhost:3000,http://localhost:3001,http://localhost:3002
+      PORT: "8000"
+      WORKER_COUNT: "2"
+      LOG_LEVEL: debug
+      APP_VERSION: local
+      STRIPE_SECRET_KEY: sk_test_placeholder
+      STRIPE_WEBHOOK_SECRET: whsec_placeholder
+      AVALARA_ACCOUNT_ID: "0"
+      AVALARA_LICENSE_KEY: placeholder
+      AVALARA_COMPANY_CODE: DEV
+      TWILIO_ACCOUNT_SID: ACplaceholder
+      TWILIO_AUTH_TOKEN: placeholder
+      TWILIO_FROM_NUMBER: "+15550000000"
+      SENDGRID_API_KEY: SG.placeholder
+      AWS_REGION: us-east-1
+      S3_DOCUMENTS_BUCKET: rcm-dev-documents
+      S3_PHOTOS_BUCKET: rcm-dev-photos
+      S3_REPORTS_BUCKET: rcm-dev-reports
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./apps/api/app:/app/app   # hot-reload in dev
+    depends_on:
+      pgbouncer:
+        condition: service_started
+      redis-broker:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  worker-notifications:
+    build:
+      context: apps/api
+      dockerfile: Dockerfile.worker
+      target: runtime
+    environment:
+      ENV: development
+      DATABASE_URL: postgresql+asyncpg://rcm:rcm_dev_password@pgbouncer:5433/rcm_dev
+      REDIS_AVAIL_URL: redis://redis-avail:6379/0
+      REDIS_BROKER_URL: redis://redis-broker:6380/0
+      REDIS_SESSION_URL: redis://redis-sessions:6381/0
+      WORKER_QUEUES: notifications
+      WORKER_CONCURRENCY: "2"
+      SENDGRID_API_KEY: SG.placeholder
+      TWILIO_ACCOUNT_SID: ACplaceholder
+      TWILIO_AUTH_TOKEN: placeholder
+      TWILIO_FROM_NUMBER: "+15550000000"
+    depends_on:
+      - redis-broker
+      - postgres
+
+  worker-reports:
+    build:
+      context: apps/api
+      dockerfile: Dockerfile.worker
+      target: runtime
+    environment:
+      ENV: development
+      DATABASE_URL: postgresql+asyncpg://rcm:rcm_dev_password@pgbouncer:5433/rcm_dev
+      REDIS_AVAIL_URL: redis://redis-avail:6379/0
+      REDIS_BROKER_URL: redis://redis-broker:6380/0
+      REDIS_SESSION_URL: redis://redis-sessions:6381/0
+      WORKER_QUEUES: reports,batch
+      WORKER_CONCURRENCY: "1"
+      AWS_REGION: us-east-1
+      S3_REPORTS_BUCKET: rcm-dev-reports
+    depends_on:
+      - redis-broker
+      - postgres
+
+  beat:
+    build:
+      context: apps/api
+      dockerfile: Dockerfile.worker
+      target: runtime
+    environment:
+      ENV: development
+      REDIS_BROKER_URL: redis://redis-broker:6380/0
+      BEAT: "true"
+    depends_on:
+      - redis-broker
+
+volumes:
+  postgres_data:

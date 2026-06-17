@@ -375,7 +375,12 @@ export function ReturnProcessingPage() {
   const totalExtra = fuelCharge + timeCharge + mileageCharge
 
   const returnDate = selectedRes?.return_date ? new Date(selectedRes.return_date) : null
-  const isLate = returnDate && new Date() > returnDate
+  const now = new Date()
+  const isLate = returnDate && now > returnDate
+  const isEarlyReturn = returnDate && now < returnDate
+  const earlyDays = isEarlyReturn && returnDate
+    ? Math.ceil((returnDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
+    : 0
 
   return (
     <div className="space-y-5 max-w-4xl">
@@ -507,6 +512,16 @@ export function ReturnProcessingPage() {
               ))}
             </div>
           </div>
+
+          {/* Early Return Notice */}
+          {isEarlyReturn && (
+            <div className="rounded-lg px-4 py-3" style={{ background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.3)' }}>
+              <p className="text-[12px] font-semibold" style={{ color: '#6366f1' }}>Early Return</p>
+              <p className="text-[12px] mt-0.5" style={{ color: 'var(--text-2)' }}>
+                Customer is returning {earlyDays} day{earlyDays !== 1 ? 's' : ''} early. A prorated refund may apply.
+              </p>
+            </div>
+          )}
 
           {/* Return Details */}
           <div className="panel px-5 py-4 space-y-5">
@@ -692,6 +707,16 @@ export function ReturnProcessingPage() {
             </div>
           </div>
 
+          {/* Early Return Notice */}
+          {isEarlyReturn && (
+            <div className="rounded-lg px-4 py-3" style={{ background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.3)' }}>
+              <p className="text-[12px] font-semibold" style={{ color: '#6366f1' }}>Early Return</p>
+              <p className="text-[12px] mt-0.5" style={{ color: 'var(--text-2)' }}>
+                Customer is returning {earlyDays} day{earlyDays !== 1 ? 's' : ''} early. A prorated refund may apply.
+              </p>
+            </div>
+          )}
+
           {/* Charges */}
           <div className="panel px-5 py-4">
             <SectionLabel>Charge Estimate</SectionLabel>
@@ -792,6 +817,15 @@ export function ReturnProcessingPage() {
               </div>
             ))}
           </div>
+
+          {isEarlyReturn && (
+            <div className="rounded-lg px-4 py-3 mx-auto max-w-sm" style={{ background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.3)' }}>
+              <p className="text-[12px] font-semibold" style={{ color: '#6366f1' }}>Early Return — Refund Notice</p>
+              <p className="text-[12px] mt-0.5" style={{ color: 'var(--text-2)' }}>
+                Prorated refund will be processed during payment capture.
+              </p>
+            </div>
+          )}
 
           <div className="flex items-center justify-center gap-3 pt-2">
             <button type="button" onClick={reset} className="btn-primary">Process Another Return</button>

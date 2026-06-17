@@ -264,7 +264,25 @@ class AuthService:
 
     # ── Get Me ────────────────────────────────────────────────────────────────
 
-    async def get_me(self, user_id: str, tenant_id: str) -> UserProfile:
+    async def get_me(self, user_id: str, tenant_id: str, is_customer: bool = False) -> UserProfile:
+        if is_customer:
+            from app.domains.customers.repository import CustomerRepository
+            repo = CustomerRepository(self._session, UUID(tenant_id))
+            customer = await repo.get(UUID(user_id))
+            if customer is None:
+                raise ResourceNotFoundError("customers", user_id)
+            return UserProfile(
+                user_id=UUID(customer.customer_id),
+                tenant_id=UUID(customer.tenant_id),
+                email=customer.email,
+                first_name=customer.first_name,
+                last_name=customer.last_name,
+                role="CUSTOMER",
+                roles=["CUSTOMER"],
+                location_ids=[],
+                is_mfa_enabled=False,
+            )
+
         user = await self._repo.get_by_id(user_id)
         if user is None:
             raise ResourceNotFoundError("staff_users", user_id)
@@ -280,6 +298,120 @@ class AuthService:
             location_ids=location_ids,
             is_mfa_enabled=user.is_mfa_enabled,
         )
+
+    # ── Google OAuth ──────────────────────────────────────────────────────────
+
+    async def oauth_google_exchange(
+        self,
+        code: str,
+        redirect_uri: str,
+        tenant_id: str,
+    ) -> tuple[str, str]:
+        """
+        Exchange a Google authorization code for a customer session.
+        Returns (access_token, refresh_token) — callers set the cookies.
+        """
+        import httpx
+        from app.domains.customers.repository import CustomerRepository
+
+        # Exchange authorization code for Google access token
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            token_resp = await client.post(
+                "https://oauth2.googleapis.com/token",
+                data={
+                    "code":          code,
+                    "client_id":     settings.google_client_id,
+                    "client_secret": settings.google_client_secret.get_secret_value(),
+                    "redirect_uri":  redirect_uri,
+                    "grant_type":    "authorization_code",
+                },
+            )
+            if token_resp.status_code != 200:
+                log.error("google_token_exchange_failed", status=token_resp.status_code, body=token_resp.text)
+                raise AuthenticationError("Google authorization failed.")
+
+            google_access_token = token_resp.json().get("access_token")
+
+            # Fetch Google user profile
+            userinfo_resp = await client.get(
+                "https://www.googleapis.com/oauth2/v2/userinfo",
+                headers={"Authorization": f"Bearer {google_access_token}"},
+            )
+            if userinfo_resp.status_code != 200:
+                raise AuthenticationError("Failed to retrieve Google profile.")
+            userinfo = userinfo_resp.json()
+
+        google_sub = str(userinfo.get("id") or userinfo.get("sub") or "")
+        email = (userinfo.get("email") or "").lower().strip()
+        first_name = userinfo.get("given_name") or userinfo.get("name", "Google").split()[0]
+        last_name = userinfo.get("family_name") or ""
+
+        if not google_sub or not email:
+            raise AuthenticationError("Google did not return a usable identity.")
+
+        tenant_uuid = UUID(tenant_id)
+        repo = CustomerRepository(self._session, tenant_uuid)
+
+        # Find by Google sub → link email → create new
+        customer = await repo.get_by_google_sub(google_sub, tenant_uuid)
+        if customer is None:
+            customer = await repo.get_by_email(email, tenant_uuid)
+            if customer is not None:
+                # Link the Google identity to the existing account
+                await repo.update(
+                    UUID(customer.customer_id),
+                    oauth_google_sub=google_sub,
+                    email_verified=True,
+                )
+                await self._session.refresh(customer)
+            else:
+                # First-time Google sign-in — create customer record
+                customer = await repo.create(
+                    first_name=first_name,
+                    last_name=last_name or "User",
+                    email=email,
+                    email_verified=True,
+                    oauth_google_sub=google_sub,
+                )
+
+        await self._session.commit()
+
+        # Issue JWT pair for the customer
+        customer_uuid = UUID(customer.customer_id)
+        access_jti = str(uuid.uuid4())
+        refresh_jti = str(uuid.uuid4())
+
+        access_token = create_access_token(
+            user_id=customer_uuid,
+            tenant_id=tenant_uuid,
+            roles=["CUSTOMER"],
+            primary_role="CUSTOMER",
+            location_ids=[],
+            jti=access_jti,
+            app_context="web",
+        )
+        refresh_token = create_refresh_token(
+            user_id=str(customer_uuid),
+            jti=refresh_jti,
+            access_jti=access_jti,
+            tenant_id=str(tenant_uuid),
+        )
+
+        redis = get_session_redis()
+        await redis.setex(
+            SESSION_KEY.format(jti=access_jti),
+            settings.jwt_access_token_ttl_web_seconds,
+            str(customer_uuid),
+        )
+        await redis.setex(
+            REFRESH_TOKEN_KEY.format(jti=refresh_jti),
+            settings.jwt_refresh_token_ttl_seconds,
+            str(customer_uuid),
+        )
+        await redis.sadd(USER_SESSIONS_KEY.format(user_id=str(customer_uuid)), access_jti)
+
+        log.info("google_oauth_login", customer_id=str(customer_uuid), tenant_id=tenant_id)
+        return access_token, refresh_token
 
     # ── Change Password ────────────────────────────────────────────────────────
 

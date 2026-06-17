@@ -716,17 +716,18 @@ class CheckoutService:
     ) -> int:
         """Count today's CONFIRMED reservations for this location."""
         from sqlalchemy import text
-        from datetime import date as dt_date
-        today = datetime.now(timezone.utc).date()
+        now_utc = datetime.now(timezone.utc)
+        day_start = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+        day_end = day_start.replace(hour=23, minute=59, second=59)
         result = await self._session.execute(
             text(
                 "SELECT COUNT(*) FROM reservations "
                 "WHERE pickup_location_id = :loc AND tenant_id = :tid "
                 "AND status = 'CONFIRMED' "
-                "AND pickup_datetime::date = :today "
+                "AND pickup_datetime BETWEEN :day_start AND :day_end "
                 "AND deleted_at IS NULL"
             ),
-            {"loc": str(location_id), "tid": str(tenant_id), "today": str(today)},
+            {"loc": str(location_id), "tid": str(tenant_id), "day_start": day_start, "day_end": day_end},
         )
         row = result.first()
         return int(row[0]) if row else 0

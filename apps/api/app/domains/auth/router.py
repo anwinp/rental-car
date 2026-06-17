@@ -1,12 +1,18 @@
 """Auth domain FastAPI router."""
 from __future__ import annotations
 
+import secrets
 from typing import Optional
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Cookie, Depends, Request, Response, status
+from fastapi.responses import RedirectResponse
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.database import get_session
+from app.core.redis import get_session_redis
 from app.core.security import UserClaims, get_current_user
 from app.domains.auth.schemas import (
     LoginRequest,
@@ -21,6 +27,21 @@ from app.domains.auth.schemas import (
 from app.domains.auth.service import AuthService
 
 router = APIRouter()
+
+_OAUTH_STATE_TTL = 600  # 10 minutes
+
+
+class GoogleExchangeRequest(BaseModel):
+    code: str
+    state: str
+    redirect_uri: str
+
+
+class GoogleExchangeResponse(BaseModel):
+    access_token: str
+    refresh_token: str
+    access_ttl: int
+    refresh_ttl: int
 
 
 def _get_auth_service(db: AsyncSession = Depends(get_session)) -> AuthService:
@@ -114,7 +135,78 @@ async def get_me(
     service: AuthService = Depends(_get_auth_service),
 ) -> UserProfile:
     """Return the current user's profile.  Read-only — no GUC injection needed."""
-    return await service.get_me(str(claims.user_id), str(claims.tenant_id))
+    is_customer = "CUSTOMER" in claims.roles
+    return await service.get_me(str(claims.user_id), str(claims.tenant_id), is_customer=is_customer)
+
+
+# ── Google OAuth ───────────────────────────────────────────────────────────────
+
+@router.get("/google")
+async def google_auth_redirect(request: Request) -> RedirectResponse:
+    """
+    Step 1 — redirect the browser to Google's OAuth consent screen.
+    The tenant_id is encoded in the state so the callback can resolve it.
+    """
+    if not settings.google_client_id:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=501, detail="Google OAuth is not configured on this server.")
+
+    tenant_id = request.query_params.get(
+        "tenant_id", "00000000-0000-0000-0000-000000000001"
+    )
+    state = secrets.token_urlsafe(32)
+    redis = get_session_redis()
+    # Store tenant_id under the state key; 10-minute window
+    await redis.setex(f"oauth_state:{state}", _OAUTH_STATE_TTL, tenant_id)
+
+    params = {
+        "client_id":     settings.google_client_id,
+        "redirect_uri":  settings.google_oauth_redirect_uri,
+        "response_type": "code",
+        "scope":         "openid email profile",
+        "state":         state,
+        "access_type":   "online",
+        "prompt":        "select_account",
+    }
+    return RedirectResponse(
+        url="https://accounts.google.com/o/oauth2/v2/auth?" + urlencode(params),
+        status_code=302,
+    )
+
+
+@router.post("/google/exchange", response_model=GoogleExchangeResponse)
+async def google_exchange(
+    payload: GoogleExchangeRequest,
+    request: Request,
+    service: AuthService = Depends(_get_auth_service),
+) -> GoogleExchangeResponse:
+    """
+    Step 2 — server-to-server code exchange (called by the Next.js route handler,
+    NOT by the browser directly).  Returns tokens as JSON; caller sets cookies.
+    """
+    if not settings.google_client_id:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=501, detail="Google OAuth is not configured.")
+
+    redis = get_session_redis()
+    tenant_id_bytes = await redis.get(f"oauth_state:{payload.state}")
+    if not tenant_id_bytes:
+        from app.core.exceptions import AuthenticationError
+        raise AuthenticationError("OAuth state is invalid or has expired.")
+    tenant_id = tenant_id_bytes if isinstance(tenant_id_bytes, str) else tenant_id_bytes.decode()
+    await redis.delete(f"oauth_state:{payload.state}")
+
+    access_token, refresh_token = await service.oauth_google_exchange(
+        code=payload.code,
+        redirect_uri=payload.redirect_uri,
+        tenant_id=tenant_id,
+    )
+    return GoogleExchangeResponse(
+        access_token=access_token,
+        refresh_token=refresh_token,
+        access_ttl=settings.jwt_access_token_ttl_web_seconds,
+        refresh_ttl=settings.jwt_refresh_token_ttl_seconds,
+    )
 
 
 # ── Password Management ───────────────────────────────────────────────────────

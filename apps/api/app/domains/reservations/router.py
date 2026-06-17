@@ -1,18 +1,21 @@
 """Reservations domain router."""
 from __future__ import annotations
 
+import logging
 import uuid as _uuid_module
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
 from sqlalchemy import text as sqlt
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.database import get_session
+from app.core.database import AsyncSessionLocal, get_session
 from app.core.redis import get_avail_redis
+
+log = logging.getLogger(__name__)
 from app.core.security import UserClaims, get_current_user
 from app.domains.pricing.repository import PricingRepository
 from app.domains.pricing.schemas import ExtraQuoteRequest, RateQuoteRequest
@@ -90,6 +93,30 @@ class CrmReservationRow(BaseModel):
     assigned_vehicle: Optional[str] = None
 
 
+# ── Email helper (background task) ───────────────────────────────────────────
+
+async def _send_booking_confirmation_email(
+    tenant_id: UUID,
+    customer_email: str,
+    merge_vars: dict[str, Any],
+) -> None:
+    """Fire-and-forget: render the booking.confirmed template and email the customer."""
+    from app.domains.notifications.service import NotificationService
+    try:
+        async with AsyncSessionLocal() as session:
+            svc = NotificationService(session)
+            await svc.render_and_send(
+                event_code="booking.confirmed",
+                recipient_id="",
+                merge_vars=merge_vars,
+                tenant_id=str(tenant_id),
+                channel="EMAIL",
+                recipient_address=customer_email,
+            )
+    except Exception as exc:
+        log.warning("booking_confirmation_email_failed email=%s error=%s", customer_email, exc)
+
+
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
 
@@ -103,6 +130,7 @@ class CrmReservationRow(BaseModel):
 async def create_guest_reservation(
     payload: GuestBookingRequest,
     request: Request,
+    background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_session),
 ) -> GuestBookingResponse:
     """One-shot guest booking: resolves location, generates quote token, creates reservation."""
@@ -247,6 +275,28 @@ async def create_guest_reservation(
         actor_id=None,  # guest booking — no staff agent
     )
 
+    # ── Confirmation email (fire-and-forget) ──────────────────────────────
+    loc_row = (await session.execute(
+        sqlt("SELECT name FROM locations WHERE location_id = :lid"),
+        {"lid": str(location_uuid)},
+    )).first()
+    location_name = loc_row[0] if loc_row else payload.pickup_location
+
+    background_tasks.add_task(
+        _send_booking_confirmation_email,
+        tenant_id=tenant_id,
+        customer_email=payload.guest_info.email,
+        merge_vars={
+            "first_name": payload.guest_info.first_name,
+            "confirmation_number": reservation.confirmation_number,
+            "pickup_datetime": pickup_dt.strftime("%b %d, %Y at %I:%M %p UTC"),
+            "dropoff_datetime": dropoff_dt.strftime("%b %d, %Y at %I:%M %p UTC"),
+            "pickup_location": location_name,
+            "grand_total": str(quote.total),
+            "currency": quote.currency,
+        },
+    )
+
     return GuestBookingResponse(
         confirmation_number=reservation.confirmation_number,
         reservation_id=reservation.reservation_id,
@@ -265,6 +315,8 @@ async def create_guest_reservation(
 )
 async def create_reservation(
     payload: ReservationCreate,
+    background_tasks: BackgroundTasks,
+    session: AsyncSession = Depends(get_session),
     svc: ReservationService = Depends(_get_service),
     claims: UserClaims = Depends(_get_claims),
 ) -> ReservationResponse:
@@ -272,6 +324,28 @@ async def create_reservation(
         data=payload,
         actor_id=claims.user_id,
     )
+
+    # ── Confirmation email (fire-and-forget) ──────────────────────────────
+    cust_row = (await session.execute(
+        sqlt("SELECT email, first_name FROM customers WHERE customer_id = :cid AND deleted_at IS NULL"),
+        {"cid": reservation.customer_id},
+    )).first()
+    if cust_row:
+        background_tasks.add_task(
+            _send_booking_confirmation_email,
+            tenant_id=claims.tenant_id,
+            customer_email=cust_row[0],
+            merge_vars={
+                "first_name": cust_row[1],
+                "confirmation_number": reservation.confirmation_number,
+                "pickup_datetime": reservation.pickup_datetime.strftime("%b %d, %Y at %I:%M %p UTC"),
+                "dropoff_datetime": reservation.return_datetime.strftime("%b %d, %Y at %I:%M %p UTC"),
+                "pickup_location": str(reservation.pickup_location_id),
+                "grand_total": str(reservation.grand_total or ""),
+                "currency": reservation.currency or "USD",
+            },
+        )
+
     return ReservationResponse.model_validate(reservation)
 
 
@@ -357,7 +431,7 @@ async def list_reservations_crm(
 
 
 @router.get(
-    "/",
+    "",
     response_model=list[ReservationResponse],
     summary="List reservations with filters",
     tags=["reservations"],
@@ -398,6 +472,84 @@ async def get_by_confirmation_number(
 ) -> ReservationResponse:
     reservation = await svc.get_by_confirmation_number(confirmation_number)
     return ReservationResponse.model_validate(reservation)
+
+
+# ── Public confirmation lookup (no auth required) ─────────────────────────────
+
+class _PublicCustomer(BaseModel):
+    first_name: str
+    last_name: str
+    email: str
+
+class _PublicRateSummary(BaseModel):
+    total: float
+    currency_code: str
+
+class PublicConfirmationResponse(BaseModel):
+    reservation_id: str
+    confirmation_number: str
+    status: str
+    pickup_date: str
+    dropoff_date: str
+    class_name: str
+    customer: _PublicCustomer
+    rate_summary: _PublicRateSummary
+
+
+@router.get(
+    "/public/{confirmation_number}",
+    response_model=PublicConfirmationResponse,
+    summary="Public confirmation lookup — no auth required",
+    tags=["reservations"],
+)
+async def get_public_confirmation(
+    confirmation_number: str,
+    session: AsyncSession = Depends(get_session),
+) -> PublicConfirmationResponse:
+    row = await session.execute(
+        sqlt("""
+            SELECT
+                r.reservation_id,
+                r.confirmation_number,
+                r.status,
+                r.pickup_datetime,
+                r.return_datetime,
+                COALESCE(vc.name, 'Vehicle') AS class_name,
+                c.first_name,
+                c.last_name,
+                c.email,
+                COALESCE(r.grand_total, r.base_total, 0)::float AS total,
+                r.currency
+            FROM reservations r
+            LEFT JOIN vehicle_classes vc ON vc.class_id = r.vehicle_class_id
+            LEFT JOIN customers c ON c.customer_id = r.customer_id
+            WHERE r.confirmation_number = :cn
+              AND r.deleted_at IS NULL
+            LIMIT 1
+        """),
+        {"cn": confirmation_number},
+    )
+    res = row.mappings().first()
+    if not res:
+        raise HTTPException(status_code=404, detail="Reservation not found")
+
+    return PublicConfirmationResponse(
+        reservation_id=str(res["reservation_id"]),
+        confirmation_number=res["confirmation_number"],
+        status=res["status"],
+        pickup_date=res["pickup_datetime"].date().isoformat(),
+        dropoff_date=res["return_datetime"].date().isoformat(),
+        class_name=res["class_name"],
+        customer=_PublicCustomer(
+            first_name=res["first_name"] or "Guest",
+            last_name=res["last_name"] or "",
+            email=res["email"] or "",
+        ),
+        rate_summary=_PublicRateSummary(
+            total=float(res["total"] or 0),
+            currency_code=res["currency"] or "USD",
+        ),
+    )
 
 
 @router.get(

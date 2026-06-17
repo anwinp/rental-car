@@ -20,6 +20,13 @@ import { TaskBoardPage } from './pages/TaskBoardPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { ReturnProcessingPage } from './pages/ReturnProcessingPage'
 import { CounterCheckoutPage } from './pages/CounterCheckoutPage'
+import { InspectionsPage } from './pages/InspectionsPage'
+import { PaymentsPage } from './pages/PaymentsPage'
+import { DamagePage } from './pages/DamagePage'
+import { ShiftPage } from './pages/ShiftPage'
+import { OverduePage } from './pages/OverduePage'
+import { MaintenancePage } from './pages/MaintenancePage'
+import { CorporatePage } from './pages/CorporatePage'
 
 const ADMIN_ROLES = [
   UserRole.BRANCH_MANAGER,
@@ -280,6 +287,13 @@ export default function App() {
                       <Route path="/customers" element={<CustomersPage />} />
                       <Route path="/checkout" element={<CounterCheckoutPage />} />
                       <Route path="/returns" element={<ReturnProcessingPage />} />
+                      <Route path="/inspections" element={<InspectionsPage />} />
+                      <Route path="/payments" element={<PaymentsPage />} />
+                      <Route path="/damage" element={<DamagePage />} />
+                      <Route path="/shift" element={<ShiftPage />} />
+                      <Route path="/overdue" element={<OverduePage />} />
+                      <Route path="/maintenance" element={<MaintenancePage />} />
+                      <Route path="/corporate" element={<CorporatePage />} />
                       <Route
                         path="/pricing"
                         element={

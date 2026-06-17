@@ -4,10 +4,10 @@ const nextConfig = {
     typedRoutes: true,
   },
   async rewrites() {
-    // Proxy /api/* to the FastAPI backend.
-    // Use 127.0.0.1 explicitly to avoid IPv6 port collisions in local dev.
+    // Proxy /api/v1/* to the FastAPI backend.
+    // /api/auth/* (Next.js route handlers) are intentionally excluded.
     const apiBase = (process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:8000').replace('localhost', '127.0.0.1')
-    return [{ source: '/api/:path*', destination: `${apiBase}/api/:path*` }]
+    return [{ source: '/api/v1/:path*', destination: `${apiBase}/api/v1/:path*` }]
   },
   images: {
     remotePatterns: [
@@ -28,6 +28,7 @@ const nextConfig = {
   env: {
     NEXT_PUBLIC_API_BASE_URL: process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:8000',
     NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY ?? '',
+    NEXT_PUBLIC_APP_URL: process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3400',
   },
   transpilePackages: ['@rcm/ui', '@rcm/api-client', '@rcm/shared-types'],
 }

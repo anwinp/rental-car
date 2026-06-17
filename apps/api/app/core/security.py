@@ -176,11 +176,12 @@ def set_auth_cookies(
         if app_context == "counter"
         else settings.jwt_access_token_ttl_web_seconds
     )
+    secure = settings.env != "development"
     response.set_cookie(
         key="rcm_access",
         value=access_token,
         httponly=True,
-        secure=True,
+        secure=secure,
         samesite="strict",
         path="/api",
         max_age=access_ttl,
@@ -189,7 +190,7 @@ def set_auth_cookies(
         key="rcm_refresh",
         value=refresh_token,
         httponly=True,
-        secure=True,
+        secure=secure,
         samesite="strict",
         path="/api/v1/auth/refresh",
         max_age=settings.jwt_refresh_token_ttl_seconds,

@@ -1,6 +1,12 @@
 import { useState, type FormEvent } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 
+const TENANT_ID = import.meta.env.VITE_TENANT_ID as string | undefined
+
+function tenantHeaders(): Record<string, string> {
+  return TENANT_ID ? { 'X-Tenant-ID': TENANT_ID } : {}
+}
+
 type Reservation = {
   reservation_id: string; confirmation_number: string; customer_name: string
   customer_email: string; pickup_date: string; return_date: string
@@ -8,38 +14,111 @@ type Reservation = {
   assigned_vehicle: string | null
 }
 
+type VehicleClass = { class_id: string; name: string }
+
+type Location = { location_id: string; short_code: string; name: string; city: string; state_province: string }
+
+type CancellationPreview = {
+  reservation_id: string
+  hours_until_pickup: string
+  refund_amount: string
+  cancellation_fee: string
+  policy_tier: string
+  deposit_paid: string
+}
+
 async function fetchCrmReservations(): Promise<Reservation[]> {
   const res = await fetch('/api/v1/reservations/crm-list?limit=200', {
     credentials: 'include',
+    headers: tenantHeaders(),
   })
   if (!res.ok) throw new Error(`Failed to load reservations: ${res.status}`)
   return res.json()
 }
 
+async function fetchVehicleClasses(): Promise<VehicleClass[]> {
+  const res = await fetch('/api/v1/fleet/classes', {
+    credentials: 'include',
+    headers: tenantHeaders(),
+  })
+  if (!res.ok) return []
+  return res.json()
+}
+
+async function fetchLocations(): Promise<Location[]> {
+  const res = await fetch('/api/v1/locations', {
+    credentials: 'include',
+    headers: tenantHeaders(),
+  })
+  if (!res.ok) return []
+  return res.json()
+}
+
+async function fetchCancellationPreview(reservationId: string): Promise<CancellationPreview> {
+  const res = await fetch(`/api/v1/reservations/${reservationId}/cancellation-preview`, {
+    credentials: 'include',
+    headers: tenantHeaders(),
+  })
+  if (!res.ok) throw new Error('Could not load cancellation preview')
+  return res.json()
+}
+
+async function cancelReservation(reservationId: string, reason: string, waiveFee: boolean): Promise<void> {
+  const res = await fetch(`/api/v1/reservations/${reservationId}/cancel`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json', ...tenantHeaders() },
+    body: JSON.stringify({ reason, waive_fee: waiveFee }),
+  })
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({}))
+    throw new Error((e as { detail?: string }).detail ?? `Cancel failed: ${res.status}`)
+  }
+}
+
+async function modifyReservation(
+  reservationId: string,
+  payload: {
+    pickup_dt?: string
+    dropoff_dt?: string
+    vehicle_class_id?: string
+    change_reason?: string
+  }
+): Promise<void> {
+  const res = await fetch(`/api/v1/reservations/${reservationId}`, {
+    method: 'PATCH',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json', ...tenantHeaders() },
+    body: JSON.stringify(payload),
+  })
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({}))
+    throw new Error((e as { detail?: string }).detail ?? `Modify failed: ${res.status}`)
+  }
+}
+
 async function updateReservationStatus(reservation_id: string, newStatus: string): Promise<void> {
-  // Map UI status names to API cancel/modify flows
   if (newStatus === 'CANCELLED') {
     const res = await fetch(`/api/v1/reservations/${reservation_id}/cancel`, {
       method: 'POST',
       credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...tenantHeaders() },
       body: JSON.stringify({ reason: 'Cancelled by CRM operator', waive_fee: false }),
     })
     if (!res.ok) throw new Error(`Cancel failed: ${res.status}`)
     return
   }
-  // For ACTIVE (check-out) and RETURNED (check-in) use the counter endpoints
   const path = newStatus === 'ACTIVE'
     ? '/api/v1/counter/checkout'
     : '/api/v1/counter/check-in'
   const res = await fetch(path, {
     method: 'POST',
     credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...tenantHeaders() },
     body: JSON.stringify({ reservation_id }),
   })
   if (!res.ok) {
-    // Fall through silently — counter endpoints may not exist yet; page will refetch
+    // Fall through — counter endpoints may not exist yet; page will refetch
   }
 }
 
@@ -58,10 +137,17 @@ const STATUS: Record<string, { badge: string; dot: string; label: string }> = {
 }
 const getS = (s: string) => STATUS[s] ?? { badge:'badge-slate', dot:'bg-slate-400', label: s }
 
-const CH: Record<string, string> = { DIRECT_WEB:'Web', OTA:'OTA', WALK_IN:'Walk-in', API:'API', PHONE:'Phone' }
+const CH: Record<string, string> = { DIRECT_WEB:'Web', OTA:'OTA', WALK_IN:'Walk-in', API:'API', PHONE:'Phone', CALL_CENTER:'Call Center', COUNTER:'Counter', WALK_UP:'Walk-up', MOBILE_APP:'Mobile', GDS:'GDS', KIOSK:'Kiosk' }
 const fmt = (d: string) => new Date(d).toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' })
 
 const DAILY_RATES: Record<string, number> = { Economy: 35, Standard: 55, SUV: 75, Premium: 95, Luxury: 140 }
+
+const CANCEL_REASONS = [
+  { value: 'CUSTOMER_REQUEST', label: 'Customer Request' },
+  { value: 'AGENT_ERROR', label: 'Agent Error' },
+  { value: 'NO_VEHICLE_AVAILABLE', label: 'No Vehicle Available' },
+  { value: 'OTHER', label: 'Other' },
+]
 
 function Badge({ status }: { status: string }) {
   const s = getS(status)
@@ -83,13 +169,39 @@ const BLANK_NEW = {
 
 let nextId = 1
 
+function isNoShowEligible(r: Reservation): boolean {
+  if (r.status !== 'CONFIRMED' && r.status !== 'PENDING') return false
+  const pickupMs = new Date(r.pickup_date).getTime()
+  // Only eligible once pickup time is more than 2 hours in the past
+  return pickupMs < Date.now() - 2 * 60 * 60 * 1000
+}
+
+function policyTierLabel(tier: string): string {
+  if (tier === 'FULL_REFUND') return 'Full refund'
+  if (tier === 'PARTIAL_REFUND') return 'Partial refund'
+  if (tier === 'NO_REFUND') return 'No refund'
+  return tier
+}
+
 export function ReservationsPage() {
   const queryClient = useQueryClient()
   const { data: apiData, isLoading, isError } = useQuery({
     queryKey: ['reservations', 'crm-list'],
     queryFn: fetchCrmReservations,
-    refetchInterval: 30_000, // poll every 30s for real-time updates
+    refetchInterval: 30_000,
     staleTime: 10_000,
+  })
+
+  const { data: vehicleClasses = [] } = useQuery<VehicleClass[]>({
+    queryKey: ['fleet-classes'],
+    queryFn: fetchVehicleClasses,
+    staleTime: 300_000,
+  })
+
+  const { data: locations = [] } = useQuery<Location[]>({
+    queryKey: ['locations'],
+    queryFn: fetchLocations,
+    staleTime: 300_000,
   })
 
   const statusMutation = useMutation({
@@ -100,7 +212,6 @@ export function ReservationsPage() {
     },
   })
 
-  // Merge live API data with any local-only new reservations created in this session
   const [localNew, setLocalNew] = useState<Reservation[]>([])
   const data: Reservation[] = [...localNew, ...(apiData ?? [])]
     .filter((r, i, arr) => arr.findIndex(x => x.reservation_id === r.reservation_id) === i)
@@ -110,19 +221,160 @@ export function ReservationsPage() {
   const [selected, setSelected] = useState<Reservation | null>(null)
   const [showNew, setShowNew] = useState(false)
   const [newForm, setNewForm] = useState<Record<string, string>>(BLANK_NEW)
-  const [editMode, setEditMode] = useState(false)
-  const [editForm, setEditForm] = useState<Record<string, string>>({})
-  const [confirmCancel, setConfirmCancel] = useState(false)
 
-  const nfi  = (k: string, v: string) => setNewForm(p => ({ ...p, [k]: v }))
-  const efi  = (k: string, v: string) => setEditForm(p => ({ ...p, [k]: v }))
+  // ── Modify drawer state ──────────────────────────────────────────────────────
+  const [showModify, setShowModify] = useState(false)
+  const [modifyForm, setModifyForm] = useState({
+    pickup_date: '', pickup_time: '10:00',
+    return_date: '', return_time: '10:00',
+    vehicle_class_id: '', change_reason: '',
+  })
+  const [modifyError, setModifyError] = useState('')
+  const [modifySuccess, setModifySuccess] = useState(false)
+
+  const modifyMutation = useMutation({
+    mutationFn: async ({ id, form }: { id: string; form: typeof modifyForm }) => {
+      const payload: Record<string, string> = {}
+      if (form.pickup_date) payload.pickup_dt = `${form.pickup_date}T${form.pickup_time}:00+00:00`
+      if (form.return_date) payload.dropoff_dt = `${form.return_date}T${form.return_time}:00+00:00`
+      if (form.vehicle_class_id) payload.vehicle_class_id = form.vehicle_class_id
+      if (form.change_reason) payload.change_reason = form.change_reason
+      await modifyReservation(id, payload)
+    },
+    onSuccess: () => {
+      setModifySuccess(true)
+      queryClient.invalidateQueries({ queryKey: ['reservations', 'crm-list'] })
+      setTimeout(() => {
+        setShowModify(false)
+        setModifySuccess(false)
+        setModifyError('')
+      }, 1500)
+    },
+    onError: (e: Error) => setModifyError(e.message),
+  })
+
+  function openModify(r: Reservation) {
+    setModifyForm({
+      pickup_date: r.pickup_date,
+      pickup_time: '10:00',
+      return_date: r.return_date,
+      return_time: '10:00',
+      vehicle_class_id: '',
+      change_reason: '',
+    })
+    setModifyError('')
+    setModifySuccess(false)
+    setShowModify(true)
+  }
+
+  function handleModify(e: FormEvent) {
+    e.preventDefault()
+    if (!selected) return
+    if (selected.reservation_id.startsWith('local-')) {
+      const updated = {
+        pickup_date: modifyForm.pickup_date,
+        return_date: modifyForm.return_date,
+        total: calcTotal(selected.class_name, modifyForm.pickup_date, modifyForm.return_date),
+      }
+      setLocalNew(prev => prev.map(r => r.reservation_id === selected.reservation_id ? { ...r, ...updated } : r))
+      setSelected(prev => prev ? { ...prev, ...updated } : prev)
+      setShowModify(false)
+      return
+    }
+    modifyMutation.mutate({ id: selected.reservation_id, form: modifyForm })
+  }
+
+  const modifyDays = modifyForm.pickup_date && modifyForm.return_date
+    ? Math.max(0, Math.round((new Date(modifyForm.return_date).getTime() - new Date(modifyForm.pickup_date).getTime()) / 86400000))
+    : null
+
+  // ── No-show action ───────────────────────────────────────────────────────────
+  const [confirmNoShow, setConfirmNoShow] = useState(false)
+
+  // ── Cancel modal state ───────────────────────────────────────────────────────
+  const [showCancel, setShowCancel] = useState(false)
+  const [cancelReason, setCancelReason] = useState('CUSTOMER_REQUEST')
+  const [cancelReasonOther, setCancelReasonOther] = useState('')
+  const [cancelWaiveFee, setCancelWaiveFee] = useState(false)
+  const [cancelError, setCancelError] = useState('')
+
+  const { data: cancelPreview, isLoading: previewLoading } = useQuery<CancellationPreview>({
+    queryKey: ['cancel-preview', selected?.reservation_id],
+    queryFn: () => fetchCancellationPreview(selected!.reservation_id),
+    enabled: (showCancel || confirmNoShow) && !!selected && !selected.reservation_id.startsWith('local-'),
+    staleTime: 30_000,
+  })
+
+  const cancelMutation = useMutation({
+    mutationFn: async ({ id, reason, waiveFee }: { id: string; reason: string; waiveFee: boolean }) => {
+      await cancelReservation(id, reason, waiveFee)
+    },
+    onSuccess: () => {
+      setShowCancel(false)
+      setCancelReason('CUSTOMER_REQUEST')
+      setCancelReasonOther('')
+      setCancelError('')
+      setSelected(prev => prev ? { ...prev, status: 'CANCELLED' } : prev)
+      setLocalNew(prev => prev.map(r => r.reservation_id === selected?.reservation_id ? { ...r, status: 'CANCELLED' } : r))
+      queryClient.invalidateQueries({ queryKey: ['reservations', 'crm-list'] })
+      showToast('Reservation cancelled successfully', true)
+    },
+    onError: (e: Error) => setCancelError(e.message),
+  })
+
+  function openCancel() {
+    setCancelReason('CUSTOMER_REQUEST')
+    setCancelReasonOther('')
+    setCancelWaiveFee(false)
+    setCancelError('')
+    setShowCancel(true)
+  }
+
+  function handleCancel(e: FormEvent) {
+    e.preventDefault()
+    if (!selected) return
+    const reason = cancelReason === 'OTHER'
+      ? `OTHER - ${cancelReasonOther.trim()}`
+      : cancelReason
+    if (selected.reservation_id.startsWith('local-')) {
+      setLocalNew(prev => prev.map(r => r.reservation_id === selected.reservation_id ? { ...r, status: 'CANCELLED' } : r))
+      setSelected(prev => prev ? { ...prev, status: 'CANCELLED' } : prev)
+      setShowCancel(false)
+      showToast('Reservation cancelled', true)
+      return
+    }
+    cancelMutation.mutate({ id: selected.reservation_id, reason, waiveFee: cancelWaiveFee })
+  }
+
+  const noShowMutation = useMutation({
+    mutationFn: async (id: string) => {
+      await cancelReservation(id, 'NO_SHOW - Customer failed to appear for pickup', false)
+    },
+    onSuccess: () => {
+      setConfirmNoShow(false)
+      setSelected(prev => prev ? { ...prev, status: 'NO_SHOW' } : prev)
+      setLocalNew(prev => prev.map(r => r.reservation_id === selected?.reservation_id ? { ...r, status: 'NO_SHOW' } : r))
+      queryClient.invalidateQueries({ queryKey: ['reservations', 'crm-list'] })
+      showToast('Reservation marked as no-show', true)
+    },
+    onError: (e: Error) => showToast(e.message, false),
+  })
+
+  // ── Toast ────────────────────────────────────────────────────────────────────
+  const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null)
+  function showToast(msg: string, ok: boolean) {
+    setToast({ msg, ok })
+    setTimeout(() => setToast(null), 4000)
+  }
+
+  // ── New reservation form (unchanged) ─────────────────────────────────────────
+  const nfi = (k: string, v: string) => setNewForm(p => ({ ...p, [k]: v }))
 
   const counts = {
     active:    data.filter(r => r.status === 'ACTIVE' || r.status === 'CHECKED_OUT').length,
     confirmed: data.filter(r => r.status === 'CONFIRMED').length,
     total:     data.length,
   }
-  // counts.active now includes both legacy ACTIVE and canonical CHECKED_OUT
 
   const filtered = data.filter(r => {
     if (statusFilter && r.status !== statusFilter) return false
@@ -162,43 +414,30 @@ export function ReservationsPage() {
   }
 
   function updateStatus(id: string, newStatus: string) {
-    // Optimistic update in local state
     setLocalNew(prev => prev.map(r => r.reservation_id === id ? { ...r, status: newStatus } : r))
     setSelected(prev => prev?.reservation_id === id ? { ...prev, status: newStatus } : prev)
-    setConfirmCancel(false)
-    // Sync to backend (ignores local-only reservations)
     if (!id.startsWith('local-')) {
       statusMutation.mutate({ id, status: newStatus })
     }
   }
 
-  function openEdit(r: Reservation) {
-    setEditMode(true)
-    setEditForm({
-      pickup_date: r.pickup_date,
-      return_date: r.return_date,
-      class_name:  r.class_name,
-      channel:     r.channel,
-    })
-  }
-
-  function handleEdit(e: FormEvent) {
-    e.preventDefault()
-    if (!selected) return
-    const updated = {
-      pickup_date: editForm.pickup_date,
-      return_date: editForm.return_date,
-      class_name:  editForm.class_name,
-      channel:     editForm.channel,
-      total: calcTotal(editForm.class_name, editForm.pickup_date, editForm.return_date),
-    }
-    setLocalNew(prev => prev.map(r => r.reservation_id === selected.reservation_id ? { ...r, ...updated } : r))
-    setSelected(prev => prev ? { ...prev, ...updated } : prev)
-    setEditMode(false)
-  }
+  const canModify = (r: Reservation) => ['CONFIRMED', 'PENDING', 'MODIFIED'].includes(r.status)
+  const canCancel = (r: Reservation) => ['CONFIRMED', 'PENDING'].includes(r.status)
 
   return (
     <div className="flex gap-4" style={{ height: 'calc(100vh - 112px)' }}>
+
+      {/* Toast */}
+      {toast && (
+        <div style={{
+          position: 'fixed', bottom: 24, right: 24, zIndex: 9999,
+          padding: '10px 16px', borderRadius: 8, fontSize: 13, fontWeight: 500,
+          background: toast.ok ? 'rgba(16,185,129,0.15)' : 'var(--danger-bg)',
+          color: toast.ok ? '#10b981' : 'var(--danger)',
+          border: `1px solid ${toast.ok ? 'rgba(16,185,129,0.3)' : 'rgba(239,68,68,0.3)'}`,
+          boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+        }}>{toast.msg}</div>
+      )}
 
       {/* ── Left panel ── */}
       <div className={`flex flex-col gap-4 transition-all duration-200 ${selected ? 'flex-1 min-w-0' : 'w-full'}`}>
@@ -279,7 +518,7 @@ export function ReservationsPage() {
                 ) : filtered.map(r => (
                   <tr
                     key={r.reservation_id}
-                    onClick={() => { setSelected(selected?.reservation_id === r.reservation_id ? null : r); setEditMode(false); setConfirmCancel(false) }}
+                    onClick={() => { setSelected(selected?.reservation_id === r.reservation_id ? null : r); setShowModify(false); setShowCancel(false); setConfirmNoShow(false) }}
                     className="cursor-pointer"
                     style={selected?.reservation_id === r.reservation_id ? { background: 'var(--accent-sub)' } : undefined}
                   >
@@ -307,11 +546,11 @@ export function ReservationsPage() {
       </div>
 
       {/* ── Detail panel ── */}
-      {selected && !editMode && (
+      {selected && !showModify && (
         <div className="w-[300px] xl:w-[320px] shrink-0 panel overflow-auto">
           <div className="flex items-center justify-between px-5 py-4" style={{ borderBottom: '1px solid var(--border)' }}>
             <p className="text-[13px] font-semibold" style={{ color: 'var(--text-1)' }}>Details</p>
-            <button onClick={() => { setSelected(null); setConfirmCancel(false) }} className="rounded-md p-1.5 transition-colors" style={{ color: 'var(--text-3)' }}
+            <button onClick={() => { setSelected(null); setShowCancel(false); setConfirmNoShow(false) }} className="rounded-md p-1.5 transition-colors" style={{ color: 'var(--text-3)' }}
                     onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.06)' }}
                     onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent' }}>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -367,44 +606,89 @@ export function ReservationsPage() {
                   Process Return
                 </button>
               )}
-              {!['CANCELLED','RETURNED','COMPLETED','NO_SHOW'].includes(selected.status) && (
-                <button className="btn-secondary w-full justify-center py-2" onClick={() => openEdit(selected)}>
-                  Edit Reservation
+
+              {canModify(selected) && (
+                <button className="btn-secondary w-full justify-center py-2" onClick={() => openModify(selected)}>
+                  Modify Reservation
                 </button>
               )}
-              {['CONFIRMED','PENDING'].includes(selected.status) && !confirmCancel && (
+
+              {isNoShowEligible(selected) && !confirmNoShow && (
                 <button
                   className="btn-secondary w-full justify-center py-2"
-                  style={{ borderColor: 'rgba(244,114,114,0.3)', color: 'var(--danger)' }}
-                  onClick={() => setConfirmCancel(true)}>
-                  Cancel Reservation
+                  style={{ borderColor: 'rgba(245,158,11,0.4)', color: '#d97706' }}
+                  onClick={() => setConfirmNoShow(true)}>
+                  Mark No-Show
                 </button>
               )}
-              {confirmCancel && (
-                <div className="rounded-lg p-3 space-y-2" style={{ background: 'var(--danger-bg)', border: '1px solid rgba(244,114,114,0.25)' }}>
-                  <p className="text-[12px] font-medium" style={{ color: 'var(--danger)' }}>Cancel this reservation?</p>
-                  <div className="flex gap-2">
-                    <button className="flex-1 btn-secondary py-1.5 text-[12px]" onClick={() => setConfirmCancel(false)}>Keep</button>
+              {confirmNoShow && (
+                <div className="rounded-lg p-3 space-y-2" style={{ background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.3)' }}>
+                  <p className="text-[12px] font-medium" style={{ color: '#d97706' }}>Mark customer as no-show?</p>
+                  {previewLoading && !cancelPreview && (
+                    <div className="space-y-1">
+                      {[70, 55, 85].map(w => (
+                        <div key={w} className="animate-pulse h-2.5 rounded" style={{ background: 'rgba(245,158,11,0.2)', width: `${w}%` }} />
+                      ))}
+                    </div>
+                  )}
+                  {cancelPreview && !previewLoading && (
+                    <div className="space-y-1 py-1">
+                      <div className="flex justify-between text-[11px]">
+                        <span style={{ color: 'var(--text-3)' }}>No-show fee</span>
+                        <span className="font-bold num" style={{ color: parseFloat(cancelPreview.cancellation_fee) > 0 ? '#d97706' : '#10b981' }}>
+                          ${parseFloat(cancelPreview.cancellation_fee).toFixed(2)}
+                        </span>
+                      </div>
+                      <div className="flex justify-between text-[11px]">
+                        <span style={{ color: 'var(--text-3)' }}>Customer refund</span>
+                        <span className="font-semibold num" style={{ color: 'var(--text-1)' }}>
+                          ${parseFloat(cancelPreview.refund_amount).toFixed(2)}
+                        </span>
+                      </div>
+                      <div className="flex justify-between text-[11px]">
+                        <span style={{ color: 'var(--text-3)' }}>Policy</span>
+                        <span className="font-medium" style={{ color: 'var(--text-2)' }}>{policyTierLabel(cancelPreview.policy_tier)}</span>
+                      </div>
+                    </div>
+                  )}
+                  {!cancelPreview && !previewLoading && (
+                    <p className="text-[11px]" style={{ color: 'var(--text-3)' }}>This will cancel the reservation. A no-show fee may apply per policy.</p>
+                  )}
+                  <div className="flex gap-2 pt-1">
+                    <button className="flex-1 btn-secondary py-1.5 text-[12px]" onClick={() => setConfirmNoShow(false)}>Back</button>
                     <button
                       className="flex-1 btn-secondary py-1.5 text-[12px]"
-                      style={{ borderColor: 'rgba(244,114,114,0.4)', color: 'var(--danger)' }}
-                      onClick={() => updateStatus(selected.reservation_id, 'CANCELLED')}>
-                      Confirm Cancel
+                      style={{ borderColor: 'rgba(245,158,11,0.5)', color: '#d97706' }}
+                      disabled={noShowMutation.isPending}
+                      onClick={() => noShowMutation.mutate(selected.reservation_id)}>
+                      {noShowMutation.isPending ? 'Marking…' : 'Confirm No-Show'}
                     </button>
                   </div>
                 </div>
+              )}
+
+              {canCancel(selected) && (
+                <button
+                  className="btn-secondary w-full justify-center py-2"
+                  style={{ borderColor: 'rgba(244,114,114,0.3)', color: 'var(--danger)' }}
+                  onClick={openCancel}>
+                  Cancel Reservation
+                </button>
               )}
             </div>
           </div>
         </div>
       )}
 
-      {/* ── Edit panel ── */}
-      {selected && editMode && (
-        <div className="w-[300px] xl:w-[320px] shrink-0 panel overflow-auto">
+      {/* ── Modify Drawer ── */}
+      {selected && showModify && (
+        <div className="w-[320px] xl:w-[360px] shrink-0 panel overflow-auto">
           <div className="flex items-center justify-between px-5 py-4" style={{ borderBottom: '1px solid var(--border)' }}>
-            <p className="text-[13px] font-semibold" style={{ color: 'var(--text-1)' }}>Edit Reservation</p>
-            <button onClick={() => setEditMode(false)} className="rounded-md p-1.5" style={{ color: 'var(--text-3)' }}
+            <div>
+              <p className="text-[13px] font-semibold" style={{ color: 'var(--text-1)' }}>Modify Reservation</p>
+              <p className="font-mono text-[11px] mt-0.5" style={{ color: 'var(--accent)' }}>{selected.confirmation_number}</p>
+            </div>
+            <button onClick={() => { setShowModify(false); setModifyError('') }} className="rounded-md p-1.5" style={{ color: 'var(--text-3)' }}
                     onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.06)' }}
                     onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent' }}>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -412,39 +696,216 @@ export function ReservationsPage() {
               </svg>
             </button>
           </div>
-          <form onSubmit={handleEdit} className="p-5 space-y-4">
-            <div>
-              <ModalLabel>Pickup Date</ModalLabel>
-              <input required type="date" value={editForm.pickup_date} onChange={e => efi('pickup_date', e.target.value)}
-                className="field-input h-9 px-3 text-[13px] w-full" />
+
+          {modifySuccess ? (
+            <div className="p-8 text-center space-y-3">
+              <div className="flex h-12 w-12 items-center justify-center rounded-full mx-auto" style={{ background: 'rgba(16,185,129,0.15)' }}>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#10b981" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="20 6 9 17 4 12"/>
+                </svg>
+              </div>
+              <p className="text-[14px] font-semibold" style={{ color: 'var(--text-1)' }}>Reservation updated</p>
             </div>
-            <div>
-              <ModalLabel>Return Date</ModalLabel>
-              <input required type="date" value={editForm.return_date} onChange={e => efi('return_date', e.target.value)}
-                min={editForm.pickup_date}
-                className="field-input h-9 px-3 text-[13px] w-full" />
+          ) : (
+            <form onSubmit={handleModify} className="p-5 space-y-4">
+              <div>
+                <ModalLabel>Current Pickup</ModalLabel>
+                <p className="text-[12px]" style={{ color: 'var(--text-3)' }}>{fmt(selected.pickup_date)}</p>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <ModalLabel>New Pickup Date</ModalLabel>
+                  <input type="date" value={modifyForm.pickup_date}
+                    onChange={e => setModifyForm(p => ({ ...p, pickup_date: e.target.value }))}
+                    className="field-input h-9 px-3 text-[13px] w-full" />
+                </div>
+                <div>
+                  <ModalLabel>Time (UTC)</ModalLabel>
+                  <input type="time" value={modifyForm.pickup_time}
+                    onChange={e => setModifyForm(p => ({ ...p, pickup_time: e.target.value }))}
+                    className="field-input h-9 px-3 text-[13px] w-full" />
+                </div>
+              </div>
+
+              <div>
+                <ModalLabel>Current Return</ModalLabel>
+                <p className="text-[12px]" style={{ color: 'var(--text-3)' }}>{fmt(selected.return_date)}</p>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <ModalLabel>New Return Date</ModalLabel>
+                  <input type="date" value={modifyForm.return_date}
+                    min={modifyForm.pickup_date || selected.pickup_date}
+                    onChange={e => setModifyForm(p => ({ ...p, return_date: e.target.value }))}
+                    className="field-input h-9 px-3 text-[13px] w-full" />
+                </div>
+                <div>
+                  <ModalLabel>Time (UTC)</ModalLabel>
+                  <input type="time" value={modifyForm.return_time}
+                    onChange={e => setModifyForm(p => ({ ...p, return_time: e.target.value }))}
+                    className="field-input h-9 px-3 text-[13px] w-full" />
+                </div>
+              </div>
+
+              <div>
+                <ModalLabel>Change Vehicle Class</ModalLabel>
+                <select value={modifyForm.vehicle_class_id}
+                  onChange={e => setModifyForm(p => ({ ...p, vehicle_class_id: e.target.value }))}
+                  className="field-input h-9 px-3 text-[13px] w-full">
+                  <option value="">Keep current ({selected.class_name})</option>
+                  {vehicleClasses.map(c => (
+                    <option key={c.class_id} value={c.class_id}>{c.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <ModalLabel>Pickup / Dropoff Location</ModalLabel>
+                <select disabled className="field-input h-9 px-3 text-[13px] w-full opacity-50 cursor-not-allowed">
+                  <option>Location changes require re-booking</option>
+                </select>
+                <p className="text-[11px] mt-1" style={{ color: 'var(--text-3)' }}>
+                  {locations.length > 0 ? `${locations.length} locations available` : 'Location changes not supported via modify'}
+                </p>
+              </div>
+
+              {modifyDays !== null && modifyDays > 0 && (
+                <div className="rounded-lg px-4 py-3" style={{ background: 'var(--elevated)', border: '1px solid var(--border)' }}>
+                  <p className="text-[11px]" style={{ color: 'var(--text-3)' }}>Estimated new total</p>
+                  <p className="text-[16px] font-bold num mt-0.5" style={{ color: 'var(--text-1)' }}>
+                    Total will be recalculated
+                  </p>
+                  <p className="text-[11px] mt-0.5" style={{ color: 'var(--text-3)' }}>
+                    {modifyDays} day{modifyDays !== 1 ? 's' : ''} · pricing applied at checkout
+                  </p>
+                </div>
+              )}
+
+              <div>
+                <ModalLabel>Reason for Change</ModalLabel>
+                <input type="text" value={modifyForm.change_reason} maxLength={500}
+                  placeholder="Optional — agent note for audit log"
+                  onChange={e => setModifyForm(p => ({ ...p, change_reason: e.target.value }))}
+                  className="field-input h-9 px-3 text-[13px] w-full" />
+              </div>
+
+              {modifyError && (
+                <p className="text-[12px] font-medium" style={{ color: 'var(--danger)' }}>{modifyError}</p>
+              )}
+
+              <div className="flex gap-2 pt-2" style={{ borderTop: '1px solid var(--border-sub)' }}>
+                <button type="button" onClick={() => { setShowModify(false); setModifyError('') }} className="btn-secondary flex-1 justify-center py-2">Cancel</button>
+                <button type="submit" className="btn-primary flex-1 justify-center py-2" disabled={modifyMutation.isPending}>
+                  {modifyMutation.isPending ? 'Saving…' : 'Save Changes'}
+                </button>
+              </div>
+            </form>
+          )}
+        </div>
+      )}
+
+      {/* ── Cancel Modal ── */}
+      {showCancel && selected && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
+             style={{ background: 'rgba(0,0,0,0.65)', backdropFilter: 'blur(4px)' }}
+             onClick={e => { if (e.target === e.currentTarget) setShowCancel(false) }}>
+          <div className="panel w-full max-w-[420px] overflow-hidden">
+            <div className="flex items-center justify-between px-6 py-4" style={{ borderBottom: '1px solid var(--border)' }}>
+              <h2 className="text-[15px] font-semibold" style={{ color: 'var(--text-1)' }}>Cancel Reservation</h2>
+              <button onClick={() => setShowCancel(false)} className="rounded-md p-1.5" style={{ color: 'var(--text-3)' }}
+                      onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.06)' }}
+                      onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent' }}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                </svg>
+              </button>
             </div>
-            <div>
-              <ModalLabel>Vehicle Class</ModalLabel>
-              <select value={editForm.class_name} onChange={e => efi('class_name', e.target.value)} className="field-input h-9 px-3 text-[13px] w-full">
-                {['Economy','Standard','SUV','Premium','Luxury'].map(c => <option key={c}>{c}</option>)}
-              </select>
-            </div>
-            <div>
-              <ModalLabel>Channel</ModalLabel>
-              <select value={editForm.channel} onChange={e => efi('channel', e.target.value)} className="field-input h-9 px-3 text-[13px] w-full">
-                <option value="DIRECT_WEB">Web</option>
-                <option value="OTA">OTA</option>
-                <option value="WALK_IN">Walk-in</option>
-                <option value="PHONE">Phone</option>
-                <option value="API">API</option>
-              </select>
-            </div>
-            <div className="flex gap-2 pt-2" style={{ borderTop: '1px solid var(--border-sub)' }}>
-              <button type="button" onClick={() => setEditMode(false)} className="btn-secondary flex-1 justify-center py-2">Cancel</button>
-              <button type="submit" className="btn-primary flex-1 justify-center py-2">Save</button>
-            </div>
-          </form>
+
+            <form onSubmit={handleCancel} className="px-6 py-5 space-y-4">
+              <div className="rounded-lg px-4 py-3" style={{ background: 'var(--elevated)', border: '1px solid var(--border)' }}>
+                <p className="text-[12px] font-semibold" style={{ color: 'var(--text-1)' }}>{selected.customer_name}</p>
+                <p className="font-mono text-[11px] mt-0.5" style={{ color: 'var(--accent)' }}>{selected.confirmation_number}</p>
+                <p className="text-[11.5px] mt-1" style={{ color: 'var(--text-3)' }}>
+                  {fmt(selected.pickup_date)} — {fmt(selected.return_date)} · {selected.class_name}
+                </p>
+              </div>
+
+              {previewLoading && (
+                <div className="rounded-lg px-4 py-3 space-y-1.5" style={{ background: 'var(--elevated)', border: '1px solid var(--border)' }}>
+                  {[1,2,3].map(i => (
+                    <div key={i} className="animate-pulse h-3 rounded" style={{ background: 'var(--border)', width: `${60 + i * 10}%` }} />
+                  ))}
+                </div>
+              )}
+
+              {cancelPreview && !previewLoading && (
+                <div className="rounded-lg px-4 py-3 space-y-2" style={{ background: 'rgba(244,114,114,0.07)', border: '1px solid rgba(244,114,114,0.25)' }}>
+                  <div className="flex justify-between text-[12px]">
+                    <span style={{ color: 'var(--text-3)' }}>Cancellation policy</span>
+                    <span className="font-semibold" style={{ color: 'var(--text-1)' }}>{policyTierLabel(cancelPreview.policy_tier)}</span>
+                  </div>
+                  <div className="flex justify-between text-[12px]">
+                    <span style={{ color: 'var(--text-3)' }}>Cancellation fee</span>
+                    <span className="font-bold num" style={{ color: parseFloat(cancelPreview.cancellation_fee) > 0 ? 'var(--danger)' : '#10b981' }}>
+                      ${parseFloat(cancelPreview.cancellation_fee).toFixed(2)}
+                    </span>
+                  </div>
+                  <div className="flex justify-between text-[12px]">
+                    <span style={{ color: 'var(--text-3)' }}>Customer refund</span>
+                    <span className="font-bold num" style={{ color: 'var(--text-1)' }}>${parseFloat(cancelPreview.refund_amount).toFixed(2)}</span>
+                  </div>
+                  {parseFloat(cancelPreview.cancellation_fee) > 0 && (
+                    <label className="flex items-center gap-2 text-[12px] cursor-pointer pt-1">
+                      <input type="checkbox" checked={cancelWaiveFee}
+                        onChange={e => setCancelWaiveFee(e.target.checked)}
+                        className="rounded" />
+                      <span style={{ color: 'var(--text-2)' }}>Waive cancellation fee (manager override)</span>
+                    </label>
+                  )}
+                </div>
+              )}
+
+              {selected.reservation_id.startsWith('local-') && (
+                <div className="rounded-lg px-4 py-3" style={{ background: 'var(--elevated)', border: '1px solid var(--border)' }}>
+                  <p className="text-[12px]" style={{ color: 'var(--text-3)' }}>Local reservation — no fee calculation</p>
+                </div>
+              )}
+
+              <div>
+                <ModalLabel>Reason for Cancellation</ModalLabel>
+                <select required value={cancelReason} onChange={e => setCancelReason(e.target.value)}
+                  className="field-input h-9 px-3 text-[13px] w-full">
+                  {CANCEL_REASONS.map(r => (
+                    <option key={r.value} value={r.value}>{r.label}</option>
+                  ))}
+                </select>
+              </div>
+
+              {cancelReason === 'OTHER' && (
+                <div>
+                  <ModalLabel>Additional Details</ModalLabel>
+                  <input required type="text" value={cancelReasonOther} maxLength={400}
+                    placeholder="Describe the reason…"
+                    onChange={e => setCancelReasonOther(e.target.value)}
+                    className="field-input h-9 px-3 text-[13px] w-full" />
+                </div>
+              )}
+
+              {cancelError && (
+                <p className="text-[12px] font-medium" style={{ color: 'var(--danger)' }}>{cancelError}</p>
+              )}
+
+              <div className="flex items-center justify-end gap-2 pt-2" style={{ borderTop: '1px solid var(--border-sub)' }}>
+                <button type="button" onClick={() => setShowCancel(false)} className="btn-secondary">Keep Reservation</button>
+                <button type="submit"
+                  disabled={cancelMutation.isPending || (cancelReason === 'OTHER' && !cancelReasonOther.trim())}
+                  className="btn-secondary py-2 px-4"
+                  style={{ borderColor: 'rgba(244,114,114,0.4)', color: 'var(--danger)' }}>
+                  {cancelMutation.isPending ? 'Cancelling…' : 'Confirm Cancellation'}
+                </button>
+              </div>
+            </form>
+          </div>
         </div>
       )}
 

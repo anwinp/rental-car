@@ -12,13 +12,13 @@ const FLEET_LINKS = [
 const COMPANY_LINKS = [
   { label: 'Concierge', href: '/' },
   { label: 'Careers',   href: '/' },
-  { label: 'Contact',   href: '/' },
+  { label: 'Contact',   href: '/support' },
 ]
 
 const LEGAL_LINKS = [
-  { label: 'Rental Policy',  href: '/' },
-  { label: 'Privacy Policy', href: '/' },
-  { label: 'Terms of Use',   href: '/' },
+  { label: 'Rental Policy',  href: '/policies/rental-terms' },
+  { label: 'Privacy Policy', href: '/support' },
+  { label: 'Terms of Use',   href: '/policies/rental-terms' },
 ]
 
 function FooterColumn({ heading, links }: { heading: string; links: { label: string; href: string }[] }) {
@@ -28,7 +28,8 @@ function FooterColumn({ heading, links }: { heading: string; links: { label: str
         {heading}
       </h4>
       {links.map(link => (
-        <Link key={link.label} href={link.href}
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        <Link key={link.label} href={link.href as any}
           style={{ fontSize: 13, color: '#969696', textDecoration: 'none', display: 'block', marginBottom: 8, transition: 'color 0.15s' }}
           onMouseEnter={e => (e.currentTarget as HTMLElement).style.color = '#ffffff'}
           onMouseLeave={e => (e.currentTarget as HTMLElement).style.color = '#969696'}

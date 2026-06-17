@@ -20,6 +20,7 @@ interface BookingDraft {
   to: string
   pickup_time: string
   return_time: string
+  one_way: boolean
   step: number
   selectedExtras: string[]
   driverData: DriverData | null
@@ -33,6 +34,7 @@ interface BookingDraft {
     to: string
     pickup_time: string
     return_time: string
+    one_way?: boolean
   }) => void
   setStep: (step: number) => void
   setExtras: (extras: string[]) => void
@@ -49,6 +51,7 @@ const initialState = {
   to: '',
   pickup_time: '10:00',
   return_time: '10:00',
+  one_way: false,
   step: 0,
   selectedExtras: [] as string[],
   driverData: null,
@@ -78,6 +81,7 @@ export const useBookingDraft = create<BookingDraft>()(
         to: state.to,
         pickup_time: state.pickup_time,
         return_time: state.return_time,
+        one_way: state.one_way,
         step: state.step,
         selectedExtras: state.selectedExtras,
         driverData: state.driverData,

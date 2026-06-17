@@ -8,6 +8,8 @@ from datetime import datetime
 from typing import Any, Optional
 from uuid import UUID
 
+from pydantic import BaseModel
+
 from fastapi import (
     APIRouter,
     Depends,
@@ -31,6 +33,7 @@ from app.domains.fleet.schemas import (
     BulkImportResult,
     VehicleBlockCreate,
     VehicleBlockResponse,
+    VehicleBlockUpdate,
     VehicleClassCreate,
     VehicleClassResponse,
     VehicleCreate,
@@ -447,6 +450,52 @@ async def create_block(
     return VehicleBlockResponse.model_validate(block)
 
 
+@router.patch(
+    "/blocks/{block_id}",
+    response_model=VehicleBlockResponse,
+    summary="Update a vehicle block (dates / notes)",
+)
+async def update_block(
+    block_id: str,
+    body: VehicleBlockUpdate,
+    session: AsyncSession = Depends(get_session),
+    claims: UserClaims = Depends(require_permission("vehicle_blocks", "create")),
+) -> VehicleBlockResponse:
+    from sqlalchemy import text as _t
+    from datetime import timezone as _tz
+
+    row = await session.execute(
+        _t("SELECT * FROM vehicle_blocks WHERE block_id = CAST(:id AS uuid) AND tenant_id = CAST(:tid AS uuid) AND deleted_at IS NULL"),
+        {"id": block_id, "tid": str(claims.tenant_id)},
+    )
+    block = row.mappings().first()
+    if not block:
+        raise HTTPException(status_code=404, detail="Block not found")
+
+    updates: dict = {}
+    if body.start_time is not None:
+        updates["start_time"] = body.start_time
+    if body.end_time is not None:
+        updates["end_time"] = body.end_time
+    if body.notes is not None:
+        updates["notes"] = body.notes
+
+    if not updates:
+        raise HTTPException(status_code=400, detail="No fields to update")
+
+    set_clause = ", ".join(f"{k} = :{k}" for k in updates)
+    updates["id"] = block_id
+    updates["tid"] = str(claims.tenant_id)
+    result = await session.execute(
+        _t(f"UPDATE vehicle_blocks SET {set_clause}, updated_at = now() WHERE block_id = CAST(:id AS uuid) AND tenant_id = CAST(:tid AS uuid) RETURNING *"),
+        updates,
+    )
+    await session.commit()
+    updated = result.mappings().first()
+    row = {k: str(v) if hasattr(v, 'hex') else v for k, v in updated.items()}
+    return VehicleBlockResponse.model_validate(row)
+
+
 @router.delete(
     "/blocks/{block_id}",
     status_code=status.HTTP_204_NO_CONTENT, response_model=None,
@@ -460,6 +509,180 @@ async def delete_block(
     await _svc.soft_delete_block(
         session, claims.tenant_id, block_id, actor_id=str(claims.user_id)
     )
+
+
+# ── Fleet calendar ────────────────────────────────────────────────────────────
+
+
+class CalendarEvent(BaseModel):
+    event_id: str
+    event_type: str   # RESERVATION | BLOCK
+    block_type: str
+    start_dt: datetime
+    end_dt: datetime
+    label: str
+    sub_label: Optional[str] = None
+
+
+class CalendarVehicle(BaseModel):
+    vehicle_id: str
+    make: str
+    model: str
+    model_year: int
+    plate_number: Optional[str] = None
+    vin: Optional[str] = None
+    status: str
+    class_name: str
+    home_location_id: str
+    location_name: str
+    location_short_code: str
+    events: list[CalendarEvent]
+
+
+class CalendarResponse(BaseModel):
+    from_date: str
+    to_date: str
+    vehicles: list[CalendarVehicle]
+
+
+@router.get(
+    "/calendar",
+    response_model=CalendarResponse,
+    summary="Fleet calendar — vehicles with reservation and block events for a date range",
+)
+async def get_fleet_calendar(
+    from_date: str = Query(..., description="Start date YYYY-MM-DD"),
+    to_date: str = Query(..., description="End date YYYY-MM-DD"),
+    location_id: Optional[str] = Query(default=None, description="Filter by home location UUID"),
+    session: AsyncSession = Depends(get_session),
+    claims: UserClaims = Depends(require_permission("vehicles", "read")),
+) -> CalendarResponse:
+    from sqlalchemy import text as sqlt
+
+    tid = str(claims.tenant_id)
+    try:
+        from_dt = datetime.fromisoformat(f"{from_date}T00:00:00+00:00")
+        to_dt   = datetime.fromisoformat(f"{to_date}T23:59:59+00:00")
+    except ValueError as exc:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=422, detail=f"Invalid date format: {exc}") from exc
+
+    # Build location filter clause separately to avoid asyncpg's ambiguous NULL param type.
+    # asyncpg cannot infer the type of a parameter used only in IS NULL / = comparisons.
+    loc_filter_v  = "AND CAST(v.home_location_id AS text) = :loc_id"  if location_id else ""
+    loc_filter_v2 = "AND CAST(v2.home_location_id AS text) = :loc_id" if location_id else ""
+
+    # 1. Vehicles (with class + location names)
+    # Note: use CAST(:param AS uuid) — asyncpg/SQLAlchemy text() treats ::uuid in ":p::uuid" as part of param name.
+    v_params: dict = {"tid": tid}
+    if location_id:
+        v_params["loc_id"] = location_id
+    vehicle_rows = await session.execute(sqlt(f"""
+        SELECT
+            CAST(v.vehicle_id AS text),
+            v.make, v.model, v.model_year,
+            NULLIF(TRIM(COALESCE(v.plate_number, '')), '') AS plate_number,
+            NULLIF(TRIM(COALESCE(v.vin, '')), '')          AS vin,
+            CAST(v.status AS text) AS status,
+            CAST(v.home_location_id AS text),
+            COALESCE(vc.name, 'Unknown')     AS class_name,
+            COALESCE(l.name, 'Unknown')      AS location_name,
+            COALESCE(l.short_code, '')       AS location_short_code
+        FROM vehicles v
+        LEFT JOIN vehicle_classes vc
+            ON vc.class_id = v.vehicle_class_id
+           AND (vc.tenant_id IS NULL OR vc.tenant_id = CAST(:tid AS uuid))
+        LEFT JOIN locations l
+            ON l.location_id = v.home_location_id
+        WHERE v.tenant_id = CAST(:tid AS uuid)
+          AND v.deleted_at IS NULL
+          AND CAST(v.status AS text) != 'RETIRED'
+          {loc_filter_v}
+        ORDER BY l.name NULLS LAST, v.make, v.model, v.model_year,
+                 v.plate_number NULLS LAST, v.vin NULLS LAST
+    """), v_params)
+    vehicles = [dict(r._mapping) for r in vehicle_rows.all()]
+
+    if not vehicles:
+        return CalendarResponse(from_date=from_date, to_date=to_date, vehicles=[])
+
+    # 2. Events — vehicle_blocks for those vehicles in the date window
+    ev_params: dict = {"tid": tid, "from_dt": from_dt, "to_dt": to_dt}
+    if location_id:
+        ev_params["loc_id"] = location_id
+    event_rows = await session.execute(sqlt(f"""
+        SELECT
+            CAST(vb.block_id AS text)      AS event_id,
+            CAST(vb.vehicle_id AS text)    AS vehicle_id,
+            CAST(vb.block_type AS text)    AS block_type,
+            vb.start_time,
+            vb.end_time,
+            vb.notes,
+            r.confirmation_number,
+            COALESCE(c.first_name || ' ' || c.last_name, 'Guest') AS customer_name
+        FROM vehicle_blocks vb
+        LEFT JOIN reservations r
+            ON r.reservation_id = vb.reservation_id
+           AND r.deleted_at IS NULL
+        LEFT JOIN customers c
+            ON c.customer_id = r.customer_id
+        WHERE vb.tenant_id = CAST(:tid AS uuid)
+          AND vb.deleted_at IS NULL
+          AND vb.start_time < :to_dt
+          AND vb.end_time   > :from_dt
+          AND vb.vehicle_id IN (
+              SELECT v2.vehicle_id FROM vehicles v2
+              WHERE v2.tenant_id = CAST(:tid AS uuid)
+                AND v2.deleted_at IS NULL
+                AND CAST(v2.status AS text) != 'RETIRED'
+                {loc_filter_v2}
+          )
+        ORDER BY vb.vehicle_id, vb.start_time
+    """), ev_params)
+
+    events_by_vehicle: dict[str, list[CalendarEvent]] = {}
+    for row in event_rows.all():
+        vid = row.vehicle_id
+        bt  = row.block_type
+        if bt == "RESERVATION":
+            label     = row.confirmation_number or "Reserved"
+            sub_label = row.customer_name if row.confirmation_number else row.notes
+        else:
+            label     = bt.replace("_", " ").title()
+            sub_label = row.notes or None
+
+        events_by_vehicle.setdefault(vid, []).append(
+            CalendarEvent(
+                event_id   = row.event_id,
+                event_type = "RESERVATION" if bt == "RESERVATION" else "BLOCK",
+                block_type = bt,
+                start_dt   = row.start_time,
+                end_dt     = row.end_time,
+                label      = label,
+                sub_label  = sub_label,
+            )
+        )
+
+    # 3. Merge
+    result: list[CalendarVehicle] = []
+    for v in vehicles:
+        vid = v["vehicle_id"]
+        result.append(CalendarVehicle(
+            vehicle_id          = vid,
+            make                = v["make"],
+            model               = v["model"],
+            model_year          = int(v["model_year"]),
+            plate_number        = v["plate_number"] or None,
+            vin                 = v["vin"] or None,
+            status              = v["status"],
+            class_name          = v["class_name"],
+            home_location_id    = v["home_location_id"],
+            location_name       = v["location_name"],
+            location_short_code = v["location_short_code"],
+            events              = events_by_vehicle.get(vid, []),
+        ))
+
+    return CalendarResponse(from_date=from_date, to_date=to_date, vehicles=result)
 
 
 # ── WebSocket token ───────────────────────────────────────────────────────────

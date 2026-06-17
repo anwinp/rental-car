@@ -1,201 +1,195 @@
 'use client'
 
-import { useCurrentUser } from '@rcm/api-client'
-import { useQuery } from '@tanstack/react-query'
-import { apiClient } from '@rcm/api-client'
-import { Skeleton } from '@rcm/ui'
+import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { useEffect } from 'react'
 
-type ReservationItem = {
+const TENANT = '00000000-0000-0000-0000-000000000001'
+const opts = { credentials: 'include' as const, headers: { 'X-Tenant-ID': TENANT } }
+
+type AuthUser = { user_id: string; first_name: string; last_name: string; email: string }
+type CustomerProfile = { phone?: string; license_number?: string; loyalty_tier?: string; loyalty_points?: number }
+type Reservation = {
   reservation_id: string
   confirmation_number: string
   status: string
-  pickup_date: string
-  dropoff_date: string
-  class_name: string
-  rate_summary: { total: number; currency_code: string }
+  pickup_datetime: string
+  return_datetime: string
+  vehicle_class_id: string
+  grand_total: string | null
+  currency: string
 }
-
-type ReservationsResponse = {
-  items: ReservationItem[]
-}
+type VehicleClass = { class_id: string; name: string }
 
 function statusBadgeStyle(status: string): React.CSSProperties {
-  if (status === 'CONFIRMED' || status === 'CHECKED_OUT') {
-    return { background: 'rgba(16,217,160,0.12)', color: '#10d9a0', border: '1px solid rgba(16,217,160,0.2)' }
-  }
-  if (status === 'CANCELLED') {
-    return { background: 'rgba(240,78,78,0.12)', color: '#f04e4e', border: '1px solid rgba(240,78,78,0.2)' }
-  }
-  return { background: 'rgba(251,191,36,0.12)', color: '#fbbf24', border: '1px solid rgba(251,191,36,0.2)' }
+  if (status === 'CONFIRMED' || status === 'CHECKED_OUT')
+    return { background: 'rgba(3,144,74,0.12)', color: '#03904a', border: '1px solid rgba(3,144,74,0.25)' }
+  if (status === 'CANCELLED')
+    return { background: 'rgba(241,58,44,0.12)', color: '#f13a2c', border: '1px solid rgba(241,58,44,0.25)' }
+  if (status === 'RETURNED')
+    return { background: '#303030', color: '#666666', border: '1px solid #303030' }
+  return { background: '#303030', color: '#969696', border: '1px solid #303030' }
+}
+
+function fmtDate(iso: string) {
+  return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+}
+
+function fmtMoney(amount: string | null, currency: string) {
+  if (!amount) return '—'
+  return new Intl.NumberFormat('en-US', { style: 'currency', currency: currency || 'USD' }).format(Number(amount))
 }
 
 export default function AccountPage() {
   const router = useRouter()
-  const { data: user, isLoading: userLoading } = useCurrentUser()
+  const [user, setUser] = useState<AuthUser | null>(null)
+  const [customer, setCustomer] = useState<CustomerProfile | null>(null)
+  const [reservations, setReservations] = useState<Reservation[]>([])
+  const [classMap, setClassMap] = useState<Record<string, string>>({})
+  const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    if (!userLoading && !user) {
-      router.push('/login')
+    async function load() {
+      const meResp = await fetch('/api/v1/auth/me', opts)
+      if (!meResp.ok) { router.push('/login'); return }
+      const me: AuthUser = await meResp.json()
+      setUser(me)
+
+      const [custResp, resResp, classResp] = await Promise.all([
+        fetch(`/api/v1/customers/${me.user_id}`, opts),
+        fetch(`/api/v1/reservations?customer_id=${me.user_id}&limit=3`, opts),
+        fetch('/api/v1/fleet/classes', opts),
+      ])
+
+      if (custResp.ok) {
+        const custData = await custResp.json()
+        setCustomer(custData)
+      }
+      if (resResp.ok) {
+        const resData = await resResp.json()
+        const items = Array.isArray(resData) ? resData : (resData.items ?? [])
+        setReservations(items)
+      }
+      if (classResp.ok) {
+        const classes: VehicleClass[] = await classResp.json()
+        const map: Record<string, string> = {}
+        classes.forEach(c => { map[c.class_id] = c.name })
+        setClassMap(map)
+      }
+      setLoading(false)
     }
-  }, [user, userLoading, router])
+    load().catch(() => setLoading(false))
+  }, [router])
 
-  const { data: reservations, isLoading: resLoading } = useQuery({
-    queryKey: ['reservations', 'recent'],
-    queryFn: async () => {
-      const { data, error } = await (apiClient as never as {
-        GET: (path: string, opts: unknown) => Promise<{ data: unknown; error: unknown }>
-      }).GET('/reservations', { params: { query: { limit: 3 } } })
-      if (error) throw error
-      return data as ReservationsResponse
-    },
-    enabled: !!user,
-  })
-
-  if (userLoading) {
-    return (
-      <div style={{ minHeight: '100vh', background: 'var(--p-surface)', padding: '48px 16px' }}>
-        <div style={{ maxWidth: 1100, margin: '0 auto' }}>
-          <Skeleton className="h-8 w-48 mb-6" />
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 16, marginBottom: 32 }}>
-            {[...Array(3)].map((_, i) => <Skeleton key={i} className="h-24 w-full" />)}
-          </div>
-          {[...Array(3)].map((_, i) => <Skeleton key={i} className="h-20 w-full mb-3" />)}
-        </div>
-      </div>
-    )
+  async function handleSignOut() {
+    await fetch('/api/v1/auth/logout', { method: 'POST', ...opts }).catch(() => {})
+    window.location.href = '/'
   }
+
+  if (loading) return (
+    <div style={{ minHeight: '100vh', background: '#181818', paddingTop: 80 }}>
+      <div style={{ maxWidth: 1100, margin: '0 auto', padding: '0 24px', display: 'flex', flexDirection: 'column', gap: 16 }}>
+        <div style={{ height: 40, width: 240, background: '#303030', borderRadius: 0 }} />
+        <div style={{ height: 200, background: '#303030', borderRadius: 0 }} />
+        <div style={{ height: 160, background: '#303030', borderRadius: 0 }} />
+      </div>
+    </div>
+  )
 
   if (!user) return null
 
-  const loyaltyTier = (user as unknown as Record<string, unknown>)['loyalty_tier'] as string | undefined
-
-  const STATS = [
-    { label: 'Total Rentals', value: '12', icon: '🚗' },
-    { label: 'Loyalty Points', value: '1,240', icon: '⭐' },
-    { label: 'Loyalty Tier', value: loyaltyTier ?? 'Bronze', icon: '🏅' },
-  ]
+  const initials = `${user.first_name.charAt(0).toUpperCase()}${user.last_name.charAt(0).toUpperCase()}`
 
   return (
-    <div style={{ minHeight: '100vh', background: 'var(--p-surface)', paddingTop: 40, paddingBottom: 60 }}>
+    <div style={{ minHeight: '100vh', background: '#181818', paddingTop: 48, paddingBottom: 80 }}>
       <div style={{ maxWidth: 1100, margin: '0 auto', padding: '0 24px' }}>
 
-        {/* Header */}
-        <div style={{ marginBottom: 40 }}>
-          <p style={{
-            fontSize: 11, fontWeight: 500, color: 'var(--p-cyan)',
-            textTransform: 'uppercase', letterSpacing: '0.16em', marginBottom: 10,
+        {/* Header with avatar */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 24, marginBottom: 48 }}>
+          <div style={{
+            width: 72, height: 72, borderRadius: '50%', background: '#303030',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontSize: 22, fontWeight: 600, color: '#ffffff', letterSpacing: '0.02em',
+            flexShrink: 0, userSelect: 'none',
           }}>
-            My Account
-          </p>
-          <h1 style={{
-            fontSize: 36, fontWeight: 300, color: 'var(--p-text-1)',
-            letterSpacing: '-0.05em', margin: 0,
-          }}>
-            Welcome, {user.first_name}.
-          </h1>
-          <p style={{ fontSize: 14, fontWeight: 300, color: 'var(--p-text-3)', marginTop: 6 }}>{user.email}</p>
-        </div>
-
-        {/* Stat cards */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 40 }}>
-          {STATS.map(stat => (
-            <div key={stat.label} style={{
-              background: 'rgba(255,255,255,0.025)',
-              border: '1px solid rgba(255,255,255,0.07)',
-              borderRadius: 16,
-              backdropFilter: 'blur(12px)',
-              padding: '24px 20px',
-              textAlign: 'center',
-            }}>
-              <div style={{ fontSize: 24, marginBottom: 10 }} aria-hidden="true">{stat.icon}</div>
-              <div style={{ fontSize: 30, fontWeight: 300, color: 'var(--p-brand)', letterSpacing: '-0.04em', lineHeight: 1 }}>{stat.value}</div>
-              <div style={{ fontSize: 12, fontWeight: 400, color: 'var(--p-text-4)', marginTop: 6, textTransform: 'uppercase', letterSpacing: '0.08em' }}>{stat.label}</div>
-            </div>
-          ))}
+            {initials}
+          </div>
+          <div>
+            <p style={{ fontSize: 11, fontWeight: 600, color: '#666666', textTransform: 'uppercase', letterSpacing: '1.1px', marginBottom: 6 }}>
+              My Account
+            </p>
+            <h1 style={{ fontSize: 36, fontWeight: 500, color: '#ffffff', letterSpacing: '-0.05em', margin: 0 }}>
+              {user.first_name} {user.last_name}
+            </h1>
+            <p style={{ fontSize: 14, fontWeight: 400, color: '#969696', marginTop: 4 }}>{user.email}</p>
+          </div>
         </div>
 
         {/* Recent reservations */}
         <div style={{ marginBottom: 40 }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
             <div>
-              <p style={{ fontSize: 11, fontWeight: 500, color: 'var(--p-cyan)', textTransform: 'uppercase', letterSpacing: '0.16em', marginBottom: 6 }}>History</p>
-              <h2 style={{ fontSize: 22, fontWeight: 300, color: 'var(--p-text-1)', letterSpacing: '-0.04em', margin: 0 }}>Recent Reservations</h2>
+              <p style={{ fontSize: 11, fontWeight: 600, color: '#666666', textTransform: 'uppercase', letterSpacing: '1.1px', marginBottom: 6 }}>
+                History
+              </p>
+              <h2 style={{ fontSize: 22, fontWeight: 500, color: '#ffffff', letterSpacing: '-0.04em', margin: 0 }}>
+                Recent Reservations
+              </h2>
             </div>
             <a href="/account/reservations" style={{
-              fontSize: 13, fontWeight: 400, color: '#22e2a8',
-              textDecoration: 'none', padding: '8px 16px',
-              border: '1px solid rgba(34,226,168,0.25)',
-              borderRadius: 10,
-              transition: 'border-color 0.15s',
+              fontSize: 13, fontWeight: 700, color: '#ffffff', textDecoration: 'none',
+              padding: '8px 16px', border: '1px solid #ffffff', borderRadius: 0,
+              letterSpacing: '1.1px', textTransform: 'uppercase',
             }}>
-              View all →
+              View All
             </a>
           </div>
 
-          {resLoading ? (
-            <div style={{ display: 'grid', gap: 12 }}>
-              {[...Array(3)].map((_, i) => <Skeleton key={i} className="h-20 w-full" />)}
-            </div>
-          ) : reservations?.items?.length === 0 ? (
+          {reservations.length === 0 ? (
             <div style={{
-              background: 'rgba(255,255,255,0.025)',
-              border: '1px solid rgba(255,255,255,0.07)',
-              borderRadius: 16, padding: '40px 32px', textAlign: 'center',
+              background: '#303030', border: '1px solid #303030', borderRadius: 0,
+              padding: '40px 32px', textAlign: 'center',
             }}>
-              <p style={{ fontWeight: 300, color: 'var(--p-text-3)', marginBottom: 20 }}>No reservations yet.</p>
+              <p style={{ fontWeight: 400, color: '#969696', marginBottom: 20 }}>No reservations yet.</p>
               <a href="/" style={{
-                padding: '11px 24px', borderRadius: 10,
-                background: 'linear-gradient(135deg, #22e2a8 0%, #40b3ff 100%)',
-                color: '#fff', fontWeight: 500, textDecoration: 'none', fontSize: 14,
-                boxShadow: '0 0 20px rgba(34,226,168,0.30)',
+                display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                padding: '0 24px', height: 48, borderRadius: 0,
+                background: '#da291c', color: '#ffffff', fontWeight: 700, textDecoration: 'none',
+                fontSize: 14, letterSpacing: '1.4px', textTransform: 'uppercase',
               }}>
-                Book your first car
+                Book a Car
               </a>
             </div>
           ) : (
-            <div style={{ display: 'grid', gap: 12 }}>
-              {reservations?.items?.map(res => (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {reservations.map(res => (
                 <a
                   key={res.reservation_id}
                   href={`/manage/${res.confirmation_number}`}
                   style={{
                     display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                    background: 'rgba(255,255,255,0.025)',
-                    border: '1px solid rgba(255,255,255,0.07)',
-                    borderRadius: 14, padding: '18px 22px',
-                    textDecoration: 'none',
-                    transition: 'border-color 0.2s, box-shadow 0.2s',
+                    background: '#303030', border: '1px solid #303030', borderRadius: 0,
+                    padding: '18px 22px', textDecoration: 'none', transition: 'border-color 0.2s',
                   }}
-                  onMouseEnter={e => {
-                    (e.currentTarget as HTMLElement).style.borderColor = 'rgba(34,226,168,0.35)'
-                    ;(e.currentTarget as HTMLElement).style.boxShadow = '0 0 20px rgba(34,226,168,0.10)'
-                  }}
-                  onMouseLeave={e => {
-                    (e.currentTarget as HTMLElement).style.borderColor = 'rgba(255,255,255,0.07)'
-                    ;(e.currentTarget as HTMLElement).style.boxShadow = 'none'
-                  }}
+                  onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = 'rgba(218,41,28,0.5)' }}
+                  onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = '#303030' }}
                 >
                   <div>
-                    <div style={{ fontWeight: 300, fontSize: 16, color: 'var(--p-text-1)', letterSpacing: '-0.02em' }}>{res.class_name}</div>
-                    <div style={{ fontSize: 13, fontWeight: 300, color: 'var(--p-text-3)', marginTop: 3 }}>
-                      {new Date(res.pickup_date).toLocaleDateString()} → {new Date(res.dropoff_date).toLocaleDateString()}
+                    <div style={{ fontWeight: 500, fontSize: 16, color: '#ffffff', letterSpacing: '-0.02em' }}>
+                      {classMap[res.vehicle_class_id] ?? 'Vehicle'}
                     </div>
-                    <div style={{ fontFamily: 'monospace', fontSize: 12, fontWeight: 400, color: '#22e2a8', marginTop: 3 }}>
+                    <div style={{ fontSize: 13, fontWeight: 400, color: '#969696', marginTop: 3 }}>
+                      {fmtDate(res.pickup_datetime)} → {fmtDate(res.return_datetime)}
+                    </div>
+                    <div style={{ fontFamily: 'monospace', fontSize: 12, color: '#666666', marginTop: 3 }}>
                       #{res.confirmation_number}
                     </div>
                   </div>
                   <div style={{ textAlign: 'right', flexShrink: 0, marginLeft: 16 }}>
-                    <span style={{
-                      ...statusBadgeStyle(res.status),
-                      padding: '3px 10px', borderRadius: 100, fontSize: 12, fontWeight: 500,
-                      display: 'inline-block',
-                    }}>
+                    <span style={{ ...statusBadgeStyle(res.status), padding: '3px 10px', borderRadius: 9999, fontSize: 12, fontWeight: 600, display: 'inline-block' }}>
                       {res.status}
                     </span>
-                    <div style={{ fontSize: 16, fontWeight: 300, color: 'var(--p-text-1)', marginTop: 8, letterSpacing: '-0.02em' }}>
-                      {new Intl.NumberFormat('en-US', { style: 'currency', currency: res.rate_summary.currency_code }).format(res.rate_summary.total)}
+                    <div style={{ fontSize: 16, fontWeight: 500, color: '#ffffff', marginTop: 8, letterSpacing: '-0.02em' }}>
+                      {fmtMoney(res.grand_total, res.currency)}
                     </div>
                   </div>
                 </a>
@@ -204,34 +198,36 @@ export default function AccountPage() {
           )}
         </div>
 
-        {/* Account details */}
-        <div style={{
-          background: 'rgba(255,255,255,0.025)',
-          border: '1px solid rgba(255,255,255,0.07)',
-          borderRadius: 16,
-          backdropFilter: 'blur(12px)',
-          padding: 28,
-        }}>
-          <p style={{ fontSize: 11, fontWeight: 500, color: 'var(--p-cyan)', textTransform: 'uppercase', letterSpacing: '0.16em', marginBottom: 16 }}>Profile</p>
-          <h2 style={{ fontSize: 20, fontWeight: 300, color: 'var(--p-text-1)', letterSpacing: '-0.03em', marginBottom: 20 }}>Account Details</h2>
+        {/* Profile details */}
+        <div style={{ background: '#303030', border: '1px solid #303030', borderRadius: 0, padding: 28 }}>
+          <p style={{ fontSize: 11, fontWeight: 600, color: '#666666', textTransform: 'uppercase', letterSpacing: '1.1px', marginBottom: 16 }}>
+            Profile
+          </p>
+          <h2 style={{ fontSize: 20, fontWeight: 500, color: '#ffffff', letterSpacing: '-0.03em', marginBottom: 20 }}>
+            Account Details
+          </h2>
           <dl style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px 32px', marginBottom: 24 }}>
             {[
               { label: 'Name', value: `${user.first_name} ${user.last_name}` },
               { label: 'Email', value: user.email },
+              ...(customer?.phone ? [{ label: 'Phone', value: customer.phone }] : []),
+              ...(customer?.loyalty_tier ? [{ label: 'Loyalty Tier', value: customer.loyalty_tier }] : []),
+              ...(customer?.loyalty_points != null ? [{ label: 'Loyalty Points', value: String(customer.loyalty_points) }] : []),
             ].map(({ label, value }) => (
               <div key={label}>
-                <dt style={{ fontSize: 11, fontWeight: 500, color: 'var(--p-text-4)', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 4 }}>{label}</dt>
-                <dd style={{ fontSize: 14, fontWeight: 300, color: 'var(--p-text-1)' }}>{value}</dd>
+                <dt style={{ fontSize: 11, fontWeight: 600, color: '#666666', textTransform: 'uppercase', letterSpacing: '1.1px', marginBottom: 4 }}>{label}</dt>
+                <dd style={{ fontSize: 14, fontWeight: 400, color: '#ffffff' }}>{value}</dd>
               </div>
             ))}
           </dl>
           <button
-            onClick={() => { window.location.href = '/' }}
+            onClick={handleSignOut}
             style={{
-              padding: '9px 20px', borderRadius: 10,
-              background: 'transparent', color: 'var(--p-text-3)',
-              border: '1px solid rgba(255,255,255,0.12)',
-              fontSize: 13, fontWeight: 400, cursor: 'pointer',
+              display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+              padding: '0 20px', height: 48, borderRadius: 0,
+              background: 'transparent', color: '#ffffff', border: '1px solid rgba(255,255,255,0.25)',
+              fontSize: 14, fontWeight: 700, cursor: 'pointer',
+              letterSpacing: '1.4px', textTransform: 'uppercase', fontFamily: 'inherit',
             }}
           >
             Sign Out

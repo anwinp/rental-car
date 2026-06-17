@@ -19,6 +19,7 @@ from redis.asyncio import Redis
 from sqlalchemy import and_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.exceptions import ResourceNotFoundError, ValidationError
 from app.core.redis import NOTIFICATION_STREAM, get_session_redis
 from app.domains.notifications.models import NotificationLog, NotificationTemplate
@@ -146,12 +147,30 @@ class NotificationService:
                     rendered_subject = subject
                     rendered_html = rendered_body
 
-                client = SendGridClient()
-                await client.send_email(
-                    to_email=recipient_address,
-                    subject=rendered_subject,
-                    html_body=rendered_html,
-                )
+                sg_key = settings.sendgrid_api_key.get_secret_value()
+                if sg_key and not sg_key.startswith("SG.placeholder") and settings.smtp_host == "":
+                    client = SendGridClient()
+                    await client.send_email(
+                        to_email=recipient_address,
+                        subject=rendered_subject,
+                        html_body=rendered_html,
+                    )
+                elif settings.smtp_host:
+                    from app.integrations.smtp_client import send_email_smtp
+                    await send_email_smtp(
+                        to_email=recipient_address,
+                        subject=rendered_subject,
+                        html_body=rendered_html,
+                    )
+                else:
+                    log.warning(
+                        "email_not_sent no_delivery_method configured",
+                        recipient=recipient_address,
+                        event_code=event_code,
+                    )
+                    status = "FAILED"
+                    failure_reason = "No email delivery method configured (set SMTP_HOST or SENDGRID_API_KEY)."
+                    raise RuntimeError(failure_reason)
                 status = "SENT"
 
             elif channel == "SMS":

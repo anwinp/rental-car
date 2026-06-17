@@ -19,6 +19,8 @@ import {
 import { useBookingDraft } from '../../lib/bookingDraftStore'
 import type { DriverData } from '../../lib/bookingDraftStore'
 
+const TENANT = '00000000-0000-0000-0000-000000000001'
+
 const driverSchema = z.object({
   first_name: z.string().min(1, 'Required'),
   last_name: z.string().min(1, 'Required'),
@@ -62,12 +64,11 @@ function formatExpiry(v: string) {
   return digits.length > 2 ? `${digits.slice(0, 2)}/${digits.slice(2)}` : digits
 }
 
-// Cosmos dark card styles
+// Ferrari dark card styles
 const cosmosCard: React.CSSProperties = {
-  background: 'rgba(255,255,255,0.025)',
-  border: '1px solid rgba(255,255,255,0.07)',
-  borderRadius: 16,
-  backdropFilter: 'blur(12px)',
+  background: '#303030',
+  border: '1px solid #303030',
+  borderRadius: 0,
   overflow: 'hidden',
 }
 const cosmosCardHeader: React.CSSProperties = {
@@ -88,9 +89,14 @@ const inputStyle: React.CSSProperties = {
   display: 'block', width: '100%', padding: '10px 14px',
   background: 'rgba(255,255,255,0.05)',
   border: '1px solid rgba(255,255,255,0.12)',
-  borderRadius: 10, color: 'var(--p-text-1)', fontSize: 14,
-  fontWeight: 300, outline: 'none',
-  transition: 'border-color 0.15s',
+  borderRadius: 4, color: '#ffffff', fontSize: 14,
+  fontWeight: 400, outline: 'none',
+  transition: 'border-color 0.15s', fontFamily: 'inherit',
+}
+
+const labelStyle: React.CSSProperties = {
+  fontSize: 12, fontWeight: 500, color: '#969696',
+  textTransform: 'uppercase', letterSpacing: '0.1em',
 }
 
 export default function BookingPage({ params, searchParams }: BookingPageProps) {
@@ -172,18 +178,17 @@ export default function BookingPage({ params, searchParams }: BookingPageProps) 
     setIsPending(true)
     setBookingError(null)
     try {
-      const tenantId = process.env.NEXT_PUBLIC_TENANT_ID ?? 'dev'
       const res = await fetch('/api/v1/reservations/guest', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'X-Tenant-ID': tenantId,
+          'X-Tenant-ID': TENANT,
         },
         body: JSON.stringify({
           pickup_location: pickup,
           vehicle_class_id: classId,
-          pickup_date: from,
-          dropoff_date: to,
+          pickup_date: from.slice(0, 10),
+          dropoff_date: to.slice(0, 10),
           guest_info: {
             first_name: driverData.first_name,
             last_name: driverData.last_name,
@@ -223,17 +228,16 @@ export default function BookingPage({ params, searchParams }: BookingPageProps) 
   }, 0)
 
   return (
-    <div style={{ minHeight: '100vh', background: 'var(--p-surface)', padding: '32px 0' }}>
+    <div style={{ minHeight: '100vh', background: '#181818', padding: '32px 0' }}>
       <style>{`
         @keyframes rcm-pop{0%{transform:scale(0.7);opacity:0}100%{transform:scale(1);opacity:1}}
-        @keyframes rcm-glow{0%,100%{box-shadow:0 0 32px rgba(16,217,160,0.3)}50%{box-shadow:0 0 56px rgba(16,217,160,0.6)}}
       `}</style>
       <div style={{ maxWidth: 1100, margin: '0 auto', padding: '0 24px' }}>
         <div style={{ marginBottom: 36 }}>
-          <p style={{ fontSize: 11, fontWeight: 500, color: 'var(--p-cyan)', textTransform: 'uppercase', letterSpacing: '0.16em', marginBottom: 8 }}>
+          <p style={{ fontSize: 11, fontWeight: 500, color: '#969696', textTransform: 'uppercase', letterSpacing: '0.16em', marginBottom: 8 }}>
             Booking
           </p>
-          <h1 style={{ fontSize: 32, fontWeight: 300, color: 'var(--p-text-1)', letterSpacing: '-0.05em', margin: 0 }}>
+          <h1 style={{ fontSize: 32, fontWeight: 500, color: '#ffffff', letterSpacing: '-0.05em', margin: 0 }}>
             Complete Your Booking
           </h1>
         </div>
@@ -246,9 +250,7 @@ export default function BookingPage({ params, searchParams }: BookingPageProps) 
                 {i > 0 && (
                   <div style={{
                     flex: 1, height: 2,
-                    background: i <= activeStep
-                      ? 'linear-gradient(90deg, #22e2a8, #40b3ff)'
-                      : 'rgba(255,255,255,0.08)',
+                    background: i <= activeStep ? '#da291c' : 'rgba(255,255,255,0.08)',
                     transition: 'background 0.3s',
                   }} />
                 )}
@@ -257,17 +259,16 @@ export default function BookingPage({ params, searchParams }: BookingPageProps) 
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
                   fontSize: 13, fontWeight: 500, transition: 'all 0.3s',
                   background: i < activeStep
-                    ? 'linear-gradient(135deg, #22e2a8, #40b3ff)'
+                    ? '#da291c'
                     : i === activeStep
-                      ? 'rgba(34,226,168,0.20)'
+                      ? 'rgba(218,41,28,0.15)'
                       : 'rgba(255,255,255,0.06)',
                   border: i === activeStep
-                    ? '2px solid #22e2a8'
+                    ? '2px solid #da291c'
                     : i < activeStep
                       ? 'none'
                       : '2px solid rgba(255,255,255,0.1)',
-                  color: i <= activeStep ? '#fff' : 'var(--p-text-4)',
-                  boxShadow: i === activeStep ? '0 0 16px rgba(34,226,168,0.4)' : 'none',
+                  color: i <= activeStep ? '#ffffff' : '#666666',
                 }}>
                   {i < activeStep
                     ? <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12" /></svg>
@@ -276,16 +277,14 @@ export default function BookingPage({ params, searchParams }: BookingPageProps) 
                 {i < STEPS.length - 1 && (
                   <div style={{
                     flex: 1, height: 2,
-                    background: i < activeStep
-                      ? 'linear-gradient(90deg, #22e2a8, #40b3ff)'
-                      : 'rgba(255,255,255,0.08)',
+                    background: i < activeStep ? '#da291c' : 'rgba(255,255,255,0.08)',
                     transition: 'background 0.3s',
                   }} />
                 )}
               </div>
               <span style={{
-                fontSize: 11, marginTop: 8, fontWeight: i === activeStep ? 500 : 300,
-                color: i === activeStep ? '#22e2a8' : 'var(--p-text-4)',
+                fontSize: 11, marginTop: 8, fontWeight: i === activeStep ? 500 : 400,
+                color: i === activeStep ? '#ffffff' : '#666666',
                 letterSpacing: '0.04em',
               }}>
                 {label}
@@ -304,8 +303,8 @@ export default function BookingPage({ params, searchParams }: BookingPageProps) 
             {activeStep === 0 && (
               <div style={cosmosCard}>
                 <div style={cosmosCardHeader}>
-                  <h2 style={{ fontSize: 20, fontWeight: 300, color: 'var(--p-text-1)', letterSpacing: '-0.03em', margin: 0 }}>Add Extras</h2>
-                  <p style={{ fontSize: 13, fontWeight: 300, color: 'var(--p-text-3)', marginTop: 4 }}>Customize your rental with optional add-ons.</p>
+                  <h2 style={{ fontSize: 20, fontWeight: 500, color: '#ffffff', letterSpacing: '-0.03em', margin: 0 }}>Add Extras</h2>
+                  <p style={{ fontSize: 13, fontWeight: 400, color: '#969696', marginTop: 4 }}>Customize your rental with optional add-ons.</p>
                 </div>
                 <div style={cosmosCardBody}>
                   <fieldset style={{ border: 0, padding: 0, margin: 0 }}>
@@ -316,9 +315,9 @@ export default function BookingPage({ params, searchParams }: BookingPageProps) 
                         return (
                           <label key={extra.code} style={{
                             display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                            padding: '14px 16px', borderRadius: 12, cursor: 'pointer',
-                            border: `1px solid ${checked ? 'rgba(34,226,168,0.4)' : 'rgba(255,255,255,0.07)'}`,
-                            background: checked ? 'rgba(34,226,168,0.08)' : 'rgba(255,255,255,0.02)',
+                            padding: '14px 16px', borderRadius: 0, cursor: 'pointer',
+                            border: `1px solid ${checked ? 'rgba(218,41,28,0.4)' : 'rgba(255,255,255,0.07)'}`,
+                            background: checked ? 'rgba(218,41,28,0.06)' : 'rgba(255,255,255,0.02)',
                             transition: 'all 0.15s',
                           }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -331,9 +330,9 @@ export default function BookingPage({ params, searchParams }: BookingPageProps) 
                               />
                               {/* Custom checkbox */}
                               <span style={{
-                                width: 18, height: 18, borderRadius: 5, flexShrink: 0,
-                                border: `2px solid ${checked ? '#22e2a8' : 'rgba(255,255,255,0.2)'}`,
-                                background: checked ? '#22e2a8' : 'transparent',
+                                width: 18, height: 18, borderRadius: 2, flexShrink: 0,
+                                border: `2px solid ${checked ? '#da291c' : 'rgba(255,255,255,0.2)'}`,
+                                background: checked ? '#da291c' : 'transparent',
                                 display: 'flex', alignItems: 'center', justifyContent: 'center',
                                 transition: 'all 0.15s',
                               }}>
@@ -344,15 +343,15 @@ export default function BookingPage({ params, searchParams }: BookingPageProps) 
                                 )}
                               </span>
                               <div>
-                                <div style={{ fontSize: 14, fontWeight: 300, color: 'var(--p-text-1)' }}>{extra.name}</div>
-                                <div style={{ fontSize: 12, fontWeight: 400, color: 'var(--p-text-4)' }}>{extra.code}</div>
+                                <div style={{ fontSize: 14, fontWeight: 400, color: '#ffffff' }}>{extra.name}</div>
+                                <div style={{ fontSize: 12, fontWeight: 400, color: '#666666' }}>{extra.code}</div>
                               </div>
                             </div>
                             <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                              <div style={{ fontSize: 15, fontWeight: 300, color: checked ? '#22e2a8' : 'var(--p-text-1)' }}>
+                              <div style={{ fontSize: 15, fontWeight: 400, color: checked ? '#da291c' : '#ffffff' }}>
                                 ${extra.dailyRate.toFixed(2)}
                               </div>
-                              <div style={{ fontSize: 11, fontWeight: 400, color: 'var(--p-text-4)' }}>/day</div>
+                              <div style={{ fontSize: 11, fontWeight: 400, color: '#666666' }}>/day</div>
                             </div>
                           </label>
                         )
@@ -364,13 +363,14 @@ export default function BookingPage({ params, searchParams }: BookingPageProps) 
                   <button
                     onClick={() => setActiveStep(1)}
                     style={{
-                      padding: '11px 24px', borderRadius: 10,
-                      background: 'linear-gradient(135deg, #22e2a8 0%, #40b3ff 100%)',
-                      color: '#fff', fontWeight: 500, border: 'none', cursor: 'pointer',
-                      boxShadow: '0 0 20px rgba(34,226,168,0.35)', fontSize: 14,
+                      display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                      padding: '0 24px', height: 48, borderRadius: 0,
+                      background: '#da291c',
+                      color: '#ffffff', fontWeight: 700, border: 'none', cursor: 'pointer',
+                      fontSize: 14, letterSpacing: '1.4px', textTransform: 'uppercase', fontFamily: 'inherit',
                     }}
                   >
-                    Continue to Driver Info →
+                    Continue to Driver Info
                   </button>
                 </div>
               </div>
@@ -380,8 +380,8 @@ export default function BookingPage({ params, searchParams }: BookingPageProps) 
             {activeStep === 1 && (
               <div style={cosmosCard}>
                 <div style={cosmosCardHeader}>
-                  <h2 style={{ fontSize: 20, fontWeight: 300, color: 'var(--p-text-1)', letterSpacing: '-0.03em', margin: 0 }}>Driver Details</h2>
-                  <p style={{ fontSize: 13, fontWeight: 300, color: 'var(--p-text-3)', marginTop: 4 }}>Enter the primary driver&apos;s information.</p>
+                  <h2 style={{ fontSize: 20, fontWeight: 500, color: '#ffffff', letterSpacing: '-0.03em', margin: 0 }}>Driver Details</h2>
+                  <p style={{ fontSize: 13, fontWeight: 400, color: '#969696', marginTop: 4 }}>Enter the primary driver&apos;s information.</p>
                 </div>
                 <div style={cosmosCardBody}>
                   <Form {...driverForm}>
@@ -389,14 +389,14 @@ export default function BookingPage({ params, searchParams }: BookingPageProps) 
                       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
                         <FormField control={driverForm.control} name="first_name" render={({ field }) => (
                           <FormItem>
-                            <FormLabel style={{ fontSize: 12, fontWeight: 500, color: 'var(--p-text-3)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>First Name *</FormLabel>
+                            <FormLabel style={labelStyle}>First Name *</FormLabel>
                             <FormControl><div><Input placeholder="Jane" {...field} style={inputStyle} /></div></FormControl>
                             <FormMessage />
                           </FormItem>
                         )} />
                         <FormField control={driverForm.control} name="last_name" render={({ field }) => (
                           <FormItem>
-                            <FormLabel style={{ fontSize: 12, fontWeight: 500, color: 'var(--p-text-3)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Last Name *</FormLabel>
+                            <FormLabel style={labelStyle}>Last Name *</FormLabel>
                             <FormControl><div><Input placeholder="Smith" {...field} style={inputStyle} /></div></FormControl>
                             <FormMessage />
                           </FormItem>
@@ -405,21 +405,21 @@ export default function BookingPage({ params, searchParams }: BookingPageProps) 
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
                         <FormField control={driverForm.control} name="email" render={({ field }) => (
                           <FormItem>
-                            <FormLabel style={{ fontSize: 12, fontWeight: 500, color: 'var(--p-text-3)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Email Address *</FormLabel>
+                            <FormLabel style={labelStyle}>Email Address *</FormLabel>
                             <FormControl><div><Input type="email" placeholder="jane@example.com" {...field} style={inputStyle} /></div></FormControl>
                             <FormMessage />
                           </FormItem>
                         )} />
                         <FormField control={driverForm.control} name="phone" render={({ field }) => (
                           <FormItem>
-                            <FormLabel style={{ fontSize: 12, fontWeight: 500, color: 'var(--p-text-3)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Phone Number</FormLabel>
+                            <FormLabel style={labelStyle}>Phone Number</FormLabel>
                             <FormControl><div><Input type="tel" placeholder="+1 (555) 000-0000" {...field} style={inputStyle} /></div></FormControl>
                             <FormMessage />
                           </FormItem>
                         )} />
                         <FormField control={driverForm.control} name="dob" render={({ field }) => (
                           <FormItem>
-                            <FormLabel style={{ fontSize: 12, fontWeight: 500, color: 'var(--p-text-3)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Date of Birth</FormLabel>
+                            <FormLabel style={labelStyle}>Date of Birth</FormLabel>
                             <FormControl>
                               <div>
                                 <Input
@@ -437,10 +437,10 @@ export default function BookingPage({ params, searchParams }: BookingPageProps) 
                         {ageWarning && (
                           <div role="alert" style={{
                             padding: '10px 14px',
-                            background: 'rgba(251,191,36,0.08)',
-                            border: '1px solid rgba(251,191,36,0.25)',
-                            borderRadius: 10, fontSize: 13, fontWeight: 300,
-                            color: '#fbbf24', display: 'flex', alignItems: 'center', gap: 8,
+                            background: 'rgba(255,255,255,0.04)',
+                            border: '1px solid #303030',
+                            borderRadius: 0, fontSize: 13, fontWeight: 400,
+                            color: '#969696', display: 'flex', alignItems: 'center', gap: 8,
                           }}>
                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
                             Young driver surcharge may apply for drivers under 25.
@@ -449,14 +449,14 @@ export default function BookingPage({ params, searchParams }: BookingPageProps) 
                         <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 16 }}>
                           <FormField control={driverForm.control} name="dl_number" render={({ field }) => (
                             <FormItem>
-                              <FormLabel style={{ fontSize: 12, fontWeight: 500, color: 'var(--p-text-3)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Driver License #</FormLabel>
+                              <FormLabel style={labelStyle}>Driver License #</FormLabel>
                               <FormControl><div><Input placeholder="D12345678" {...field} style={inputStyle} /></div></FormControl>
                               <FormMessage />
                             </FormItem>
                           )} />
                           <FormField control={driverForm.control} name="dl_state" render={({ field }) => (
                             <FormItem>
-                              <FormLabel style={{ fontSize: 12, fontWeight: 500, color: 'var(--p-text-3)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>State</FormLabel>
+                              <FormLabel style={labelStyle}>State</FormLabel>
                               <FormControl><div><Input placeholder="CA" maxLength={2} {...field} style={inputStyle} /></div></FormControl>
                               <FormMessage />
                             </FormItem>
@@ -470,24 +470,27 @@ export default function BookingPage({ params, searchParams }: BookingPageProps) 
                   <button
                     onClick={() => setActiveStep(0)}
                     style={{
-                      padding: '11px 24px', borderRadius: 10,
-                      background: 'transparent', color: 'var(--p-text-2)',
-                      border: '1px solid rgba(255,255,255,0.12)',
-                      fontWeight: 400, cursor: 'pointer', fontSize: 14,
+                      display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                      padding: '0 24px', height: 48, borderRadius: 0,
+                      background: 'transparent', color: '#ffffff',
+                      border: '1px solid #ffffff',
+                      fontWeight: 700, cursor: 'pointer', fontSize: 14,
+                      letterSpacing: '1.4px', textTransform: 'uppercase', fontFamily: 'inherit',
                     }}
                   >
-                    ← Back
+                    Back
                   </button>
                   <button
                     type="submit" form="driver-form"
                     style={{
-                      padding: '11px 24px', borderRadius: 10,
-                      background: 'linear-gradient(135deg, #22e2a8 0%, #40b3ff 100%)',
-                      color: '#fff', fontWeight: 500, border: 'none', cursor: 'pointer',
-                      boxShadow: '0 0 20px rgba(34,226,168,0.35)', fontSize: 14,
+                      display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                      padding: '0 24px', height: 48, borderRadius: 0,
+                      background: '#da291c',
+                      color: '#ffffff', fontWeight: 700, border: 'none', cursor: 'pointer',
+                      fontSize: 14, letterSpacing: '1.4px', textTransform: 'uppercase', fontFamily: 'inherit',
                     }}
                   >
-                    Continue to Payment →
+                    Continue to Payment
                   </button>
                 </div>
               </div>
@@ -497,42 +500,42 @@ export default function BookingPage({ params, searchParams }: BookingPageProps) 
             {activeStep === 2 && (
               <div style={cosmosCard}>
                 <div style={cosmosCardHeader}>
-                  <h2 style={{ fontSize: 20, fontWeight: 300, color: 'var(--p-text-1)', letterSpacing: '-0.03em', margin: 0 }}>Payment</h2>
-                  <p style={{ fontSize: 13, fontWeight: 300, color: 'var(--p-text-3)', marginTop: 4 }}>Enter your payment details to complete the booking.</p>
+                  <h2 style={{ fontSize: 20, fontWeight: 500, color: '#ffffff', letterSpacing: '-0.03em', margin: 0 }}>Payment</h2>
+                  <p style={{ fontSize: 13, fontWeight: 400, color: '#969696', marginTop: 4 }}>Enter your payment details to complete the booking.</p>
                 </div>
                 <div style={cosmosCardBody}>
                   <Form {...paymentForm}>
                     <form id="payment-form" onSubmit={paymentForm.handleSubmit(handlePaymentSubmit)} noValidate>
                       {/* Card visual */}
                       <div style={{
-                        height: 160, borderRadius: 14,
-                        background: 'linear-gradient(135deg, #0d7a5f 0%, #22e2a8 50%, #40b3ff 100%)',
+                        height: 160, borderRadius: 0,
+                        background: '#303030',
+                        border: '1px solid rgba(255,255,255,0.1)',
                         padding: '24px 28px', marginBottom: 24,
                         display: 'flex', flexDirection: 'column', justifyContent: 'space-between',
                         position: 'relative', overflow: 'hidden',
-                        boxShadow: '0 8px 40px rgba(34,226,168,0.3)',
                       }}>
-                        <div style={{ position: 'absolute', right: -20, top: -20, width: 180, height: 180, borderRadius: '50%', background: 'rgba(255,255,255,0.06)' }} aria-hidden="true" />
-                        <div style={{ position: 'absolute', right: 30, bottom: -40, width: 140, height: 140, borderRadius: '50%', background: 'rgba(255,255,255,0.04)' }} aria-hidden="true" />
+                        <div style={{ position: 'absolute', right: -20, top: -20, width: 180, height: 180, borderRadius: '50%', background: 'rgba(255,255,255,0.03)' }} aria-hidden="true" />
+                        <div style={{ position: 'absolute', right: 30, bottom: -40, width: 140, height: 140, borderRadius: '50%', background: 'rgba(255,255,255,0.02)' }} aria-hidden="true" />
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', position: 'relative' }}>
-                          <span style={{ fontSize: 16, fontWeight: 300, color: 'rgba(255,255,255,0.95)', letterSpacing: '0.12em' }}>RCM</span>
+                          <span style={{ fontSize: 16, fontWeight: 500, color: '#ffffff', letterSpacing: '0.12em' }}>RCM</span>
                           <svg width="40" height="26" viewBox="0 0 750 471" fill="none" aria-hidden="true">
-                            <circle cx="284" cy="236" r="200" fill="rgba(255,255,255,0.25)" />
-                            <circle cx="466" cy="236" r="200" fill="rgba(255,255,255,0.12)" />
+                            <circle cx="284" cy="236" r="200" fill="rgba(255,255,255,0.15)" />
+                            <circle cx="466" cy="236" r="200" fill="rgba(255,255,255,0.08)" />
                           </svg>
                         </div>
                         <div style={{ position: 'relative' }}>
-                          <div style={{ fontFamily: 'monospace', fontSize: 18, fontWeight: 300, color: '#fff', letterSpacing: '0.15em' }}>
+                          <div style={{ fontFamily: 'monospace', fontSize: 18, fontWeight: 400, color: '#ffffff', letterSpacing: '0.15em' }}>
                             {paymentForm.watch('card_number') || '•••• •••• •••• ••••'}
                           </div>
                           <div style={{ display: 'flex', gap: 24, marginTop: 8 }}>
                             <div>
-                              <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.6)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Card Holder</div>
-                              <div style={{ fontSize: 13, fontWeight: 300, color: 'rgba(255,255,255,0.9)', marginTop: 2 }}>{paymentForm.watch('card_name') || 'Your Name'}</div>
+                              <div style={{ fontSize: 9, color: '#666666', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Card Holder</div>
+                              <div style={{ fontSize: 13, fontWeight: 400, color: '#969696', marginTop: 2 }}>{paymentForm.watch('card_name') || 'Your Name'}</div>
                             </div>
                             <div>
-                              <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.6)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Expires</div>
-                              <div style={{ fontSize: 13, fontWeight: 300, color: 'rgba(255,255,255,0.9)', marginTop: 2 }}>{paymentForm.watch('expiry') || 'MM/YY'}</div>
+                              <div style={{ fontSize: 9, color: '#666666', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Expires</div>
+                              <div style={{ fontSize: 13, fontWeight: 400, color: '#969696', marginTop: 2 }}>{paymentForm.watch('expiry') || 'MM/YY'}</div>
                             </div>
                           </div>
                         </div>
@@ -541,14 +544,14 @@ export default function BookingPage({ params, searchParams }: BookingPageProps) 
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
                         <FormField control={paymentForm.control} name="card_name" render={({ field }) => (
                           <FormItem>
-                            <FormLabel style={{ fontSize: 12, fontWeight: 500, color: 'var(--p-text-3)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Name on Card *</FormLabel>
+                            <FormLabel style={labelStyle}>Name on Card *</FormLabel>
                             <FormControl><div><Input placeholder="Jane Smith" autoComplete="cc-name" {...field} style={inputStyle} /></div></FormControl>
                             <FormMessage />
                           </FormItem>
                         )} />
                         <FormField control={paymentForm.control} name="card_number" render={({ field }) => (
                           <FormItem>
-                            <FormLabel style={{ fontSize: 12, fontWeight: 500, color: 'var(--p-text-3)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Card Number *</FormLabel>
+                            <FormLabel style={labelStyle}>Card Number *</FormLabel>
                             <FormControl>
                               <div>
                                 <Input
@@ -568,7 +571,7 @@ export default function BookingPage({ params, searchParams }: BookingPageProps) 
                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
                           <FormField control={paymentForm.control} name="expiry" render={({ field }) => (
                             <FormItem>
-                              <FormLabel style={{ fontSize: 12, fontWeight: 500, color: 'var(--p-text-3)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Expiry *</FormLabel>
+                              <FormLabel style={labelStyle}>Expiry *</FormLabel>
                               <FormControl>
                                 <div>
                                   <Input
@@ -587,7 +590,7 @@ export default function BookingPage({ params, searchParams }: BookingPageProps) 
                           )} />
                           <FormField control={paymentForm.control} name="cvc" render={({ field }) => (
                             <FormItem>
-                              <FormLabel style={{ fontSize: 12, fontWeight: 500, color: 'var(--p-text-3)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>CVC *</FormLabel>
+                              <FormLabel style={labelStyle}>CVC *</FormLabel>
                               <FormControl>
                                 <div>
                                   <Input
@@ -608,13 +611,13 @@ export default function BookingPage({ params, searchParams }: BookingPageProps) 
                         </div>
                       </div>
 
-                      <div style={{ marginTop: 16, padding: '10px 14px', background: 'rgba(16,217,160,0.07)', border: '1px solid rgba(16,217,160,0.2)', borderRadius: 10, display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, fontWeight: 300, color: '#10d9a0' }}>
+                      <div style={{ marginTop: 16, padding: '10px 14px', background: 'rgba(255,255,255,0.04)', border: '1px solid #303030', borderRadius: 0, display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, fontWeight: 400, color: '#969696' }}>
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
                         Secured with 256-bit SSL encryption · Demo mode
                       </div>
 
                       {bookingError && (
-                        <div role="alert" style={{ marginTop: 16, padding: '10px 14px', background: 'rgba(240,78,78,0.08)', border: '1px solid rgba(240,78,78,0.25)', borderRadius: 10, fontSize: 13, fontWeight: 300, color: '#f04e4e' }}>
+                        <div role="alert" style={{ marginTop: 16, padding: '10px 14px', background: 'rgba(241,58,44,0.08)', border: '1px solid rgba(241,58,44,0.25)', borderRadius: 0, fontSize: 13, fontWeight: 400, color: '#f13a2c' }}>
                           {bookingError}
                         </div>
                       )}
@@ -625,13 +628,15 @@ export default function BookingPage({ params, searchParams }: BookingPageProps) 
                   <button
                     onClick={() => setActiveStep(1)}
                     style={{
-                      padding: '11px 24px', borderRadius: 10,
-                      background: 'transparent', color: 'var(--p-text-2)',
-                      border: '1px solid rgba(255,255,255,0.12)',
-                      fontWeight: 400, cursor: 'pointer', fontSize: 14,
+                      display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                      padding: '0 24px', height: 48, borderRadius: 0,
+                      background: 'transparent', color: '#ffffff',
+                      border: '1px solid #ffffff',
+                      fontWeight: 700, cursor: 'pointer', fontSize: 14,
+                      letterSpacing: '1.4px', textTransform: 'uppercase', fontFamily: 'inherit',
                     }}
                   >
-                    ← Back
+                    Back
                   </button>
                   <button
                     type="submit"
@@ -639,13 +644,12 @@ export default function BookingPage({ params, searchParams }: BookingPageProps) 
                     disabled={isPending}
                     aria-busy={isPending}
                     style={{
-                      padding: '11px 24px', borderRadius: 10,
-                      background: isPending
-                        ? 'rgba(34,226,168,0.4)'
-                        : 'linear-gradient(135deg, #22e2a8 0%, #40b3ff 100%)',
-                      color: '#fff', fontWeight: 500, border: 'none',
+                      display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                      padding: '0 24px', height: 48, borderRadius: 0,
+                      background: isPending ? '#8a1a11' : '#da291c',
+                      color: '#ffffff', fontWeight: 700, border: 'none',
                       cursor: isPending ? 'not-allowed' : 'pointer',
-                      boxShadow: '0 0 20px rgba(34,226,168,0.35)', fontSize: 14,
+                      fontSize: 14, letterSpacing: '1.4px', textTransform: 'uppercase', fontFamily: 'inherit',
                     }}
                   >
                     {isPending ? 'Confirming…' : 'Confirm & Pay'}
@@ -658,38 +662,37 @@ export default function BookingPage({ params, searchParams }: BookingPageProps) 
             {activeStep === 3 && (
               <div style={{ ...cosmosCard, textAlign: 'center' }}>
                 <div style={{ padding: '56px 40px' }}>
-                  {/* Animated success ring */}
+                  {/* Success icon */}
                   <div style={{ position: 'relative', width: 88, height: 88, margin: '0 auto 24px', animation: 'rcm-pop 0.5s cubic-bezier(0.34,1.56,0.64,1) both' }}>
                     <div style={{
                       position: 'absolute', inset: 0, borderRadius: '50%',
-                      background: 'rgba(16,217,160,0.12)',
-                      border: '2px solid rgba(16,217,160,0.3)',
-                      animation: 'rcm-glow 2s ease-in-out infinite',
+                      background: 'rgba(3,144,74,0.12)',
+                      border: '2px solid rgba(3,144,74,0.3)',
                     }} />
                     <div style={{
                       position: 'absolute', inset: 8, borderRadius: '50%',
-                      background: 'rgba(16,217,160,0.15)',
+                      background: 'rgba(3,144,74,0.15)',
                       display: 'flex', alignItems: 'center', justifyContent: 'center',
                     }}>
-                      <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#10d9a0" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12" /></svg>
+                      <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#03904a" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12" /></svg>
                     </div>
                   </div>
 
-                  <h2 style={{ fontSize: 32, fontWeight: 300, color: 'var(--p-text-1)', letterSpacing: '-0.05em', marginBottom: 10 }}>Booking Confirmed!</h2>
-                  <p style={{ fontSize: 14, fontWeight: 300, color: 'var(--p-text-3)', marginBottom: 32 }}>
+                  <h2 style={{ fontSize: 32, fontWeight: 500, color: '#ffffff', letterSpacing: '-0.05em', marginBottom: 10 }}>Booking Confirmed!</h2>
+                  <p style={{ fontSize: 14, fontWeight: 400, color: '#969696', marginBottom: 32 }}>
                     A confirmation has been sent to{' '}
-                    <span style={{ color: '#22e2a8', fontWeight: 400 }}>{driverData?.email}</span>
+                    <span style={{ color: '#ffffff', fontWeight: 400 }}>{driverData?.email}</span>
                   </p>
 
                   {confirmationNumber && (
                     <div style={{
-                      background: 'rgba(34,226,168,0.08)',
-                      border: '1px solid rgba(34,226,168,0.2)',
-                      borderRadius: 14, padding: '20px 32px',
+                      background: 'rgba(255,255,255,0.04)',
+                      border: '1px solid #303030',
+                      borderRadius: 0, padding: '20px 32px',
                       display: 'inline-block', marginBottom: 36,
                     }}>
-                      <p style={{ fontSize: 11, fontWeight: 500, color: 'var(--p-text-4)', textTransform: 'uppercase', letterSpacing: '0.16em', marginBottom: 10 }}>Confirmation Number</p>
-                      <code style={{ fontFamily: 'monospace', fontSize: 30, fontWeight: 300, color: '#22e2a8', letterSpacing: '0.12em' }}>
+                      <p style={{ fontSize: 11, fontWeight: 500, color: '#666666', textTransform: 'uppercase', letterSpacing: '0.16em', marginBottom: 10 }}>Confirmation Number</p>
+                      <code style={{ fontFamily: 'monospace', fontSize: 30, fontWeight: 500, color: '#ffffff', letterSpacing: '0.12em' }}>
                         {confirmationNumber}
                       </code>
                     </div>
@@ -699,10 +702,12 @@ export default function BookingPage({ params, searchParams }: BookingPageProps) 
                     <a
                       href={`/confirmation/${confirmationNumber}`}
                       style={{
-                        padding: '11px 24px', borderRadius: 10,
-                        background: 'transparent', color: 'var(--p-text-2)',
-                        border: '1px solid rgba(255,255,255,0.12)',
-                        fontWeight: 400, textDecoration: 'none', fontSize: 14,
+                        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                        padding: '0 24px', height: 48, borderRadius: 0,
+                        background: 'transparent', color: '#ffffff',
+                        border: '1px solid #ffffff',
+                        fontWeight: 700, textDecoration: 'none', fontSize: 14,
+                        letterSpacing: '1.4px', textTransform: 'uppercase',
                       }}
                     >
                       View Full Details
@@ -710,10 +715,11 @@ export default function BookingPage({ params, searchParams }: BookingPageProps) 
                     <a
                       href="/"
                       style={{
-                        padding: '11px 24px', borderRadius: 10,
-                        background: 'linear-gradient(135deg, #22e2a8 0%, #40b3ff 100%)',
-                        color: '#fff', fontWeight: 500, textDecoration: 'none', fontSize: 14,
-                        boxShadow: '0 0 20px rgba(34,226,168,0.35)',
+                        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                        padding: '0 24px', height: 48, borderRadius: 0,
+                        background: '#da291c',
+                        color: '#ffffff', fontWeight: 700, textDecoration: 'none', fontSize: 14,
+                        letterSpacing: '1.4px', textTransform: 'uppercase',
                       }}
                     >
                       Book Another Car
@@ -727,17 +733,16 @@ export default function BookingPage({ params, searchParams }: BookingPageProps) 
           {/* Sticky sidebar */}
           {activeStep < 3 && (
             <div style={{
-              background: 'rgba(255,255,255,0.025)',
-              border: '1px solid rgba(255,255,255,0.07)',
-              borderRadius: 16,
-              backdropFilter: 'blur(12px)',
+              background: '#303030',
+              border: '1px solid #303030',
+              borderRadius: 0,
               position: 'sticky',
               top: 80,
             }}>
               <div style={{ padding: '16px 20px', borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
-                <p style={{ fontSize: 11, fontWeight: 500, color: 'var(--p-cyan)', textTransform: 'uppercase', letterSpacing: '0.16em', marginBottom: 4 }}>Summary</p>
-                <h3 style={{ fontSize: 16, fontWeight: 300, color: 'var(--p-text-1)', letterSpacing: '-0.02em', margin: 0 }}>Price Breakdown</h3>
-                <p style={{ fontSize: 12, fontWeight: 300, color: 'var(--p-text-4)', marginTop: 2 }}>{daysCount} day{daysCount !== 1 ? 's' : ''}</p>
+                <p style={{ fontSize: 11, fontWeight: 500, color: '#969696', textTransform: 'uppercase', letterSpacing: '0.16em', marginBottom: 4 }}>Summary</p>
+                <h3 style={{ fontSize: 16, fontWeight: 500, color: '#ffffff', letterSpacing: '-0.02em', margin: 0 }}>Price Breakdown</h3>
+                <p style={{ fontSize: 12, fontWeight: 400, color: '#666666', marginTop: 2 }}>{daysCount} day{daysCount !== 1 ? 's' : ''}</p>
               </div>
               <div style={{ padding: 20 }}>
                 {quoteLoading ? (
@@ -748,10 +753,10 @@ export default function BookingPage({ params, searchParams }: BookingPageProps) 
                   <>
                     {quote.line_items.map((item, i) => (
                       <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 10 }}>
-                        <span style={{ fontWeight: 300, color: item.type === 'tax' || item.type === 'fee' ? 'var(--p-text-4)' : 'var(--p-text-3)' }}>
+                        <span style={{ fontWeight: 400, color: item.type === 'tax' || item.type === 'fee' ? '#666666' : '#969696' }}>
                           {item.description}
                         </span>
-                        <span style={{ fontWeight: 400, color: item.type === 'discount' ? '#10d9a0' : 'var(--p-text-1)' }}>
+                        <span style={{ fontWeight: 400, color: item.type === 'discount' ? '#03904a' : '#ffffff' }}>
                           {item.type === 'discount' ? '-' : ''}
                           {new Intl.NumberFormat('en-US', { style: 'currency', currency: item.currency_code }).format(Math.abs(item.amount))}
                         </span>
@@ -759,8 +764,8 @@ export default function BookingPage({ params, searchParams }: BookingPageProps) 
                     ))}
                     <div style={{ height: 1, background: 'rgba(255,255,255,0.07)', margin: '12px 0' }} />
                     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 18 }}>
-                      <span style={{ fontWeight: 300, color: 'var(--p-text-1)' }}>Total</span>
-                      <span style={{ fontWeight: 300, color: '#22e2a8', letterSpacing: '-0.02em' }}>
+                      <span style={{ fontWeight: 400, color: '#ffffff' }}>Total</span>
+                      <span style={{ fontWeight: 500, color: '#ffffff', letterSpacing: '-0.02em' }}>
                         {new Intl.NumberFormat('en-US', { style: 'currency', currency: quote.currency_code }).format(quote.total)}
                       </span>
                     </div>
@@ -774,20 +779,20 @@ export default function BookingPage({ params, searchParams }: BookingPageProps) 
                           if (!e) return null
                           return (
                             <div key={code} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 8 }}>
-                              <span style={{ fontWeight: 300, color: 'var(--p-text-3)' }}>{e.name}</span>
-                              <span style={{ fontWeight: 400, color: 'var(--p-text-1)' }}>${(e.dailyRate * daysCount).toFixed(2)}</span>
+                              <span style={{ fontWeight: 400, color: '#969696' }}>{e.name}</span>
+                              <span style={{ fontWeight: 400, color: '#ffffff' }}>${(e.dailyRate * daysCount).toFixed(2)}</span>
                             </div>
                           )
                         })}
                         <div style={{ height: 1, background: 'rgba(255,255,255,0.07)', margin: '10px 0' }} />
                         <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14 }}>
-                          <span style={{ fontWeight: 300, color: 'var(--p-text-1)' }}>Extras subtotal</span>
-                          <span style={{ fontWeight: 400, color: '#22e2a8' }}>${extrasTotal.toFixed(2)}</span>
+                          <span style={{ fontWeight: 400, color: '#ffffff' }}>Extras subtotal</span>
+                          <span style={{ fontWeight: 500, color: '#ffffff' }}>${extrasTotal.toFixed(2)}</span>
                         </div>
                       </>
                     )}
                     {selectedExtras.length === 0 && (
-                      <p style={{ fontSize: 13, fontWeight: 300, color: 'var(--p-text-4)' }}>Select extras to see pricing.</p>
+                      <p style={{ fontSize: 13, fontWeight: 400, color: '#666666' }}>Select extras to see pricing.</p>
                     )}
                   </>
                 )}
@@ -795,14 +800,14 @@ export default function BookingPage({ params, searchParams }: BookingPageProps) 
                 {(from || to) && (
                   <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid rgba(255,255,255,0.07)' }}>
                     {from && (
-                      <div style={{ fontSize: 12, fontWeight: 300, color: 'var(--p-text-4)', marginBottom: 4 }}>
-                        <span style={{ color: 'var(--p-text-3)', fontWeight: 400 }}>Pickup</span>{' '}
+                      <div style={{ fontSize: 12, fontWeight: 400, color: '#666666', marginBottom: 4 }}>
+                        <span style={{ color: '#969696', fontWeight: 400 }}>Pickup</span>{' '}
                         {new Date(from).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
                       </div>
                     )}
                     {to && (
-                      <div style={{ fontSize: 12, fontWeight: 300, color: 'var(--p-text-4)' }}>
-                        <span style={{ color: 'var(--p-text-3)', fontWeight: 400 }}>Return</span>{' '}
+                      <div style={{ fontSize: 12, fontWeight: 400, color: '#666666' }}>
+                        <span style={{ color: '#969696', fontWeight: 400 }}>Return</span>{' '}
                         {new Date(to).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
                       </div>
                     )}

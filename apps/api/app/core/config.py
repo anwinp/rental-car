@@ -60,11 +60,27 @@ class Settings(BaseSettings):
     sendgrid_from_email: str = "noreply@rcm.app"
     sendgrid_from_name: str = "Rental Car Manager"
 
+    # ── SMTP (fallback when SendGrid key is a placeholder) ─────────────────────
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: SecretStr = SecretStr("")
+    smtp_from_email: str = ""
+    smtp_from_name: str = "Rental Car Manager"
+
     # ── AWS ────────────────────────────────────────────────────────────────────
     aws_region: str = "us-east-1"
     s3_documents_bucket: str
     s3_photos_bucket: str
     s3_reports_bucket: str
+
+    # ── Google OAuth ───────────────────────────────────────────────────────────
+    google_client_id: str = ""
+    google_client_secret: SecretStr = SecretStr("")
+    # redirect_uri registered in Google Cloud Console — must exactly match
+    google_oauth_redirect_uri: str = "http://localhost:3400/api/auth/google/callback"
+    # Base URL of the customer-facing frontend
+    frontend_url: str = "http://localhost:3400"
 
     # ── Application ────────────────────────────────────────────────────────────
     sentry_dsn: str = ""

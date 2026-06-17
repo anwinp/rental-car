@@ -29,7 +29,7 @@ const TENANT_ID = process.env.NEXT_PUBLIC_TENANT_ID ?? '00000000-0000-0000-0000-
 
 const fieldStyle: React.CSSProperties = {
   width: '100%', padding: '13px 16px', fontSize: 14,
-  border: '1px solid rgba(255,255,255,0.10)', borderRadius: 10,
+  border: '1px solid rgba(255,255,255,0.10)', borderRadius: 4,
   background: 'rgba(255,255,255,0.05)', color: '#ffffff',
   outline: 'none', transition: 'border-color 0.2s, background 0.2s',
   appearance: 'none', colorScheme: 'dark', fontWeight: 300,
@@ -126,7 +126,7 @@ function LocationCombobox({
     el?.scrollIntoView({ block: 'nearest' })
   }, [highlighted])
 
-  const inputBorder = error ? 'var(--p-danger)' : open ? 'rgba(34,226,168,0.6)' : 'rgba(255,255,255,0.10)'
+  const inputBorder = error ? '#da291c' : open ? 'rgba(255,255,255,0.40)' : 'rgba(255,255,255,0.10)'
   const inputBg = open ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.05)'
 
   const typeLabel: Record<string, string> = {
@@ -140,7 +140,7 @@ function LocationCombobox({
       <div style={{ position: 'relative' }}>
         {/* Pin icon */}
         <svg
-          style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', color: value ? '#22e2a8' : '#64748b', flexShrink: 0 }}
+          style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', color: value ? '#ffffff' : '#64748b', flexShrink: 0 }}
           width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"
         >
           <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/>
@@ -206,7 +206,7 @@ function LocationCombobox({
           role="listbox"
           style={{
             position: 'absolute', top: 'calc(100% + 6px)', left: 0, right: 0, zIndex: 200,
-            background: '#1e2130', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 10,
+            background: '#181818', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 4,
             boxShadow: '0 16px 40px rgba(0,0,0,0.5)', maxHeight: 280, overflowY: 'auto',
             margin: 0, padding: '4px 0', listStyle: 'none',
           }}
@@ -227,13 +227,13 @@ function LocationCombobox({
               style={{
                 display: 'flex', alignItems: 'center', gap: 12,
                 padding: '10px 14px', cursor: 'pointer',
-                background: i === highlighted ? 'rgba(34,226,168,0.08)' : 'transparent',
-                borderLeft: i === highlighted ? '2px solid rgba(34,226,168,0.5)' : '2px solid transparent',
+                background: i === highlighted ? 'rgba(255,255,255,0.06)' : 'transparent',
+                borderLeft: i === highlighted ? '2px solid rgba(218,41,28,0.7)' : '2px solid transparent',
                 transition: 'background 0.1s',
               }}
             >
               {/* Icon */}
-              <div style={{ flexShrink: 0, color: i === highlighted ? '#22e2a8' : '#475569' }}>
+              <div style={{ flexShrink: 0, color: i === highlighted ? '#ffffff' : '#475569' }}>
                 {loc.location_type === 'AIRPORT' ? (
                   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M17.8 19.2L16 11l3.5-3.5C21 6 21 4 19.5 2.5c-1.5-1.5-3.5-1.5-5 0L11 6 2.8 4.2l-2.3 2.3L8 10l-4 4-3-1-1 2 3 2 2 3 2-1-1-3 4-4 3.7 5.5 2.3-2.3z"/>
@@ -270,7 +270,7 @@ function LocationCombobox({
         </ul>
       )}
 
-      {error && <p style={{ fontSize: 11, color: 'var(--p-danger)', marginTop: 4 }} role="alert">{error}</p>}
+      {error && <p style={{ fontSize: 11, color: '#da291c', marginTop: 4 }} role="alert">{error}</p>}
     </div>
   )
 }
@@ -339,7 +339,7 @@ export function HeroSearch() {
   }
 
   const onDateFocus = (e: React.FocusEvent<HTMLInputElement | HTMLSelectElement>) => {
-    e.currentTarget.style.borderColor = 'rgba(34,226,168,0.6)'
+    e.currentTarget.style.borderColor = 'rgba(218,41,28,0.5)'
     e.currentTarget.style.background = 'rgba(255,255,255,0.08)'
   }
   const onDateBlur = (e: React.FocusEvent<HTMLInputElement | HTMLSelectElement>) => {
@@ -355,11 +355,11 @@ export function HeroSearch() {
           <button key={String(opt.value)} type="button"
             onClick={() => setForm(f => ({ ...f, one_way: opt.value }))}
             style={{
-              padding: '6px 16px', borderRadius: 20, fontSize: 13, fontWeight: 400,
+              padding: '6px 16px', borderRadius: 9999, fontSize: 13, fontWeight: 400,
               border: '1px solid',
-              borderColor: form.one_way === opt.value ? 'rgba(34,226,168,0.6)' : 'rgba(255,255,255,0.10)',
-              background: form.one_way === opt.value ? 'rgba(34,226,168,0.15)' : 'transparent',
-              color: form.one_way === opt.value ? '#4aedc0' : 'var(--p-text-3)',
+              borderColor: form.one_way === opt.value ? '#ffffff' : '#303030',
+              background: form.one_way === opt.value ? '#ffffff' : 'transparent',
+              color: form.one_way === opt.value ? '#181818' : '#666666',
               cursor: 'pointer', transition: 'all 0.15s',
             }}
           >{opt.label}</button>
@@ -370,7 +370,7 @@ export function HeroSearch() {
       <div style={{ display: 'grid', gridTemplateColumns: form.one_way ? '1fr 1fr' : '1fr', gap: 12, marginBottom: 12 }}>
         {/* Pickup */}
         <div>
-          <label htmlFor="hs-pickup" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, fontWeight: 500, color: 'var(--p-text-3)', textTransform: 'uppercase', letterSpacing: '0.10em', marginBottom: 6 }}>
+          <label htmlFor="hs-pickup" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, fontWeight: 500, color: '#969696', textTransform: 'uppercase', letterSpacing: '0.10em', marginBottom: 6 }}>
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
             Pickup location
           </label>
@@ -392,7 +392,7 @@ export function HeroSearch() {
         {/* Drop-off (one-way only) */}
         {form.one_way && (
           <div>
-            <label htmlFor="hs-dropoff" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, fontWeight: 500, color: 'var(--p-text-3)', textTransform: 'uppercase', letterSpacing: '0.10em', marginBottom: 6 }}>
+            <label htmlFor="hs-dropoff" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, fontWeight: 500, color: '#969696', textTransform: 'uppercase', letterSpacing: '0.10em', marginBottom: 6 }}>
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
               Drop-off location
             </label>
@@ -416,38 +416,38 @@ export function HeroSearch() {
       {/* Dates + times */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 120px 1fr 120px', gap: 12, marginBottom: 22 }}>
         <div>
-          <label htmlFor="hs-from" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, fontWeight: 500, color: 'var(--p-text-3)', textTransform: 'uppercase', letterSpacing: '0.10em', marginBottom: 6 }}>
+          <label htmlFor="hs-from" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, fontWeight: 500, color: '#969696', textTransform: 'uppercase', letterSpacing: '0.10em', marginBottom: 6 }}>
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
             Pickup date
           </label>
           <input id="hs-from" type="date" value={form.from} min={today}
-            style={{ ...fieldStyle, borderColor: errors.from ? 'var(--p-danger)' : 'rgba(255,255,255,0.10)' }}
+            style={{ ...fieldStyle, borderColor: errors.from ? '#da291c' : 'rgba(255,255,255,0.10)' }}
             onFocus={onDateFocus} onBlur={onDateBlur}
             onChange={e => { setForm(f => ({ ...f, from: e.target.value })); setErrors(v => ({ ...v, from: undefined })) }}
           />
-          {errors.from && <p style={{ fontSize: 11, color: 'var(--p-danger)', marginTop: 4 }} role="alert">{errors.from}</p>}
+          {errors.from && <p style={{ fontSize: 11, color: '#da291c', marginTop: 4 }} role="alert">{errors.from}</p>}
         </div>
         <div>
-          <label htmlFor="hs-ptime" style={{ fontSize: 11, fontWeight: 500, color: 'var(--p-text-3)', textTransform: 'uppercase', letterSpacing: '0.10em', marginBottom: 6, display: 'block' }}>Time</label>
+          <label htmlFor="hs-ptime" style={{ fontSize: 11, fontWeight: 500, color: '#969696', textTransform: 'uppercase', letterSpacing: '0.10em', marginBottom: 6, display: 'block' }}>Time</label>
           <select id="hs-ptime" value={form.pickup_time} style={fieldStyle} onFocus={onDateFocus} onBlur={onDateBlur}
             onChange={e => setForm(f => ({ ...f, pickup_time: e.target.value }))}>
             {TIMES.map(t => <option key={t} value={t}>{t}</option>)}
           </select>
         </div>
         <div>
-          <label htmlFor="hs-to" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, fontWeight: 500, color: 'var(--p-text-3)', textTransform: 'uppercase', letterSpacing: '0.10em', marginBottom: 6 }}>
+          <label htmlFor="hs-to" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, fontWeight: 500, color: '#969696', textTransform: 'uppercase', letterSpacing: '0.10em', marginBottom: 6 }}>
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
             Return date
           </label>
           <input id="hs-to" type="date" value={form.to} min={form.from || today}
-            style={{ ...fieldStyle, borderColor: errors.to ? 'var(--p-danger)' : 'rgba(255,255,255,0.10)' }}
+            style={{ ...fieldStyle, borderColor: errors.to ? '#da291c' : 'rgba(255,255,255,0.10)' }}
             onFocus={onDateFocus} onBlur={onDateBlur}
             onChange={e => { setForm(f => ({ ...f, to: e.target.value })); setErrors(v => ({ ...v, to: undefined })) }}
           />
-          {errors.to && <p style={{ fontSize: 11, color: 'var(--p-danger)', marginTop: 4 }} role="alert">{errors.to}</p>}
+          {errors.to && <p style={{ fontSize: 11, color: '#da291c', marginTop: 4 }} role="alert">{errors.to}</p>}
         </div>
         <div>
-          <label htmlFor="hs-rtime" style={{ fontSize: 11, fontWeight: 500, color: 'var(--p-text-3)', textTransform: 'uppercase', letterSpacing: '0.10em', marginBottom: 6, display: 'block' }}>Time</label>
+          <label htmlFor="hs-rtime" style={{ fontSize: 11, fontWeight: 500, color: '#969696', textTransform: 'uppercase', letterSpacing: '0.10em', marginBottom: 6, display: 'block' }}>Time</label>
           <select id="hs-rtime" value={form.return_time} style={fieldStyle} onFocus={onDateFocus} onBlur={onDateBlur}
             onChange={e => setForm(f => ({ ...f, return_time: e.target.value }))}>
             {TIMES.map(t => <option key={t} value={t}>{t}</option>)}
@@ -457,17 +457,16 @@ export function HeroSearch() {
 
       {/* Submit */}
       <button type="submit" style={{
-        width: '100%', padding: '14px 32px',
-        background: 'linear-gradient(135deg, #22e2a8 0%, #40b3ff 100%)',
-        color: '#ffffff', fontSize: 15, fontWeight: 500, border: 'none', borderRadius: 10,
-        cursor: 'pointer', transition: 'opacity 0.2s, transform 0.15s',
-        boxShadow: '0 0 28px rgba(34,226,168,0.55)',
-        letterSpacing: '0.01em',
+        width: '100%',
+        background: '#da291c',
+        color: '#ffffff', fontSize: 14, fontWeight: 700, border: 'none', borderRadius: 0,
+        cursor: 'pointer', transition: 'background 0.2s',
+        letterSpacing: '1.4px', textTransform: 'uppercase', height: 48, fontFamily: 'inherit',
       }}
-      onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.opacity = '0.88'; (e.currentTarget as HTMLButtonElement).style.transform = 'translateY(-1px)' }}
-      onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.opacity = '1'; (e.currentTarget as HTMLButtonElement).style.transform = 'translateY(0)' }}
+      onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = '#b01e0a' }}
+      onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = '#da291c' }}
       >
-        Search Available Cars →
+        Search Available Cars
       </button>
     </form>
   )

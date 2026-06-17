@@ -143,6 +143,7 @@ class VehicleCreate(BaseModel):
 class VehicleUpdate(BaseModel):
     """PATCH /fleet/vehicles/{id} — all fields optional."""
 
+    status: Optional[VehicleStatus] = None
     make: Optional[str] = None
     model: Optional[str] = None
     model_year: Optional[int] = Field(default=None, ge=1900, le=2100)
@@ -243,6 +244,13 @@ class VehicleBlockCreate(BaseModel):
         if self.end_dt <= self.start_dt:
             raise ValueError("end_dt must be after start_dt")
         return self
+
+
+class VehicleBlockUpdate(BaseModel):
+    """PATCH /fleet/blocks/{block_id}."""
+    start_time: Optional[datetime] = None
+    end_time: Optional[datetime] = None
+    notes: Optional[str] = Field(default=None, max_length=2000)
 
 
 class VehicleBlockResponse(BaseModel):

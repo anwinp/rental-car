@@ -88,6 +88,9 @@ class Customer(Base):
         String(5), nullable=False, server_default="en-US"
     )
 
+    # ── OAuth identity ────────────────────────────────────────────────────────
+    oauth_google_sub: Mapped[Optional[str]] = mapped_column(Text, nullable=True, unique=False)
+
     # ── GDPR ──────────────────────────────────────────────────────────────────
     anonymized_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True

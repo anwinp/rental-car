@@ -3,6 +3,8 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 
+const TENANT = '00000000-0000-0000-0000-000000000001'
+
 const NAV_LINKS = [
   { label: 'Reserve',    href: '/search' },
   { label: 'Experience', href: '/#models' },
@@ -13,12 +15,33 @@ const NAV_LINKS = [
 export function Navbar() {
   const [scrolled, setScrolled] = useState(false)
   const [mobileOpen, setMobileOpen] = useState(false)
+  const [user, setUser] = useState<{ first_name: string; last_name: string } | null>(null)
 
   useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 80)
     window.addEventListener('scroll', onScroll, { passive: true })
     return () => window.removeEventListener('scroll', onScroll)
   }, [])
+
+  useEffect(() => {
+    fetch('/api/v1/auth/me', {
+      credentials: 'include',
+      headers: { 'X-Tenant-ID': TENANT },
+    })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => setUser(d))
+      .catch(() => setUser(null))
+  }, [])
+
+  async function handleSignOut() {
+    await fetch('/api/v1/auth/logout', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'X-Tenant-ID': TENANT },
+    }).catch(() => {})
+    setUser(null)
+    window.location.href = '/'
+  }
 
   return (
     <header style={{
@@ -35,9 +58,10 @@ export function Navbar() {
       </Link>
 
       {/* Desktop nav */}
-      <nav className="hidden md:flex" style={{ gap: 32 }} aria-label="Main navigation">
+      <nav className="hidden md:flex" style={{ gap: 32, alignItems: 'center' }} aria-label="Main navigation">
         {NAV_LINKS.map(link => (
-          <Link key={link.label} href={link.href}
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          <Link key={link.label} href={link.href as any}
             style={{ fontSize: 13, fontWeight: 600, letterSpacing: '0.65px', textTransform: 'uppercase', color: '#ffffff', textDecoration: 'none', transition: 'opacity 0.15s' }}
             onMouseEnter={e => (e.currentTarget as HTMLElement).style.opacity = '0.6'}
             onMouseLeave={e => (e.currentTarget as HTMLElement).style.opacity = '1'}
@@ -45,6 +69,65 @@ export function Navbar() {
             {link.label}
           </Link>
         ))}
+
+        {/* Auth controls */}
+        {user ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginLeft: 8, borderLeft: '1px solid rgba(255,255,255,0.12)', paddingLeft: 24 }}>
+            {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
+            <Link href={'/account' as any} style={{ textDecoration: 'none', display: 'flex', alignItems: 'center', gap: 10 }}>
+              <div style={{
+                width: 34, height: 34, borderRadius: '50%',
+                background: '#303030',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: 13, fontWeight: 600, color: '#fff',
+                letterSpacing: '0.02em', userSelect: 'none',
+                flexShrink: 0,
+              }}>
+                {user.first_name.charAt(0).toUpperCase()}{user.last_name.charAt(0).toUpperCase()}
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                <span style={{ fontSize: 13, fontWeight: 500, color: '#ffffff', lineHeight: 1 }}>
+                  {user.first_name} {user.last_name}
+                </span>
+                <button
+                  onClick={e => { e.preventDefault(); void handleSignOut() }}
+                  style={{ fontSize: 11, fontWeight: 400, letterSpacing: '0.4px', color: 'rgba(255,255,255,0.40)', background: 'transparent', border: 'none', cursor: 'pointer', padding: 0, textAlign: 'left', fontFamily: 'inherit', transition: 'color 0.15s' }}
+                  onMouseEnter={e => (e.currentTarget as HTMLElement).style.color = 'rgba(255,255,255,0.75)'}
+                  onMouseLeave={e => (e.currentTarget as HTMLElement).style.color = 'rgba(255,255,255,0.40)'}
+                >
+                  Sign out
+                </button>
+              </div>
+            </Link>
+          </div>
+        ) : (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginLeft: 8, borderLeft: '1px solid rgba(255,255,255,0.12)', paddingLeft: 24 }}>
+            {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
+            <Link href={'/login' as any}
+              style={{ fontSize: 13, fontWeight: 500, letterSpacing: '0.5px', color: 'rgba(255,255,255,0.75)', textDecoration: 'none', transition: 'color 0.15s' }}
+              onMouseEnter={e => (e.currentTarget as HTMLElement).style.color = '#fff'}
+              onMouseLeave={e => (e.currentTarget as HTMLElement).style.color = 'rgba(255,255,255,0.75)'}
+            >
+              Sign In
+            </Link>
+            {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
+            <Link href={'/signup' as any}
+              style={{
+                fontSize: 11, fontWeight: 700, letterSpacing: '1.4px',
+                textTransform: 'uppercase',
+                color: '#fff', textDecoration: 'none',
+                background: '#da291c',
+                padding: '0 20px', height: 36, display: 'inline-flex', alignItems: 'center',
+                borderRadius: 0,
+                transition: 'opacity 0.15s',
+              }}
+              onMouseEnter={e => (e.currentTarget as HTMLElement).style.opacity = '0.85'}
+              onMouseLeave={e => (e.currentTarget as HTMLElement).style.opacity = '1'}
+            >
+              Create Account
+            </Link>
+          </div>
+        )}
       </nav>
 
       {/* Mobile hamburger */}
@@ -65,10 +148,43 @@ export function Navbar() {
         <div style={{ position: 'absolute', top: 64, left: 0, width: '100%', background: '#181818', borderBottom: '1px solid #303030', padding: '24px 48px' }}>
           <nav style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
             {NAV_LINKS.map(link => (
-              <Link key={link.label} href={link.href} onClick={() => setMobileOpen(false)}
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              <Link key={link.label} href={link.href as any} onClick={() => setMobileOpen(false)}
                 style={{ fontSize: 13, fontWeight: 600, letterSpacing: '0.65px', textTransform: 'uppercase', color: '#ffffff', textDecoration: 'none' }}
               >{link.label}</Link>
             ))}
+            <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: 20, display: 'flex', flexDirection: 'column', gap: 16 }}>
+              {user ? (
+                <>
+                  {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
+                  <Link href={'/account' as any} onClick={() => setMobileOpen(false)}
+                    style={{ textDecoration: 'none', display: 'flex', alignItems: 'center', gap: 12 }}
+                  >
+                    <div style={{ width: 36, height: 36, borderRadius: '50%', background: '#303030', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 600, color: '#fff', flexShrink: 0 }}>
+                      {user.first_name.charAt(0).toUpperCase()}{user.last_name.charAt(0).toUpperCase()}
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: '#fff', letterSpacing: '0.4px' }}>{user.first_name} {user.last_name}</div>
+                      <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.45)', marginTop: 2 }}>My Account</div>
+                    </div>
+                  </Link>
+                  <button onClick={() => { setMobileOpen(false); void handleSignOut() }}
+                    style={{ fontSize: 13, fontWeight: 600, letterSpacing: '0.65px', textTransform: 'uppercase', color: 'rgba(255,255,255,0.45)', background: 'transparent', border: 'none', cursor: 'pointer', textAlign: 'left', padding: 0 }}
+                  >Sign Out</button>
+                </>
+              ) : (
+                <>
+                  {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
+                  <Link href={'/login' as any} onClick={() => setMobileOpen(false)}
+                    style={{ fontSize: 13, fontWeight: 600, letterSpacing: '0.65px', textTransform: 'uppercase', color: '#ffffff', textDecoration: 'none' }}
+                  >Sign In</Link>
+                  {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
+                  <Link href={'/signup' as any} onClick={() => setMobileOpen(false)}
+                    style={{ fontSize: 13, fontWeight: 600, letterSpacing: '0.65px', textTransform: 'uppercase', color: 'var(--p-brand)', textDecoration: 'none' }}
+                  >Create Account</Link>
+                </>
+              )}
+            </div>
           </nav>
         </div>
       )}

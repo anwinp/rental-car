@@ -65,6 +65,20 @@ class CustomerRepository(BaseRepository[Customer]):
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 
+    async def get_by_google_sub(
+        self, google_sub: str, tenant_id: uuid.UUID
+    ) -> Optional[Customer]:
+        """Look up a customer by their Google OAuth subject identifier."""
+        result = await self.session.execute(
+            select(Customer).where(
+                Customer.tenant_id == str(tenant_id),
+                Customer.oauth_google_sub == google_sub,
+                Customer.deleted_at.is_(None),
+                Customer.anonymized_at.is_(None),
+            )
+        )
+        return result.scalar_one_or_none()
+
     async def get_active_dnr_customers(
         self, tenant_id: uuid.UUID
     ) -> list[Customer]:

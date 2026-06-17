@@ -2,106 +2,130 @@
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { useCurrentUser } from '@rcm/api-client'
-import { useQuery } from '@tanstack/react-query'
-import { apiClient } from '@rcm/api-client'
-import { Skeleton } from '@rcm/ui'
+
+const TENANT = '00000000-0000-0000-0000-000000000001'
+const opts = { credentials: 'include' as const, headers: { 'X-Tenant-ID': TENANT } }
 
 type ResStatus = 'ALL' | 'CONFIRMED' | 'CHECKED_OUT' | 'RETURNED' | 'CANCELLED'
 
-type ReservationItem = {
+type Reservation = {
   reservation_id: string
   confirmation_number: string
   status: string
-  pickup_date: string
-  dropoff_date: string
-  class_name: string
-  rate_summary: { total: number; currency_code: string }
+  pickup_datetime: string
+  return_datetime: string
+  vehicle_class_id: string
+  grand_total: string | null
+  currency: string
 }
+
+type VehicleClass = { class_id: string; name: string }
 
 const STATUS_TABS: ResStatus[] = ['ALL', 'CONFIRMED', 'CHECKED_OUT', 'RETURNED', 'CANCELLED']
 
 function statusBadgeStyle(status: string): React.CSSProperties {
-  if (status === 'CONFIRMED' || status === 'CHECKED_OUT') {
-    return { background: 'rgba(16,217,160,0.12)', color: '#10d9a0', border: '1px solid rgba(16,217,160,0.2)' }
-  }
-  if (status === 'CANCELLED') {
-    return { background: 'rgba(240,78,78,0.12)', color: '#f04e4e', border: '1px solid rgba(240,78,78,0.2)' }
-  }
-  if (status === 'RETURNED') {
-    return { background: 'rgba(255,255,255,0.07)', color: 'var(--p-text-3)', border: '1px solid rgba(255,255,255,0.12)' }
-  }
-  return { background: 'rgba(251,191,36,0.12)', color: '#fbbf24', border: '1px solid rgba(251,191,36,0.2)' }
+  if (status === 'CONFIRMED' || status === 'CHECKED_OUT')
+    return { background: 'rgba(3,144,74,0.12)', color: '#03904a', border: '1px solid rgba(3,144,74,0.25)' }
+  if (status === 'CANCELLED')
+    return { background: 'rgba(241,58,44,0.12)', color: '#f13a2c', border: '1px solid rgba(241,58,44,0.25)' }
+  if (status === 'RETURNED')
+    return { background: '#303030', color: '#666666', border: '1px solid #303030' }
+  return { background: '#303030', color: '#969696', border: '1px solid #303030' }
 }
 
 function statusLabel(s: ResStatus): string {
   if (s === 'ALL') return 'All'
-  return s.charAt(0) + s.slice(1).toLowerCase().replace('_', ' ')
+  if (s === 'CHECKED_OUT') return 'Checked Out'
+  return s.charAt(0) + s.slice(1).toLowerCase()
+}
+
+function fmtDate(iso: string) {
+  return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+}
+
+function fmtMoney(amount: string | null, currency: string) {
+  if (!amount) return '—'
+  return new Intl.NumberFormat('en-US', { style: 'currency', currency: currency || 'USD' }).format(Number(amount))
 }
 
 export default function ReservationsPage() {
   const router = useRouter()
-  const { data: user, isLoading: userLoading } = useCurrentUser()
+  const [userId, setUserId] = useState<string | null>(null)
+  const [reservations, setReservations] = useState<Reservation[]>([])
+  const [classMap, setClassMap] = useState<Record<string, string>>({})
   const [statusFilter, setStatusFilter] = useState<ResStatus>('ALL')
+  const [loading, setLoading] = useState(true)
+  const [fetching, setFetching] = useState(false)
 
   useEffect(() => {
-    if (!userLoading && !user) router.push('/login')
-  }, [user, userLoading, router])
+    async function init() {
+      const meResp = await fetch('/api/v1/auth/me', opts)
+      if (!meResp.ok) { router.push('/login'); return }
+      const me = await meResp.json() as { user_id: string }
+      setUserId(me.user_id)
 
-  const { data, isLoading } = useQuery({
-    queryKey: ['reservations', 'all', statusFilter],
-    queryFn: async () => {
-      const queryParams: Record<string, string> = {}
-      if (statusFilter !== 'ALL') queryParams['status'] = statusFilter
-      const { data: d, error } = await (apiClient as never as {
-        GET: (path: string, opts: unknown) => Promise<{ data: unknown; error: unknown }>
-      }).GET('/reservations', { params: { query: queryParams } })
-      if (error) throw error
-      return d as { items: ReservationItem[] }
-    },
-    enabled: !!user,
-  })
+      const classResp = await fetch('/api/v1/fleet/classes', opts)
+      if (classResp.ok) {
+        const classes: VehicleClass[] = await classResp.json()
+        const map: Record<string, string> = {}
+        classes.forEach(c => { map[c.class_id] = c.name })
+        setClassMap(map)
+      }
+      setLoading(false)
+    }
+    init().catch(() => setLoading(false))
+  }, [router])
 
-  if (userLoading) {
-    return (
-      <div style={{ minHeight: '100vh', background: 'var(--p-surface)', padding: '48px 16px' }}>
-        <div style={{ maxWidth: 1100, margin: '0 auto' }}>
-          <Skeleton className="h-8 w-64 mb-6" />
-          {[...Array(4)].map((_, i) => <Skeleton key={i} className="h-20 w-full mb-3" />)}
-        </div>
+  useEffect(() => {
+    if (!userId) return
+    setFetching(true)
+    const url = statusFilter === 'ALL'
+      ? `/api/v1/reservations?customer_id=${userId}&limit=100`
+      : `/api/v1/reservations?customer_id=${userId}&status=${statusFilter}&limit=100`
+    fetch(url, opts)
+      .then(r => r.ok ? r.json() : [])
+      .then(data => {
+        const items = Array.isArray(data) ? data : (data.items ?? [])
+        setReservations(items)
+      })
+      .catch(() => setReservations([]))
+      .finally(() => setFetching(false))
+  }, [userId, statusFilter])
+
+  if (loading) return (
+    <div style={{ minHeight: '100vh', background: '#181818', paddingTop: 80 }}>
+      <div style={{ maxWidth: 1100, margin: '0 auto', padding: '0 24px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div style={{ height: 40, width: 240, background: '#303030', borderRadius: 0 }} />
+        {[...Array(4)].map((_, i) => <div key={i} style={{ height: 76, background: '#303030', borderRadius: 0 }} />)}
       </div>
-    )
-  }
-
-  if (!user) return null
+    </div>
+  )
 
   return (
-    <div style={{ minHeight: '100vh', background: 'var(--p-surface)', paddingTop: 40, paddingBottom: 60 }}>
+    <div style={{ minHeight: '100vh', background: '#181818', paddingTop: 48, paddingBottom: 80 }}>
       <div style={{ maxWidth: 1100, margin: '0 auto', padding: '0 24px' }}>
 
         {/* Header */}
         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 36, flexWrap: 'wrap', gap: 16 }}>
           <div>
             <a href="/account" style={{
-              fontSize: 12, fontWeight: 400, color: '#22e2a8',
-              textDecoration: 'none', letterSpacing: '0.04em',
-              display: 'inline-flex', alignItems: 'center', gap: 4, marginBottom: 12,
+              fontSize: 12, fontWeight: 400, color: '#666666', textDecoration: 'none',
+              display: 'inline-flex', alignItems: 'center', gap: 4, marginBottom: 12, letterSpacing: '0.04em',
             }}>
               ← Account
             </a>
-            <p style={{ fontSize: 11, fontWeight: 500, color: 'var(--p-cyan)', textTransform: 'uppercase', letterSpacing: '0.16em', marginBottom: 8 }}>
+            <p style={{ fontSize: 11, fontWeight: 600, color: '#666666', textTransform: 'uppercase', letterSpacing: '1.1px', marginBottom: 8 }}>
               Rental History
             </p>
-            <h1 style={{ fontSize: 32, fontWeight: 300, color: 'var(--p-text-1)', letterSpacing: '-0.05em', margin: 0 }}>
+            <h1 style={{ fontSize: 32, fontWeight: 500, color: '#ffffff', letterSpacing: '-0.05em', margin: 0 }}>
               My Reservations
             </h1>
           </div>
           <a href="/" style={{
-            padding: '11px 24px', borderRadius: 10,
-            background: 'linear-gradient(135deg, #22e2a8 0%, #40b3ff 100%)',
-            color: '#fff', fontWeight: 500, textDecoration: 'none', fontSize: 14,
-            boxShadow: '0 0 20px rgba(34,226,168,0.30)',
-            alignSelf: 'flex-end',
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+            padding: '0 24px', height: 48, borderRadius: 0,
+            background: '#da291c', color: '#ffffff', fontWeight: 700, textDecoration: 'none',
+            fontSize: 14, letterSpacing: '1.4px', textTransform: 'uppercase', alignSelf: 'flex-end',
           }}>
             New Booking
           </a>
@@ -114,17 +138,12 @@ export default function ReservationsPage() {
               key={status}
               onClick={() => setStatusFilter(status)}
               style={{
-                padding: '7px 18px',
-                borderRadius: 100,
-                border: '1px solid',
-                borderColor: statusFilter === status ? 'rgba(34,226,168,0.5)' : 'rgba(255,255,255,0.1)',
-                background: statusFilter === status ? 'rgba(34,226,168,0.10)' : 'transparent',
-                color: statusFilter === status ? '#22e2a8' : 'var(--p-text-4)',
-                fontSize: 13,
-                fontWeight: statusFilter === status ? 500 : 300,
-                cursor: 'pointer',
-                whiteSpace: 'nowrap',
-                transition: 'all 0.15s',
+                padding: '7px 18px', borderRadius: 9999, border: '1px solid',
+                borderColor: statusFilter === status ? '#ffffff' : '#303030',
+                background: statusFilter === status ? '#ffffff' : 'transparent',
+                color: statusFilter === status ? '#181818' : '#666666',
+                fontSize: 13, fontWeight: statusFilter === status ? 700 : 400,
+                cursor: 'pointer', whiteSpace: 'nowrap', transition: 'all 0.15s', fontFamily: 'inherit',
               }}
             >
               {statusLabel(status)}
@@ -132,71 +151,59 @@ export default function ReservationsPage() {
           ))}
         </div>
 
-        {isLoading ? (
+        {/* Results */}
+        {fetching ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            {[...Array(5)].map((_, i) => <Skeleton key={i} className="h-20 w-full" />)}
+            {[...Array(4)].map((_, i) => <div key={i} style={{ height: 76, background: '#303030', borderRadius: 0 }} />)}
           </div>
-        ) : !data?.items?.length ? (
+        ) : reservations.length === 0 ? (
           <div style={{
             textAlign: 'center', padding: '56px 24px',
-            background: 'rgba(255,255,255,0.025)',
-            border: '1px solid rgba(255,255,255,0.07)',
-            borderRadius: 16,
+            background: '#303030', border: '1px solid #303030', borderRadius: 0,
           }}>
-            <p style={{ fontWeight: 300, color: 'var(--p-text-3)', marginBottom: 20 }}>
+            <p style={{ fontWeight: 400, color: '#969696', marginBottom: 20 }}>
               {statusFilter === 'ALL' ? 'No reservations found.' : `No ${statusLabel(statusFilter).toLowerCase()} reservations.`}
             </p>
             <a href="/" style={{
-              padding: '11px 24px', borderRadius: 10,
-              background: 'linear-gradient(135deg, #22e2a8 0%, #40b3ff 100%)',
-              color: '#fff', fontWeight: 500, textDecoration: 'none', fontSize: 14,
-              boxShadow: '0 0 20px rgba(34,226,168,0.30)',
+              display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+              padding: '0 24px', height: 48, borderRadius: 0,
+              background: '#da291c', color: '#ffffff', fontWeight: 700, textDecoration: 'none',
+              fontSize: 14, letterSpacing: '1.4px', textTransform: 'uppercase',
             }}>
-              Search cars
+              Search Cars
             </a>
           </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            {data.items.map(res => (
+            {reservations.map(res => (
               <a
                 key={res.reservation_id}
                 href={`/manage/${res.confirmation_number}`}
                 style={{
                   display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                  background: 'rgba(255,255,255,0.025)',
-                  border: '1px solid rgba(255,255,255,0.07)',
-                  borderRadius: 14, padding: '18px 22px',
-                  textDecoration: 'none',
-                  transition: 'border-color 0.2s, box-shadow 0.2s',
+                  background: '#303030', border: '1px solid #303030', borderRadius: 0,
+                  padding: '18px 22px', textDecoration: 'none', transition: 'border-color 0.2s',
                 }}
-                onMouseEnter={e => {
-                  (e.currentTarget as HTMLElement).style.borderColor = 'rgba(34,226,168,0.35)'
-                  ;(e.currentTarget as HTMLElement).style.boxShadow = '0 0 20px rgba(34,226,168,0.10)'
-                }}
-                onMouseLeave={e => {
-                  (e.currentTarget as HTMLElement).style.borderColor = 'rgba(255,255,255,0.07)'
-                  ;(e.currentTarget as HTMLElement).style.boxShadow = 'none'
-                }}
+                onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = 'rgba(218,41,28,0.5)' }}
+                onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = '#303030' }}
               >
                 <div>
-                  <div style={{ fontWeight: 300, fontSize: 16, color: 'var(--p-text-1)', letterSpacing: '-0.02em' }}>{res.class_name}</div>
-                  <div style={{ fontSize: 13, fontWeight: 300, color: 'var(--p-text-3)', marginTop: 3 }}>
-                    {new Date(res.pickup_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
-                    {' → '}
-                    {new Date(res.dropoff_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                  <div style={{ fontWeight: 500, fontSize: 16, color: '#ffffff', letterSpacing: '-0.02em' }}>
+                    {classMap[res.vehicle_class_id] ?? 'Vehicle'}
                   </div>
-                  <div style={{ fontFamily: 'monospace', fontSize: 12, fontWeight: 400, color: '#22e2a8', marginTop: 3 }}>#{res.confirmation_number}</div>
+                  <div style={{ fontSize: 13, fontWeight: 400, color: '#969696', marginTop: 3 }}>
+                    {fmtDate(res.pickup_datetime)} → {fmtDate(res.return_datetime)}
+                  </div>
+                  <div style={{ fontFamily: 'monospace', fontSize: 12, color: '#666666', marginTop: 3 }}>
+                    #{res.confirmation_number}
+                  </div>
                 </div>
                 <div style={{ textAlign: 'right', flexShrink: 0, marginLeft: 16 }}>
-                  <span style={{
-                    ...statusBadgeStyle(res.status),
-                    padding: '3px 10px', borderRadius: 100, fontSize: 12, fontWeight: 500,
-                    display: 'inline-block',
-                  }}>
+                  <span style={{ ...statusBadgeStyle(res.status), padding: '3px 10px', borderRadius: 9999, fontSize: 12, fontWeight: 600, display: 'inline-block' }}>
                     {res.status}
                   </span>
-                  <div style={{ fontSize: 16, fontWeight: 300, color: 'var(--p-text-1)', marginTop: 8, letterSpacing: '-0.02em' }}>
-                    {new Intl.NumberFormat('en-US', { style: 'currency', currency: res.rate_summary.currency_code }).format(res.rate_summary.total)}
+                  <div style={{ fontSize: 16, fontWeight: 500, color: '#ffffff', marginTop: 8, letterSpacing: '-0.02em' }}>
+                    {fmtMoney(res.grand_total, res.currency)}
                   </div>
                 </div>
               </a>

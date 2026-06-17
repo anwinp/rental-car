@@ -1,9 +1,10 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 
 const RED = '#da291c'
 const RED_ACTIVE = '#b01e0a'
+const TENANT_ID = process.env.NEXT_PUBLIC_TENANT_ID ?? '00000000-0000-0000-0000-000000000001'
 
 const VEHICLES = [
   { name: 'RCM Stradale V8',    price: 1200, zero60: '2.9s', hp: 710,  img: '/assets/hero_cinema.png',     waitlist: false },
@@ -35,6 +36,243 @@ const LABEL_UPPER: React.CSSProperties = {
   marginBottom: 8,
   display: 'block',
 }
+
+// ── Location type ─────────────────────────────────────────────────────────────
+
+interface PublicLocation {
+  location_id: string
+  name: string
+  short_code: string
+  city: string
+  state_province: string | null
+  country_code: string
+  airport_code: string | null
+  location_type: string
+}
+
+// ── Location Combobox ─────────────────────────────────────────────────────────
+
+interface LocationComboboxProps {
+  id: string
+  value: string
+  displayValue: string
+  onSelect: (shortCode: string, displayName: string) => void
+  onClear: () => void
+  placeholder?: string
+  locations: PublicLocation[]
+  loading: boolean
+}
+
+function LocationCombobox({
+  id, value, displayValue, onSelect, onClear,
+  placeholder = 'City, Airport, or Address',
+  locations, loading,
+}: LocationComboboxProps) {
+  const [query, setQuery]           = useState('')
+  const [open, setOpen]             = useState(false)
+  const [highlighted, setHighlighted] = useState(0)
+  const wrapRef  = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
+  const listRef  = useRef<HTMLUListElement>(null)
+
+  const filtered = query.length === 0
+    ? locations
+    : locations.filter(loc => {
+        const q = query.toLowerCase()
+        return (
+          loc.name.toLowerCase().includes(q) ||
+          loc.city.toLowerCase().includes(q) ||
+          loc.short_code.toLowerCase().includes(q) ||
+          (loc.airport_code ?? '').toLowerCase().includes(q)
+        )
+      })
+
+  useEffect(() => { setHighlighted(0) }, [query])
+
+  useEffect(() => {
+    function handleOutside(e: MouseEvent) {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
+        setOpen(false)
+        if (value) setQuery('')
+      }
+    }
+    document.addEventListener('mousedown', handleOutside)
+    return () => document.removeEventListener('mousedown', handleOutside)
+  }, [value])
+
+  useEffect(() => {
+    const el = listRef.current?.children[highlighted] as HTMLElement | undefined
+    el?.scrollIntoView({ block: 'nearest' })
+  }, [highlighted])
+
+  function handleSelect(loc: PublicLocation) {
+    onSelect(loc.short_code, loc.name)
+    setQuery('')
+    setOpen(false)
+    inputRef.current?.blur()
+  }
+
+  function handleKeyDown(e: React.KeyboardEvent) {
+    if (!open) {
+      if (e.key === 'ArrowDown' || e.key === 'Enter') { setOpen(true); return }
+    }
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      setHighlighted(h => Math.min(h + 1, filtered.length - 1))
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      setHighlighted(h => Math.max(h - 1, 0))
+    } else if (e.key === 'Enter') {
+      e.preventDefault()
+      if (filtered[highlighted]) handleSelect(filtered[highlighted])
+    } else if (e.key === 'Escape') {
+      setOpen(false)
+      setQuery('')
+    }
+  }
+
+  const borderColor = open ? '#da291c' : '#303030'
+
+  return (
+    <div ref={wrapRef} style={{ position: 'relative' }}>
+      <div style={{ position: 'relative' }}>
+        {/* Pin icon */}
+        <svg
+          style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', color: value ? '#da291c' : '#555' }}
+          width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"
+        >
+          <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/>
+        </svg>
+
+        <input
+          ref={inputRef}
+          id={id}
+          type="text"
+          role="combobox"
+          aria-expanded={open}
+          aria-autocomplete="list"
+          aria-controls={`${id}-list`}
+          autoComplete="off"
+          placeholder={value ? displayValue : placeholder}
+          value={open || !value ? query : ''}
+          onFocus={() => { setOpen(true); setQuery('') }}
+          onChange={e => { setQuery(e.target.value); setOpen(true); if (!e.target.value) onClear() }}
+          onKeyDown={handleKeyDown}
+          style={{
+            ...INPUT_DARK,
+            borderColor,
+            paddingLeft: 40,
+            paddingRight: value ? 36 : 16,
+            boxSizing: 'border-box',
+          }}
+        />
+
+        {/* Selected value display overlay */}
+        {value && !open && (
+          <div style={{
+            position: 'absolute', inset: 0, display: 'flex', alignItems: 'center',
+            paddingLeft: 40, paddingRight: 36, pointerEvents: 'none',
+          }}>
+            <span style={{ fontSize: 14, color: '#ffffff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              {displayValue}
+            </span>
+          </div>
+        )}
+
+        {/* Clear button */}
+        {value && (
+          <button
+            type="button"
+            onClick={() => { onClear(); setQuery(''); inputRef.current?.focus() }}
+            style={{
+              position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)',
+              background: 'none', border: 'none', padding: 4, cursor: 'pointer',
+              color: '#555', display: 'flex', alignItems: 'center',
+            }}
+            aria-label="Clear location"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+              <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+          </button>
+        )}
+      </div>
+
+      {/* Dropdown */}
+      {open && (
+        <ul
+          ref={listRef}
+          id={`${id}-list`}
+          role="listbox"
+          style={{
+            position: 'absolute', top: 'calc(100% + 4px)', left: 0, right: 0, zIndex: 999,
+            background: '#1a1a1a', border: '1px solid #303030', borderRadius: 4,
+            boxShadow: '0 12px 32px rgba(0,0,0,0.7)', maxHeight: 260, overflowY: 'auto',
+            margin: 0, padding: '4px 0', listStyle: 'none',
+          }}
+        >
+          {loading ? (
+            <li style={{ padding: '12px 16px', fontSize: 13, color: '#555' }}>Loading locations…</li>
+          ) : filtered.length === 0 ? (
+            <li style={{ padding: '12px 16px', fontSize: 13, color: '#555' }}>
+              {query ? `No locations match "${query}"` : 'No locations available'}
+            </li>
+          ) : filtered.map((loc, i) => (
+            <li
+              key={loc.location_id}
+              role="option"
+              aria-selected={loc.short_code === value}
+              onMouseDown={e => { e.preventDefault(); handleSelect(loc) }}
+              onMouseEnter={() => setHighlighted(i)}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 12,
+                padding: '10px 14px', cursor: 'pointer',
+                background: i === highlighted ? 'rgba(218,41,28,0.12)' : 'transparent',
+                borderLeft: i === highlighted ? `2px solid ${RED}` : '2px solid transparent',
+                transition: 'background 0.1s',
+              }}
+            >
+              {/* Icon */}
+              <div style={{ flexShrink: 0, color: i === highlighted ? RED : '#555' }}>
+                {loc.location_type === 'AIRPORT' ? (
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M17.8 19.2L16 11l3.5-3.5C21 6 21 4 19.5 2.5c-1.5-1.5-3.5-1.5-5 0L11 6 2.8 4.2l-2.3 2.3L8 10l-4 4-3-1-1 2 3 2 2 3 2-1-1-3 4-4 3.7 5.5 2.3-2.3z"/>
+                  </svg>
+                ) : (
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/>
+                  </svg>
+                )}
+              </div>
+
+              {/* Text */}
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <p style={{ fontSize: 13, fontWeight: 600, color: '#f1f5f9', margin: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {loc.name}
+                </p>
+                <p style={{ fontSize: 11.5, color: '#555', margin: '1px 0 0' }}>
+                  {loc.city}{loc.state_province ? `, ${loc.state_province}` : ''}
+                  {loc.location_type && <span style={{ color: '#444' }}> · {loc.location_type === 'AIRPORT' ? 'Airport' : loc.location_type.charAt(0) + loc.location_type.slice(1).toLowerCase()}</span>}
+                </p>
+              </div>
+
+              {/* Code badge */}
+              <span style={{
+                flexShrink: 0, fontSize: 11, fontFamily: 'monospace', fontWeight: 700,
+                color: '#969696', background: 'rgba(255,255,255,0.06)',
+                padding: '2px 6px', borderRadius: 3,
+              }}>
+                {loc.airport_code ?? loc.short_code}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
+// ── Vehicle Card ──────────────────────────────────────────────────────────────
 
 function VehicleCard({ name, price, zero60, hp, img, waitlist }: typeof VEHICLES[0]) {
   const [hov, setHov] = useState(false)
@@ -86,19 +324,35 @@ function VehicleCard({ name, price, zero60, hp, img, waitlist }: typeof VEHICLES
   )
 }
 
+// ── Page ──────────────────────────────────────────────────────────────────────
+
 export default function HomePage() {
-  const [pickup,   setPickup]   = useState('')
-  const [dropoff,  setDropoff]  = useState('')
-  const [fromDate, setFromDate] = useState('')
-  const [toDate,   setToDate]   = useState('')
-  const [btnHov,   setBtnHov]   = useState(false)
-  const [livHov,   setLivHov]   = useState(false)
+  const [pickup,        setPickup]        = useState('')
+  const [pickupDisplay, setPickupDisplay] = useState('')
+  const [dropoff,       setDropoff]       = useState('')
+  const [dropoffDisplay,setDropoffDisplay]= useState('')
+  const [fromDate,      setFromDate]      = useState('')
+  const [toDate,        setToDate]        = useState('')
+  const [btnHov,        setBtnHov]        = useState(false)
+  const [livHov,        setLivHov]        = useState(false)
+  const [locations,     setLocations]     = useState<PublicLocation[]>([])
+  const [loadingLoc,    setLoadingLoc]    = useState(true)
+
+  useEffect(() => {
+    let cancelled = false
+    fetch('/api/v1/locations/public', { headers: { 'X-Tenant-ID': TENANT_ID } })
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then((data: PublicLocation[]) => { if (!cancelled) { setLocations(data); setLoadingLoc(false) } })
+      .catch(() => { if (!cancelled) setLoadingLoc(false) })
+    return () => { cancelled = true }
+  }, [])
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault()
     const p = new URLSearchParams()
     if (pickup)   p.set('pickup',  pickup)
     if (dropoff)  p.set('dropoff', dropoff)
+    else if (pickup) p.set('dropoff', pickup)
     if (fromDate) p.set('from',    fromDate)
     if (toDate)   p.set('to',      toDate)
     window.location.href = `/search?${p.toString()}`
@@ -130,32 +384,37 @@ export default function HomePage() {
           {/* Booking widget */}
           <form onSubmit={handleSearch} className="booking-grid" style={{ background: '#303030', border: '1px solid #303030', padding: 32, marginTop: 48, display: 'grid', gap: 24, borderRadius: 0 }}>
             <div style={{ display: 'flex', flexDirection: 'column' }}>
-              <label style={LABEL_UPPER}>Pick-up Location</label>
-              <input
-                type="text"
+              <label htmlFor="hp-pickup" style={LABEL_UPPER}>Pick-up Location</label>
+              <LocationCombobox
+                id="hp-pickup"
                 value={pickup}
-                onChange={e => setPickup(e.target.value)}
-                placeholder="City, Airport, or Address"
-                style={INPUT_DARK}
+                displayValue={pickupDisplay}
+                onSelect={(code, name) => { setPickup(code); setPickupDisplay(name) }}
+                onClear={() => { setPickup(''); setPickupDisplay('') }}
+                locations={locations}
+                loading={loadingLoc}
               />
             </div>
             <div style={{ display: 'flex', flexDirection: 'column' }}>
-              <label style={LABEL_UPPER}>Drop-off Location</label>
-              <input
-                type="text"
+              <label htmlFor="hp-dropoff" style={LABEL_UPPER}>Drop-off Location</label>
+              <LocationCombobox
+                id="hp-dropoff"
                 value={dropoff}
-                onChange={e => setDropoff(e.target.value)}
+                displayValue={dropoffDisplay}
+                onSelect={(code, name) => { setDropoff(code); setDropoffDisplay(name) }}
+                onClear={() => { setDropoff(''); setDropoffDisplay('') }}
                 placeholder="Same as pick-up"
-                style={INPUT_DARK}
+                locations={locations}
+                loading={loadingLoc}
               />
             </div>
             <div style={{ display: 'flex', flexDirection: 'column' }}>
-              <label style={LABEL_UPPER}>Pick-up Date</label>
-              <input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} style={INPUT_DARK} />
+              <label htmlFor="hp-from" style={LABEL_UPPER}>Pick-up Date</label>
+              <input id="hp-from" type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} style={INPUT_DARK} />
             </div>
             <div style={{ display: 'flex', flexDirection: 'column' }}>
-              <label style={LABEL_UPPER}>Drop-off Date</label>
-              <input type="date" value={toDate} onChange={e => setToDate(e.target.value)} style={INPUT_DARK} />
+              <label htmlFor="hp-to" style={LABEL_UPPER}>Drop-off Date</label>
+              <input id="hp-to" type="date" value={toDate} onChange={e => setToDate(e.target.value)} style={INPUT_DARK} />
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'flex-end' }}>
               <button

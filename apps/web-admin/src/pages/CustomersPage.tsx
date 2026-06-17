@@ -1,4 +1,47 @@
-import { useState, type FormEvent } from 'react'
+import { useState, useEffect, type FormEvent } from 'react'
+
+// ── API helper ────────────────────────────────────────────────────────────────
+const TENANT = import.meta.env.VITE_TENANT_ID ?? '00000000-0000-0000-0000-000000000001'
+async function fetchJSON(path: string, opts?: RequestInit) {
+  const res = await fetch(`/api/v1${path}`, {
+    credentials: 'include',
+    headers: {
+      'X-Tenant-ID': TENANT,
+      'Content-Type': 'application/json',
+      ...(opts?.headers ?? {}),
+    },
+    ...opts,
+  })
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}))
+    throw new Error((body as { detail?: string }).detail ?? `HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+// ── Domain types ──────────────────────────────────────────────────────────────
+type RentalAgreement = {
+  ra_id: string
+  ra_number: string
+  reservation_id: string | null
+}
+
+type Payment = {
+  payment_id: string
+  reservation_id: string | null
+  rental_agreement_id: string | null
+  payment_type: string
+  status: string
+  amount: string
+  refunded_amount: string
+  currency: string
+  authorized_at: string | null
+  captured_at: string | null
+  refunded_at: string | null
+  created_at: string
+  // ra_number added client-side after joining
+  ra_number?: string
+}
 
 type Customer = {
   customer_id: string; first_name: string; last_name: string; email: string
@@ -62,6 +105,14 @@ export function CustomersPage() {
   const [search,   setSearch]     = useState('')
   const [selected, setSelected]   = useState<Customer | null>(null)
 
+  // Detail panel tab state
+  const [detailTab, setDetailTab] = useState<'profile' | 'payments'>('profile')
+
+  // Payment history state
+  const [paymentsLoading, setPaymentsLoading] = useState(false)
+  const [paymentsError,   setPaymentsError]   = useState<string | null>(null)
+  const [customerPayments, setCustomerPayments] = useState<Payment[]>([])
+
   // Add modal
   const [showAdd, setShowAdd]   = useState(false)
   const [addForm, setAddForm]   = useState<typeof BLANK>(BLANK)
@@ -76,6 +127,58 @@ export function CustomersPage() {
   const [showDnrModal, setShowDnrModal] = useState(false)
   const [dnrReason,    setDnrReason]    = useState('')
   const [confirmUnDnr, setConfirmUnDnr] = useState(false)
+
+  // Fetch payments for the selected customer when payments tab is active
+  useEffect(() => {
+    if (!selected || detailTab !== 'payments') return
+    let cancelled = false
+    setPaymentsLoading(true)
+    setPaymentsError(null)
+    setCustomerPayments([]);
+
+    (async () => {
+      try {
+        const agreements: RentalAgreement[] = await fetchJSON(
+          `/checkout/agreements?customer_id=${selected.customer_id}`
+        )
+        const rasWithReservation = agreements.filter(ra => ra.reservation_id != null)
+        if (rasWithReservation.length === 0) {
+          if (!cancelled) { setCustomerPayments([]); setPaymentsLoading(false) }
+          return
+        }
+        // Map reservation_id -> ra_number for display
+        const resIdToRaNumber: Record<string, string> = {}
+        for (const ra of rasWithReservation) {
+          if (ra.reservation_id) resIdToRaNumber[ra.reservation_id] = ra.ra_number
+        }
+        // Fetch payments for all reservations in parallel
+        const results = await Promise.allSettled(
+          rasWithReservation.map(ra =>
+            fetchJSON(`/payments/reservation/${ra.reservation_id}`) as Promise<Payment[]>
+          )
+        )
+        if (cancelled) return
+        const all: Payment[] = []
+        results.forEach((r, idx) => {
+          if (r.status === 'fulfilled') {
+            const raNumber = rasWithReservation[idx].ra_number
+            r.value.forEach(p => all.push({ ...p, ra_number: raNumber }))
+          }
+        })
+        // Sort by date descending
+        all.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+        setCustomerPayments(all)
+        setPaymentsLoading(false)
+      } catch (err) {
+        if (!cancelled) {
+          setPaymentsError(err instanceof Error ? err.message : 'Failed to load payments')
+          setPaymentsLoading(false)
+        }
+      }
+    })()
+
+    return () => { cancelled = true }
+  }, [selected?.customer_id, detailTab])
 
   const filtered = customers.filter(c => {
     if (!search) return true
@@ -192,7 +295,7 @@ export function CustomersPage() {
           ) : filtered.map(c => (
             <button
               key={c.customer_id}
-              onClick={() => { setSelected(c); setConfirmUnDnr(false) }}
+              onClick={() => { setSelected(c); setConfirmUnDnr(false); setDetailTab('profile') }}
               className="w-full rounded-lg p-3.5 text-left transition-colors"
               style={{
                 background: selected?.customer_id === c.customer_id ? 'var(--accent-sub)' : 'var(--card-bg)',
@@ -226,122 +329,255 @@ export function CustomersPage() {
       {/* ── Detail panel ── */}
       {selected && (
         <div className="flex-1 panel overflow-auto">
-          <div className="flex items-center justify-between px-5 py-4" style={{ borderBottom: '1px solid var(--border)' }}>
-            <p className="text-[13px] font-semibold" style={{ color: 'var(--text-1)' }}>Customer Profile</p>
-            <CloseBtn onClick={() => { setSelected(null); setConfirmUnDnr(false) }} />
-          </div>
-
-          <div className="p-5 space-y-5">
-            {/* Header */}
-            <div className="flex items-start gap-4">
-              <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl text-lg font-bold text-white"
-                   style={{ background: avatarColor(selected.customer_id) }}>
-                {initials(selected.first_name, selected.last_name)}
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="flex flex-wrap items-center gap-2">
-                  <h2 className="text-[18px] font-bold" style={{ color: 'var(--text-1)' }}>{selected.first_name} {selected.last_name}</h2>
-                  {selected.is_dnr && <span className="rounded-full px-2.5 py-0.5 text-[11px] font-bold" style={{ background: 'var(--danger-bg)', color: 'var(--danger)' }}>DO NOT RENT</span>}
-                  {selected.loyalty_tier && (
-                    <span className="rounded-full px-2.5 py-0.5 text-[11px] font-bold"
-                          style={{ background: TIER[selected.loyalty_tier].bg, color: TIER[selected.loyalty_tier].color }}>
-                      {TIER[selected.loyalty_tier].label}
-                    </span>
-                  )}
-                </div>
-                <p className="text-[13px] mt-0.5" style={{ color: 'var(--text-2)' }}>{selected.email}</p>
-                <p className="text-[13px]" style={{ color: 'var(--text-2)' }}>{selected.phone ?? 'No phone on file'}</p>
-                <p className="text-[11.5px] mt-1" style={{ color: 'var(--text-3)' }}>
-                  Customer since {new Date(selected.since).toLocaleDateString('en-US', { month:'long', year:'numeric' })}
-                </p>
-              </div>
-            </div>
-
-            {/* DNR alert */}
-            {selected.is_dnr && selected.dnr_reason && (
-              <div className="flex items-start gap-3 rounded-lg px-4 py-3" style={{ background: 'var(--danger-bg)', border: '1px solid rgba(244,114,114,0.25)' }}>
-                <svg className="mt-0.5 shrink-0" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ color: 'var(--danger)' }}>
-                  <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
-                  <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
-                </svg>
-                <div>
-                  <p className="text-[12.5px] font-semibold" style={{ color: 'var(--danger)' }}>Do Not Rent Flag Active</p>
-                  <p className="text-[12px] mt-0.5" style={{ color: 'var(--text-2)' }}>{selected.dnr_reason}</p>
-                </div>
-              </div>
-            )}
-
-            {/* Stats */}
-            <div className="grid grid-cols-3 gap-3">
-              {[
-                { label:'Total Rentals',  value: selected.total_rentals.toString() },
-                { label:'Loyalty Points', value: selected.loyalty_points.toLocaleString() },
-                { label:'Lifetime Value', value: `$${selected.lifetime_value.toLocaleString('en-US', { minimumFractionDigits:2 })}` },
-              ].map(s => (
-                <div key={s.label} className="rounded-lg px-3 py-3 text-center" style={{ background: 'var(--elevated)', border: '1px solid var(--border)' }}>
-                  <p className="text-[18px] font-bold num" style={{ color: 'var(--text-1)' }}>{s.value}</p>
-                  <p className="text-[11px] mt-0.5" style={{ color: 'var(--text-3)' }}>{s.label}</p>
-                </div>
+          <div className="flex items-center justify-between px-5 py-3" style={{ borderBottom: '1px solid var(--border)' }}>
+            <div className="flex gap-1">
+              {(['profile', 'payments'] as const).map(tab => (
+                <button
+                  key={tab}
+                  onClick={() => setDetailTab(tab)}
+                  className="px-3 py-1.5 rounded-md text-[12.5px] font-medium capitalize transition-colors"
+                  style={{
+                    background: detailTab === tab ? 'var(--accent-sub)' : 'transparent',
+                    color: detailTab === tab ? 'var(--accent)' : 'var(--text-3)',
+                    border: detailTab === tab ? '1px solid var(--accent)' : '1px solid transparent',
+                  }}
+                >
+                  {tab.charAt(0).toUpperCase() + tab.slice(1)}
+                </button>
               ))}
             </div>
+            <CloseBtn onClick={() => { setSelected(null); setConfirmUnDnr(false); setDetailTab('profile') }} />
+          </div>
 
-            {/* Recent rentals */}
-            <div>
-              <p className="text-[11px] font-medium uppercase tracking-wider mb-3" style={{ color: 'var(--text-3)' }}>Recent Rentals</p>
-              <div className="space-y-2">
-                {selected.total_rentals === 0 ? (
-                  <p className="text-[13px] py-4 text-center" style={{ color: 'var(--text-3)' }}>No rental history</p>
-                ) : RECENT.slice(0, Math.min(selected.total_rentals, 3)).map(r => (
-                  <div key={r.conf} className="flex items-center justify-between rounded-lg px-4 py-3"
-                       style={{ background: 'var(--elevated)', border: '1px solid var(--border)' }}>
-                    <div>
-                      <p className="font-mono text-[11.5px] font-semibold" style={{ color: 'var(--accent)' }}>{r.conf}</p>
-                      <p className="text-[11.5px] mt-0.5" style={{ color: 'var(--text-3)' }}>{r.dates} · {r.vehicle}</p>
-                    </div>
-                    <div className="text-right">
-                      <p className="text-[13px] font-semibold num" style={{ color: 'var(--text-1)' }}>{r.amount}</p>
-                      <p className="text-[11px] mt-0.5 font-medium" style={{ color: 'var(--success)' }}>Returned</p>
-                    </div>
+          {/* ── Profile tab ── */}
+          {detailTab === 'profile' && (
+            <div className="p-5 space-y-5">
+              {/* Header */}
+              <div className="flex items-start gap-4">
+                <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl text-lg font-bold text-white"
+                     style={{ background: avatarColor(selected.customer_id) }}>
+                  {initials(selected.first_name, selected.last_name)}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h2 className="text-[18px] font-bold" style={{ color: 'var(--text-1)' }}>{selected.first_name} {selected.last_name}</h2>
+                    {selected.is_dnr && <span className="rounded-full px-2.5 py-0.5 text-[11px] font-bold" style={{ background: 'var(--danger-bg)', color: 'var(--danger)' }}>DO NOT RENT</span>}
+                    {selected.loyalty_tier && (
+                      <span className="rounded-full px-2.5 py-0.5 text-[11px] font-bold"
+                            style={{ background: TIER[selected.loyalty_tier].bg, color: TIER[selected.loyalty_tier].color }}>
+                        {TIER[selected.loyalty_tier].label}
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-[13px] mt-0.5" style={{ color: 'var(--text-2)' }}>{selected.email}</p>
+                  <p className="text-[13px]" style={{ color: 'var(--text-2)' }}>{selected.phone ?? 'No phone on file'}</p>
+                  <p className="text-[11.5px] mt-1" style={{ color: 'var(--text-3)' }}>
+                    Customer since {new Date(selected.since).toLocaleDateString('en-US', { month:'long', year:'numeric' })}
+                  </p>
+                </div>
+              </div>
+
+              {/* DNR alert */}
+              {selected.is_dnr && selected.dnr_reason && (
+                <div className="flex items-start gap-3 rounded-lg px-4 py-3" style={{ background: 'var(--danger-bg)', border: '1px solid rgba(244,114,114,0.25)' }}>
+                  <svg className="mt-0.5 shrink-0" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ color: 'var(--danger)' }}>
+                    <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+                    <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+                  </svg>
+                  <div>
+                    <p className="text-[12.5px] font-semibold" style={{ color: 'var(--danger)' }}>Do Not Rent Flag Active</p>
+                    <p className="text-[12px] mt-0.5" style={{ color: 'var(--text-2)' }}>{selected.dnr_reason}</p>
+                  </div>
+                </div>
+              )}
+
+              {/* Stats */}
+              <div className="grid grid-cols-3 gap-3">
+                {[
+                  { label:'Total Rentals',  value: selected.total_rentals.toString() },
+                  { label:'Loyalty Points', value: selected.loyalty_points.toLocaleString() },
+                  { label:'Lifetime Value', value: `$${selected.lifetime_value.toLocaleString('en-US', { minimumFractionDigits:2 })}` },
+                ].map(s => (
+                  <div key={s.label} className="rounded-lg px-3 py-3 text-center" style={{ background: 'var(--elevated)', border: '1px solid var(--border)' }}>
+                    <p className="text-[18px] font-bold num" style={{ color: 'var(--text-1)' }}>{s.value}</p>
+                    <p className="text-[11px] mt-0.5" style={{ color: 'var(--text-3)' }}>{s.label}</p>
                   </div>
                 ))}
-                {selected.total_rentals > 3 && (
-                  <button className="w-full rounded-lg py-2 text-[12px] font-medium transition-colors"
-                          style={{ border: '1px solid var(--border)', color: 'var(--text-3)' }}
-                          onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'var(--hover-bg)' }}
-                          onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent' }}>
-                    View all {selected.total_rentals} rentals
+              </div>
+
+              {/* Recent rentals */}
+              <div>
+                <p className="text-[11px] font-medium uppercase tracking-wider mb-3" style={{ color: 'var(--text-3)' }}>Recent Rentals</p>
+                <div className="space-y-2">
+                  {selected.total_rentals === 0 ? (
+                    <p className="text-[13px] py-4 text-center" style={{ color: 'var(--text-3)' }}>No rental history</p>
+                  ) : RECENT.slice(0, Math.min(selected.total_rentals, 3)).map(r => (
+                    <div key={r.conf} className="flex items-center justify-between rounded-lg px-4 py-3"
+                         style={{ background: 'var(--elevated)', border: '1px solid var(--border)' }}>
+                      <div>
+                        <p className="font-mono text-[11.5px] font-semibold" style={{ color: 'var(--accent)' }}>{r.conf}</p>
+                        <p className="text-[11.5px] mt-0.5" style={{ color: 'var(--text-3)' }}>{r.dates} · {r.vehicle}</p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-[13px] font-semibold num" style={{ color: 'var(--text-1)' }}>{r.amount}</p>
+                        <p className="text-[11px] mt-0.5 font-medium" style={{ color: 'var(--success)' }}>Returned</p>
+                      </div>
+                    </div>
+                  ))}
+                  {selected.total_rentals > 3 && (
+                    <button className="w-full rounded-lg py-2 text-[12px] font-medium transition-colors"
+                            style={{ border: '1px solid var(--border)', color: 'var(--text-3)' }}
+                            onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'var(--hover-bg)' }}
+                            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent' }}>
+                      View all {selected.total_rentals} rentals
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Remove DNR confirm */}
+              {selected.is_dnr && confirmUnDnr && (
+                <div className="rounded-lg p-3 space-y-2" style={{ background: 'var(--warn-bg)', border: '1px solid rgba(251,191,36,0.25)' }}>
+                  <p className="text-[12px] font-medium" style={{ color: 'var(--warn)' }}>Remove Do Not Rent flag?</p>
+                  <div className="flex gap-2">
+                    <button className="flex-1 btn-secondary py-1.5 text-[12px]" onClick={() => setConfirmUnDnr(false)}>Keep Flag</button>
+                    <button className="flex-1 btn-secondary py-1.5 text-[12px]"
+                            style={{ borderColor: 'rgba(251,191,36,0.4)', color: 'var(--warn)' }}
+                            onClick={handleRemoveDnr}>Remove DNR</button>
+                  </div>
+                </div>
+              )}
+
+              {/* Actions */}
+              <div className="flex flex-wrap gap-2 pt-3" style={{ borderTop: '1px solid var(--border)' }}>
+                <a href="/reservations" className="btn-primary flex-1 justify-center">New Reservation</a>
+                <button className="btn-secondary" onClick={openEdit}>Edit Profile</button>
+                {selected.is_dnr ? (
+                  <button className="btn-secondary" onClick={() => setConfirmUnDnr(true)}>Remove DNR</button>
+                ) : (
+                  <button className="btn-secondary" style={{ borderColor: 'rgba(244,114,114,0.3)', color: 'var(--danger)' }}
+                          onClick={() => { setShowDnrModal(true); setDnrReason('') }}>
+                    Flag DNR
                   </button>
                 )}
               </div>
             </div>
+          )}
 
-            {/* Remove DNR confirm */}
-            {selected.is_dnr && confirmUnDnr && (
-              <div className="rounded-lg p-3 space-y-2" style={{ background: 'var(--warn-bg)', border: '1px solid rgba(251,191,36,0.25)' }}>
-                <p className="text-[12px] font-medium" style={{ color: 'var(--warn)' }}>Remove Do Not Rent flag?</p>
-                <div className="flex gap-2">
-                  <button className="flex-1 btn-secondary py-1.5 text-[12px]" onClick={() => setConfirmUnDnr(false)}>Keep Flag</button>
-                  <button className="flex-1 btn-secondary py-1.5 text-[12px]"
-                          style={{ borderColor: 'rgba(251,191,36,0.4)', color: 'var(--warn)' }}
-                          onClick={handleRemoveDnr}>Remove DNR</button>
+          {/* ── Payments tab ── */}
+          {detailTab === 'payments' && (
+            <div className="p-5 space-y-5">
+              {paymentsLoading && (
+                <div className="flex items-center justify-center py-12">
+                  <p className="text-[13px]" style={{ color: 'var(--text-3)' }}>Loading payment history...</p>
                 </div>
-              </div>
-            )}
-
-            {/* Actions */}
-            <div className="flex flex-wrap gap-2 pt-3" style={{ borderTop: '1px solid var(--border)' }}>
-              <a href="/reservations" className="btn-primary flex-1 justify-center">New Reservation</a>
-              <button className="btn-secondary" onClick={openEdit}>Edit Profile</button>
-              {selected.is_dnr ? (
-                <button className="btn-secondary" onClick={() => setConfirmUnDnr(true)}>Remove DNR</button>
-              ) : (
-                <button className="btn-secondary" style={{ borderColor: 'rgba(244,114,114,0.3)', color: 'var(--danger)' }}
-                        onClick={() => { setShowDnrModal(true); setDnrReason('') }}>
-                  Flag DNR
-                </button>
               )}
+
+              {!paymentsLoading && paymentsError && (
+                <div className="rounded-lg px-4 py-3" style={{ background: 'var(--danger-bg)', border: '1px solid rgba(244,114,114,0.25)' }}>
+                  <p className="text-[12.5px] font-semibold" style={{ color: 'var(--danger)' }}>Failed to load payments</p>
+                  <p className="text-[12px] mt-0.5" style={{ color: 'var(--text-2)' }}>{paymentsError}</p>
+                </div>
+              )}
+
+              {!paymentsLoading && !paymentsError && customerPayments.length === 0 && (
+                <div className="flex flex-col items-center justify-center py-12 text-center rounded-lg"
+                     style={{ border: '1px dashed var(--border)' }}>
+                  <p className="text-[13px]" style={{ color: 'var(--text-3)' }}>No payment history for this customer</p>
+                </div>
+              )}
+
+              {!paymentsLoading && !paymentsError && customerPayments.length > 0 && (() => {
+                const totalPaid    = customerPayments.filter(p => p.status === 'CAPTURED' || p.status === 'PARTIALLY_CAPTURED').reduce((s, p) => s + Number(p.amount), 0)
+                const totalPending = customerPayments.filter(p => p.status === 'AUTHORIZED').reduce((s, p) => s + Number(p.amount), 0)
+                const totalRefund  = customerPayments.filter(p => p.status === 'REFUNDED' || p.status === 'PARTIALLY_REFUNDED').reduce((s, p) => s + Number(p.refunded_amount), 0)
+                const fmt = (n: number) => `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+
+                const TYPE_LABEL: Record<string, string> = {
+                  PREAUTH: 'Authorization',
+                  CAPTURE: 'Capture',
+                  INCREMENTAL_AUTH: 'Incr. Auth',
+                  REFUND: 'Refund',
+                  VOID: 'Void',
+                  CHARGEBACK: 'Chargeback',
+                  CHARGEBACK_REVERSAL: 'CB Reversal',
+                }
+
+                const STATUS_COLOR: Record<string, { color: string; bg: string }> = {
+                  AUTHORIZED:          { color: '#f59e0b', bg: 'rgba(245,158,11,0.12)' },
+                  CAPTURED:            { color: 'var(--success)', bg: 'rgba(16,185,129,0.12)' },
+                  PARTIALLY_CAPTURED:  { color: 'var(--success)', bg: 'rgba(16,185,129,0.12)' },
+                  REFUNDED:            { color: '#0ea5e9', bg: 'rgba(14,165,233,0.12)' },
+                  PARTIALLY_REFUNDED:  { color: '#0ea5e9', bg: 'rgba(14,165,233,0.12)' },
+                  FAILED:              { color: 'var(--danger)', bg: 'var(--danger-bg)' },
+                  VOIDED:              { color: 'var(--text-3)', bg: 'rgba(100,116,139,0.12)' },
+                  DECLINED:            { color: 'var(--danger)', bg: 'var(--danger-bg)' },
+                  PENDING:             { color: 'var(--text-3)', bg: 'rgba(100,116,139,0.12)' },
+                }
+
+                return (
+                  <>
+                    {/* Summary cards */}
+                    <div className="grid grid-cols-3 gap-3">
+                      {[
+                        { label: 'Total Paid',    value: fmt(totalPaid),    color: 'var(--success)' },
+                        { label: 'Pending Auth',  value: fmt(totalPending), color: '#f59e0b' },
+                        { label: 'Total Refunded',value: fmt(totalRefund),  color: '#0ea5e9' },
+                      ].map(s => (
+                        <div key={s.label} className="rounded-lg px-3 py-3 text-center"
+                             style={{ background: 'var(--elevated)', border: '1px solid var(--border)' }}>
+                          <p className="text-[15px] font-bold num" style={{ color: s.color }}>{s.value}</p>
+                          <p className="text-[10.5px] mt-0.5" style={{ color: 'var(--text-3)' }}>{s.label}</p>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Payment timeline */}
+                    <div>
+                      <p className="text-[11px] font-medium uppercase tracking-wider mb-3" style={{ color: 'var(--text-3)' }}>Payment Timeline</p>
+                      <div className="space-y-2">
+                        {customerPayments.map(p => {
+                          const sc = STATUS_COLOR[p.status] ?? { color: 'var(--text-3)', bg: 'rgba(100,116,139,0.12)' }
+                          const dateStr = new Date(p.authorized_at ?? p.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+                          const isAwaitingCapture = p.status === 'AUTHORIZED'
+                          return (
+                            <div key={p.payment_id} className="rounded-lg px-4 py-3 space-y-1.5"
+                                 style={{ background: 'var(--elevated)', border: '1px solid var(--border)' }}>
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="min-w-0">
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <p className="text-[12.5px] font-semibold" style={{ color: 'var(--text-1)' }}>
+                                      {TYPE_LABEL[p.payment_type] ?? p.payment_type}
+                                    </p>
+                                    <span className="rounded-full px-2 py-0.5 text-[10px] font-bold"
+                                          style={{ background: sc.bg, color: sc.color }}>
+                                      {p.status.replace(/_/g, ' ')}
+                                    </span>
+                                  </div>
+                                  <p className="text-[11.5px] mt-0.5" style={{ color: 'var(--text-3)' }}>{dateStr}</p>
+                                  {p.ra_number && (
+                                    <p className="font-mono text-[11px] mt-0.5" style={{ color: 'var(--accent)' }}>{p.ra_number}</p>
+                                  )}
+                                </div>
+                                <p className="text-[14px] font-bold num shrink-0" style={{ color: 'var(--text-1)' }}>
+                                  {p.payment_type === 'REFUND' ? '-' : ''}{fmt(Number(p.amount))}
+                                </p>
+                              </div>
+                              {isAwaitingCapture && (
+                                <p className="text-[11px] font-medium" style={{ color: '#f59e0b' }}>
+                                  Awaiting capture at return
+                                </p>
+                              )}
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  </>
+                )
+              })()}
             </div>
-          </div>
+          )}
         </div>
       )}
 

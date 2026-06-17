@@ -112,6 +112,36 @@ const Ic = {
       <polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>
     </svg>
   ),
+  Shield: () => (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
+      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+      <line x1="12" y1="8" x2="12" y2="12"/><circle cx="12" cy="16" r="0.5" fill="currentColor"/>
+    </svg>
+  ),
+  DollarSign: () => (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
+      <line x1="12" y1="1" x2="12" y2="23"/>
+      <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
+    </svg>
+  ),
+  Clock: () => (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
+      <circle cx="12" cy="12" r="10"/>
+      <polyline points="12 6 12 12 16 14"/>
+    </svg>
+  ),
+  AlertTriangle: () => (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
+      <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+      <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+    </svg>
+  ),
+  Building: () => (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
+      <rect x="3" y="3" width="18" height="18" rx="2"/>
+      <path d="M3 9h18M9 21V9"/>
+    </svg>
+  ),
 }
 
 const ADMIN  =[UserRole.SYSTEM_ADMIN, UserRole.SUPER_ADMIN]
@@ -131,14 +161,21 @@ const GROUPS = [
     { label: 'Vehicles',       href: '/fleet',          roles: FLEET,  icon: <Ic.Car /> },
     { label: 'Fleet Calendar', href: '/fleet-calendar', roles: FLEET,  icon: <Ic.Gantt /> },
     { label: 'Locations',      href: '/locations',      roles: FLEET,  icon: <Ic.MapPin /> },
+    { label: 'Maintenance',    href: '/maintenance',    roles: FLEET,  icon: <Ic.Wrench /> },
+    { label: 'Damage Claims',  href: '/damage',         roles: MANAGE, icon: <Ic.Shield /> },
   ]},
   { label: 'Bookings', items: [
-    { label: 'Reservations',   href: '/reservations', roles: MANAGE, icon: <Ic.Calendar /> },
-    { label: 'Customers',      href: '/customers',    roles: MANAGE, icon: <Ic.Users /> },
-    { label: 'Counter Checkout', href: '/checkout',   roles: STAFF,  icon: <Ic.Counter /> },
-    { label: 'Process Return', href: '/returns',      roles: STAFF,  icon: <Ic.ReturnKey /> },
+    { label: 'Reservations',     href: '/reservations', roles: MANAGE, icon: <Ic.Calendar /> },
+    { label: 'Customers',        href: '/customers',    roles: MANAGE, icon: <Ic.Users /> },
+    { label: 'Counter Checkout', href: '/checkout',     roles: STAFF,  icon: <Ic.Counter /> },
+    { label: 'Shift',            href: '/shift',        roles: STAFF,  icon: <Ic.Clock /> },
+    { label: 'Process Return',   href: '/returns',      roles: STAFF,  icon: <Ic.ReturnKey /> },
+    { label: 'Inspections',      href: '/inspections',  roles: STAFF,  icon: <Ic.Clipboard /> },
+    { label: 'Overdue Rentals',  href: '/overdue',      roles: STAFF,  icon: <Ic.AlertTriangle /> },
   ]},
   { label: 'Analytics', items: [
+    { label: 'Payments',     href: '/payments',     roles: MANAGE, icon: <Ic.DollarSign /> },
+    { label: 'Corporate',    href: '/corporate',    roles: MANAGE, icon: <Ic.Building /> },
     { label: 'Pricing',      href: '/pricing',      roles: ADMIN,  icon: <Ic.Tag /> },
     { label: 'Reports',      href: '/reports',      roles: REPORT, icon: <Ic.Chart /> },
   ]},

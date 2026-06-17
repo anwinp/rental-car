@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import logging
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
@@ -14,22 +16,32 @@ from app.core.observability import init_tracing
 from app.core.rbac import load_permission_matrix
 from app.core.redis import close_redis_pools, init_redis_pools
 
+logger = logging.getLogger(__name__)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Startup: init connections and permission cache. Shutdown: drain pools."""
-    # Startup
-    await init_redis_pools()
+    # Startup — wrap Redis ping in a timeout so a slow/absent Redis doesn't
+    # prevent the server from starting. Cache features degrade gracefully.
+    try:
+        await asyncio.wait_for(init_redis_pools(), timeout=5.0)
+    except (asyncio.TimeoutError, Exception) as exc:
+        logger.warning("Redis startup ping failed (%s) — continuing without cache", exc)
     await load_permission_matrix()
     init_tracing(app)
     yield
     # Shutdown
-    await close_redis_pools()
+    try:
+        await asyncio.wait_for(close_redis_pools(), timeout=3.0)
+    except Exception:
+        pass
     await dispose_engine()
 
 
 def create_app() -> FastAPI:
     app = FastAPI(
+        redirect_slashes=False,
         title="Rental Car Manager API",
         version="1.0.0",
         docs_url="/api/docs" if settings.env != "production" else None,
@@ -87,6 +99,7 @@ def create_app() -> FastAPI:
     from app.domains.channels.router     import router as channels_router
     from app.domains.admin.router        import router as admin_router
     from app.domains.billing.router      import router as billing_router
+    from app.domains.dashboard.router   import router as dashboard_router
 
     PREFIX = "/api/v1"
     app.include_router(auth_router,           prefix=f"{PREFIX}/auth",          tags=["auth"])
@@ -106,6 +119,7 @@ def create_app() -> FastAPI:
     app.include_router(channels_router,       prefix=f"{PREFIX}/channels",      tags=["channels"])
     app.include_router(admin_router,          prefix=f"{PREFIX}/admin",         tags=["admin"])
     app.include_router(billing_router,        prefix=f"{PREFIX}/billing",       tags=["billing"])
+    app.include_router(dashboard_router,      prefix=f"{PREFIX}/dashboard",     tags=["dashboard"])
 
     # Health check — no auth, no prefix (ALB health check target)
     from app.core.dependencies import health_router

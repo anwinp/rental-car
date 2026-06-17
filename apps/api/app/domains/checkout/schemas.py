@@ -40,6 +40,8 @@ class CheckoutRequest(BaseModel):
         default=None,
         description="Required when walk_up=True"
     )
+    # For walk-up: pre-created customer_id to use instead of generating a random UUID
+    customer_id: Optional[UUID] = None
     # Agent may specify a vehicle; if None, service auto-assigns
     vehicle_id: Optional[UUID] = None
 
@@ -55,6 +57,9 @@ class CheckoutRequest(BaseModel):
     # Signature metadata (hash of signature image, not raw bytes)
     customer_signature_hash: Optional[str] = None
     agent_notes: Optional[str] = Field(default=None, max_length=2000)
+
+    # Admin-only: bypass Stripe pre-auth check (e.g. corporate/net-30 accounts)
+    admin_bypass_preauth: bool = False
 
 
 class CheckoutResponse(BaseModel):

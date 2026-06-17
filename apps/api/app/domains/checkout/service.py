@@ -103,7 +103,7 @@ class CheckoutService:
         vehicle_id = await self._resolve_vehicle(data, tenant_id)
 
         # Step 4: Verify pre-auth exists (AUTHORIZED payment for this reservation)
-        if reservation is not None:
+        if reservation is not None and not data.admin_bypass_preauth:
             await self._verify_pre_auth(reservation.reservation_id, tenant_id)
 
         # Step 5: Create RentalAgreement
@@ -115,7 +115,7 @@ class CheckoutService:
             tenant_id=str(tenant_id),
             ra_number=ra_number,
             reservation_id=str(data.reservation_id) if data.reservation_id else None,
-            customer_id=customer_id or str(uuid.uuid4()),  # walk-up needs customer first
+            customer_id=customer_id or (str(data.customer_id) if data.customer_id else None),
             checking_out_agent_id=str(agent_id),
             vehicle_id=vehicle_id,
             vin_at_checkout="UNKNOWN",  # populated from vehicle record in production
@@ -208,6 +208,10 @@ class CheckoutService:
         vehicle_id = ra.vehicle_id
         await self._transition_vehicle_status(vehicle_id, "RETURNING", tenant_id)
         await self._transition_vehicle_status(vehicle_id, "READY_FOR_INSPECTION", tenant_id)
+
+        # Step 7: Mark reservation RETURNED so it leaves the active-rental queue
+        if ra.reservation_id:
+            await self._update_reservation_status(ra.reservation_id, "RETURNED", tenant_id)
 
         await self._session.flush()
 

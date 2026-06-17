@@ -6,14 +6,20 @@ import { Toaster } from '@rcm/ui'
 import { UserRole } from '@rcm/shared-types'
 import { apiClient } from '@rcm/api-client'
 import { AdminLayout } from './components/Layout'
-import { DashboardPage } from './pages/DashboardPage'
 import { FleetPage } from './pages/FleetPage'
 import { ReservationsPage } from './pages/ReservationsPage'
 import { CustomersPage } from './pages/CustomersPage'
 import { PricingPage } from './pages/PricingPage'
 import { ReportsPage } from './pages/ReportsPage'
 import { LocationsPage } from './pages/LocationsPage'
+import { FleetCalendarPage } from './pages/FleetCalendarPage'
+import { ManagerDashboardPage } from './pages/ManagerDashboardPage'
+import { StaffDashboardPage } from './pages/StaffDashboardPage'
+import { BackOfficeDashboardPage } from './pages/BackOfficeDashboardPage'
+import { TaskBoardPage } from './pages/TaskBoardPage'
 import { SettingsPage } from './pages/SettingsPage'
+import { ReturnProcessingPage } from './pages/ReturnProcessingPage'
+import { CounterCheckoutPage } from './pages/CounterCheckoutPage'
 
 const ADMIN_ROLES = [
   UserRole.BRANCH_MANAGER,
@@ -263,11 +269,17 @@ export default function App() {
                   <AdminLayout>
                     <Routes>
                       <Route path="/" element={<Navigate to="/dashboard" replace />} />
-                      <Route path="/dashboard" element={<DashboardPage />} />
+                      <Route path="/dashboard" element={<ManagerDashboardPage />} />
+                      <Route path="/staff" element={<StaffDashboardPage />} />
+                      <Route path="/back-office" element={<BackOfficeDashboardPage />} />
+                      <Route path="/tasks" element={<TaskBoardPage />} />
                       <Route path="/fleet" element={<FleetPage />} />
+                      <Route path="/fleet-calendar" element={<FleetCalendarPage />} />
                       <Route path="/locations" element={<LocationsPage />} />
                       <Route path="/reservations" element={<ReservationsPage />} />
                       <Route path="/customers" element={<CustomersPage />} />
+                      <Route path="/checkout" element={<CounterCheckoutPage />} />
+                      <Route path="/returns" element={<ReturnProcessingPage />} />
                       <Route
                         path="/pricing"
                         element={

@@ -56,6 +56,41 @@ async def check_in(
     return await svc.check_in(body, claims.user_id, claims.tenant_id)
 
 
+@router.get("/agreements", response_model=list[RentalAgreementResponse])
+async def list_agreements(
+    reservation_id: Optional[uuid.UUID] = Query(default=None),
+    customer_id: Optional[uuid.UUID] = Query(default=None),
+    status: Optional[str] = Query(default=None),
+    claims: UserClaims = Depends(require_permission("reservations", "read")),
+    session: AsyncSession = Depends(get_session),
+) -> list[RentalAgreementResponse]:
+    """List rental agreements, optionally filtered by reservation_id, customer_id, or status."""
+    from sqlalchemy import text
+    filters = ["tenant_id = :tid"]
+    params: dict = {"tid": str(claims.tenant_id)}
+    if reservation_id:
+        filters.append("reservation_id = :rid")
+        params["rid"] = str(reservation_id)
+    if customer_id:
+        filters.append("customer_id = :cid")
+        params["cid"] = str(customer_id)
+    if status:
+        filters.append("status = :status")
+        params["status"] = status
+    where = " AND ".join(filters)
+    result = await session.execute(
+        text(f"SELECT * FROM rental_agreements WHERE {where} ORDER BY created_at DESC LIMIT 50"),
+        params,
+    )
+    rows = result.mappings().all()
+    return [
+        RentalAgreementResponse.model_validate(
+            {k: str(v) if hasattr(v, "hex") else v for k, v in row.items()},
+        )
+        for row in rows
+    ]
+
+
 @router.get("/agreements/{ra_id}", response_model=RentalAgreementResponse)
 async def get_agreement(
     ra_id: uuid.UUID,

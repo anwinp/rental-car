@@ -50,6 +50,34 @@ const Ic = {
       <circle cx="12" cy="10" r="3"/>
     </svg>
   ),
+  Gantt: () => (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
+      <line x1="3" y1="6" x2="21" y2="6"/>
+      <line x1="3" y1="12" x2="21" y2="12"/>
+      <line x1="3" y1="18" x2="21" y2="18"/>
+      <rect x="3" y="4" width="8" height="4" rx="1" fill="currentColor" stroke="none" opacity=".4"/>
+      <rect x="8" y="10" width="10" height="4" rx="1" fill="currentColor" stroke="none" opacity=".4"/>
+      <rect x="5" y="16" width="6" height="4" rx="1" fill="currentColor" stroke="none" opacity=".4"/>
+    </svg>
+  ),
+  CheckList: () => (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
+      <polyline points="9 11 12 14 22 4"/>
+      <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
+    </svg>
+  ),
+  Wrench: () => (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
+      <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
+    </svg>
+  ),
+  Clipboard: () => (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
+      <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
+      <rect x="8" y="2" width="8" height="4" rx="1" ry="1"/>
+      <line x1="9" y1="12" x2="15" y2="12"/><line x1="9" y1="16" x2="15" y2="16"/>
+    </svg>
+  ),
   Gear: () => (
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
       <circle cx="12" cy="12" r="3"/>
@@ -66,6 +94,18 @@ const Ic = {
       <polyline points="9 18 15 12 9 6"/>
     </svg>
   ),
+  ReturnKey: () => (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
+      <path d="M9 10l-5 5 5 5"/><path d="M4 15h11a4 4 0 0 0 0-8h-1"/>
+    </svg>
+  ),
+  Counter: () => (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
+      <rect x="2" y="7" width="20" height="14" rx="2"/>
+      <path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/>
+      <line x1="12" y1="12" x2="12" y2="16"/><line x1="10" y1="14" x2="14" y2="14"/>
+    </svg>
+  ),
   SignOut: () => (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
       <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
@@ -74,21 +114,29 @@ const Ic = {
   ),
 }
 
-const ALL = Object.values(UserRole)
-const ADMIN = [UserRole.SYSTEM_ADMIN, UserRole.SUPER_ADMIN]
+const ADMIN  =[UserRole.SYSTEM_ADMIN, UserRole.SUPER_ADMIN]
 const MANAGE = [UserRole.BRANCH_MANAGER, UserRole.REGIONAL_MANAGER, UserRole.SYSTEM_ADMIN, UserRole.SUPER_ADMIN, UserRole.CLAIMS_COORDINATOR, UserRole.READONLY_AUDITOR]
-const FLEET = [...MANAGE, UserRole.FLEET_MANAGER, UserRole.MAINTENANCE_TECH]
+const FLEET  = [...MANAGE, UserRole.FLEET_MANAGER, UserRole.MAINTENANCE_TECH]
 const REPORT = [...MANAGE, UserRole.FINANCE_ANALYST]
+const STAFF  = [...FLEET, UserRole.COUNTER_AGENT]
 
 const GROUPS = [
-  { label: null, items: [
-    { label: 'Dashboard',    href: '/dashboard',    roles: ALL,    icon: <Ic.Grid /> },
+  { label: 'Dashboards', items: [
+    { label: 'Overview',      href: '/dashboard',    roles: MANAGE, icon: <Ic.Grid /> },
+    { label: 'Operations',    href: '/staff',        roles: STAFF,  icon: <Ic.Clipboard /> },
+    { label: 'Back Office',   href: '/back-office',  roles: FLEET,  icon: <Ic.Wrench /> },
+    { label: 'Task Board',    href: '/tasks',        roles: STAFF,  icon: <Ic.CheckList /> },
   ]},
-  { label: 'Manage', items: [
-    { label: 'Fleet',        href: '/fleet',        roles: FLEET,  icon: <Ic.Car /> },
-    { label: 'Locations',    href: '/locations',    roles: FLEET,  icon: <Ic.MapPin /> },
-    { label: 'Reservations', href: '/reservations', roles: MANAGE, icon: <Ic.Calendar /> },
-    { label: 'Customers',    href: '/customers',    roles: MANAGE, icon: <Ic.Users /> },
+  { label: 'Fleet', items: [
+    { label: 'Vehicles',       href: '/fleet',          roles: FLEET,  icon: <Ic.Car /> },
+    { label: 'Fleet Calendar', href: '/fleet-calendar', roles: FLEET,  icon: <Ic.Gantt /> },
+    { label: 'Locations',      href: '/locations',      roles: FLEET,  icon: <Ic.MapPin /> },
+  ]},
+  { label: 'Bookings', items: [
+    { label: 'Reservations',   href: '/reservations', roles: MANAGE, icon: <Ic.Calendar /> },
+    { label: 'Customers',      href: '/customers',    roles: MANAGE, icon: <Ic.Users /> },
+    { label: 'Counter Checkout', href: '/checkout',   roles: STAFF,  icon: <Ic.Counter /> },
+    { label: 'Process Return', href: '/returns',      roles: STAFF,  icon: <Ic.ReturnKey /> },
   ]},
   { label: 'Analytics', items: [
     { label: 'Pricing',      href: '/pricing',      roles: ADMIN,  icon: <Ic.Tag /> },

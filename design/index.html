@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Aero | Luxury Car Rentals</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <nav class="top-nav-on-dark transparent" id="navbar">
+        <div class="nav-logo">
+            <a href="#" style="color: inherit; text-decoration: none;">Aero</a>
+        </div>
+        <div class="nav-links">
+            <a href="#fleet" class="nav-link">Reserve</a>
+            <a href="#models" class="nav-link">Experience</a>
+            <a href="#locations" class="nav-link">Locations</a>
+            <a href="#about" class="nav-link">Concierge</a>
+        </div>
+    </nav>
+
+    <main>
+        <section class="hero-band-cinema">
+            <img src="assets/hero_cinema.png" alt="Aero Luxury Sports Car" class="hero-image">
+            <div class="hero-gradient"></div>
+            <div class="hero-content">
+                <h1 class="display-mega">Drive The Dream.</h1>
+                <p class="body-md" style="max-width: 600px; font-size: 16px; margin-top: var(--spacing-xs); color: #e0e0e0;">Reserve an exclusive vehicle from our elite fleet. Delivered directly to your estate or private hangar.</p>
+                
+                <form class="booking-widget" action="#fleet">
+                    <div class="form-group">
+                        <label class="caption-uppercase">Pick-up Location</label>
+                        <input type="text" class="text-input-on-dark" placeholder="City, Airport, or Address">
+                    </div>
+                    <div class="form-group">
+                        <label class="caption-uppercase">Drop-off Location</label>
+                        <input type="text" class="text-input-on-dark" placeholder="Same as pick-up">
+                    </div>
+                    <div class="form-group">
+                        <label class="caption-uppercase">Pick-up Date</label>
+                        <input type="date" class="text-input-on-dark">
+                    </div>
+                    <div class="form-group">
+                        <label class="caption-uppercase">Drop-off Date</label>
+                        <input type="date" class="text-input-on-dark">
+                    </div>
+                    <button type="submit" class="button-primary" style="width: 100%;">Check Availability</button>
+                </form>
+            </div>
+        </section>
+
+        <section id="fleet" class="hero-band-light">
+            <h2 class="display-lg">Reserve Your Vehicle</h2>
+            <div class="grid-4-up">
+                <!-- Vehicle Card 1 -->
+                <div class="preowned-listing-card">
+                    <div>
+                        <img src="assets/hero_cinema.png" alt="Aero Stradale V8">
+                        <h3 class="title-md body-on-light mb-xxs">Aero Stradale V8</h3>
+                        <p class="title-md body-on-light" style="color: var(--colors-primary); margin-top: var(--spacing-xs);">$ 1,200 <span class="body-md" style="color: #666; font-weight: 400;">/ DAY</span></p>
+                        
+                        <div class="spec-grid">
+                            <div class="spec-cell">
+                                <span class="spec-value">2.9s</span>
+                                <span class="caption-uppercase spec-label" style="color: #666;">0-60 MPH</span>
+                            </div>
+                            <div class="spec-cell">
+                                <span class="spec-value">710</span>
+                                <span class="caption-uppercase spec-label" style="color: #666;">HORSEPOWER</span>
+                            </div>
+                        </div>
+                    </div>
+                    <a href="#" class="button-outline-on-light">Reserve</a>
+                </div>
+
+                <!-- Vehicle Card 2 -->
+                <div class="preowned-listing-card">
+                    <div>
+                        <img src="assets/action_cinema.png" alt="Aero GT Berlinetta">
+                        <h3 class="title-md body-on-light mb-xxs">Aero GT Berlinetta</h3>
+                        <p class="title-md body-on-light" style="color: var(--colors-primary); margin-top: var(--spacing-xs);">$ 950 <span class="body-md" style="color: #666; font-weight: 400;">/ DAY</span></p>
+                        
+                        <div class="spec-grid">
+                            <div class="spec-cell">
+                                <span class="spec-value">3.2s</span>
+                                <span class="caption-uppercase spec-label" style="color: #666;">0-60 MPH</span>
+                            </div>
+                            <div class="spec-cell">
+                                <span class="spec-value">620</span>
+                                <span class="caption-uppercase spec-label" style="color: #666;">HORSEPOWER</span>
+                            </div>
+                        </div>
+                    </div>
+                    <a href="#" class="button-outline-on-light">Reserve</a>
+                </div>
+
+                <!-- Vehicle Card 3 -->
+                <div class="preowned-listing-card">
+                    <div>
+                        <img src="assets/interior_cinema.png" alt="Aero Pista">
+                        <h3 class="title-md body-on-light mb-xxs">Aero Pista Track-Ed</h3>
+                        <p class="title-md body-on-light" style="color: var(--colors-primary); margin-top: var(--spacing-xs);">$ 1,800 <span class="body-md" style="color: #666; font-weight: 400;">/ DAY</span></p>
+                        
+                        <div class="spec-grid">
+                            <div class="spec-cell">
+                                <span class="spec-value">2.7s</span>
+                                <span class="caption-uppercase spec-label" style="color: #666;">0-60 MPH</span>
+                            </div>
+                            <div class="spec-cell">
+                                <span class="spec-value">800</span>
+                                <span class="caption-uppercase spec-label" style="color: #666;">HORSEPOWER</span>
+                            </div>
+                        </div>
+                    </div>
+                    <a href="#" class="button-outline-on-light">Reserve</a>
+                </div>
+
+                <!-- Vehicle Card 4 -->
+                <div class="preowned-listing-card">
+                    <div>
+                        <div style="background: #e0e0e0; width: 100%; aspect-ratio: 4/3; margin-bottom: var(--spacing-xs); display: flex; align-items: center; justify-content: center;">
+                            <span class="caption-uppercase" style="color: #666;">Waitlist</span>
+                        </div>
+                        <h3 class="title-md body-on-light mb-xxs">Aero Spider</h3>
+                        <p class="title-md body-on-light" style="color: var(--colors-primary); margin-top: var(--spacing-xs);">$ 1,400 <span class="body-md" style="color: #666; font-weight: 400;">/ DAY</span></p>
+                        
+                        <div class="spec-grid">
+                            <div class="spec-cell">
+                                <span class="spec-value">3.0s</span>
+                                <span class="caption-uppercase spec-label" style="color: #666;">0-60 MPH</span>
+                            </div>
+                            <div class="spec-cell">
+                                <span class="spec-value">680</span>
+                                <span class="caption-uppercase spec-label" style="color: #666;">HORSEPOWER</span>
+                            </div>
+                        </div>
+                    </div>
+                    <a href="#" class="button-outline-on-light" style="color: #999; border-color: #ccc; pointer-events: none;">Unavailable</a>
+                </div>
+            </div>
+        </section>
+
+        <section id="models" class="editorial-section">
+            <h2 class="display-lg mb-md">White Glove Experience</h2>
+            <p class="body-md" style="max-width: 600px;">We go beyond standard rentals. Enjoy 24/7 dedicated concierge service, bespoke driving itineraries, and seamless vehicle delivery directly to your location.</p>
+            
+            <div class="grid-2-up">
+                <div class="feature-card-photo">
+                    <img src="assets/interior_cinema.png" alt="Luxury Interior Detail">
+                    <div class="feature-card-content">
+                        <h3 class="title-md">Immaculate Preparation</h3>
+                        <p class="body-md">Every vehicle undergoes a rigorous 100-point inspection and professional detailing before hand-off.</p>
+                    </div>
+                </div>
+                <div class="feature-card-photo">
+                    <img src="assets/action_cinema.png" alt="Car in Action">
+                    <div class="feature-card-content">
+                        <h3 class="title-md">Unlimited Thrills</h3>
+                        <p class="body-md">Engineered on the track, our fleet is ready to deliver visceral acceleration and razor-sharp handling.</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section class="livery-band">
+            <h2 class="display-lg" style="margin-bottom: var(--spacing-sm);">Join The Club</h2>
+            <p class="body-md" style="color: #fff; margin-bottom: var(--spacing-md); max-width: 500px; margin-left: auto; margin-right: auto;">Members receive priority booking, exclusive rates, and invitations to track days.</p>
+            <a href="#book" class="button-outline-on-dark" style="border-color: #fff; background: transparent; color: #fff;">Apply Now</a>
+        </section>
+    </main>
+
+    <footer class="footer-dark">
+        <div class="footer-container">
+            <div>
+                <h3 class="title-md mb-sm">Aero Rentals</h3>
+                <p class="body-md" style="max-width: 300px;">The world's most desirable performance vehicles, available on your terms.</p>
+            </div>
+            <div style="display: flex; gap: var(--spacing-xl);">
+                <div>
+                    <h4 class="caption-uppercase mb-xs">Fleet</h4>
+                    <a href="#" class="footer-link">Stradale V8</a>
+                    <a href="#" class="footer-link">GT Berlinetta</a>
+                    <a href="#" class="footer-link">Pista</a>
+                </div>
+                <div>
+                    <h4 class="caption-uppercase mb-xs">Company</h4>
+                    <a href="#" class="footer-link">Concierge</a>
+                    <a href="#" class="footer-link">Careers</a>
+                    <a href="#" class="footer-link">Contact</a>
+                </div>
+                <div>
+                    <h4 class="caption-uppercase mb-xs">Legal</h4>
+                    <a href="#" class="footer-link">Rental Policy</a>
+                    <a href="#" class="footer-link">Privacy Policy</a>
+                </div>
+            </div>
+        </div>
+    </footer>
+
+    <script>
+        // Simple nav background transition on scroll
+        const navbar = document.getElementById('navbar');
+        window.addEventListener('scroll', () => {
+            if (window.scrollY > 100) {
+                navbar.classList.remove('transparent');
+            } else {
+                navbar.classList.add('transparent');
+            }
+        });
+    </script>
+</body>
+</html>

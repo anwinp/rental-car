@@ -40,17 +40,19 @@ def upgrade() -> None:
         ) PARTITION BY RANGE (occurred_at)
     """)
 
-    # telematics_events: monthly, 12-month retention, auto-drop expired
+    # telematics_events: monthly partitioning with 12-month retention
     op.execute("""
         SELECT partman.create_parent(
-          p_parent_table         => 'public.telematics_events',
-          p_control              => 'occurred_at',
-          p_type                 => 'range',
-          p_interval             => 'monthly',
-          p_premake              => 2,
-          p_retention            => '12 months',
-          p_retention_keep_table => false
+          p_parent_table => 'public.telematics_events',
+          p_control      => 'occurred_at',
+          p_interval     => '1 month',
+          p_premake      => 2
         )
+    """)
+    op.execute("""
+        UPDATE partman.part_config
+        SET retention = '12 months', retention_keep_table = false
+        WHERE parent_table = 'public.telematics_events'
     """)
 
     # RLS
@@ -60,7 +62,7 @@ def upgrade() -> None:
         CREATE POLICY tenant_isolation ON public.telematics_events
           USING (tenant_id = current_setting('app.current_tenant_id', true)::uuid)
     """)
-    op.execute("ALTER TABLE public.telematics_events NO FORCE ROW LEVEL SECURITY FOR ROLE app_service")
+
 
 
 def downgrade() -> None:

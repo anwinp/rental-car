@@ -450,9 +450,9 @@ class CheckoutService:
         # Return a simple namespace object
         class _Res:
             def __init__(self, r):
-                self.reservation_id = r["reservation_id"]
-                self.status = r["status"]
-                self.customer_id = r["customer_id"]
+                self.reservation_id = str(r["reservation_id"])
+                self.status = str(r["status"])
+                self.customer_id = str(r["customer_id"])
 
         return _Res(row)
 

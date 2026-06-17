@@ -32,7 +32,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // httpOnly cookie is sent automatically — never reads localStorage
     apiClient
       .GET('/auth/me' as never)
-      .then(({ data }: { data: unknown }) => setUser((data as UserProfile) ?? null))
+      .then((res: { data?: unknown }) => setUser((res.data as UserProfile) ?? null))
       .catch(() => setUser(null))
       .finally(() => setIsLoading(false))
   }, [])

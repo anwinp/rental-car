@@ -139,7 +139,7 @@ class ReservationService:
     async def create_reservation(
         self,
         data: ReservationCreate,
-        actor_id: UUID,
+        actor_id: Optional[UUID] = None,
     ) -> Reservation:
         """
         Create a confirmed reservation.
@@ -206,7 +206,7 @@ class ReservationService:
         reservation = await self._repo.create_reservation(
             confirmation_number=confirmation_number,
             status="PENDING",
-            customer_id=str(data.customer_id) if data.customer_id else str(actor_id),
+            customer_id=str(data.customer_id) if data.customer_id else (str(actor_id) if actor_id else None),
             pickup_location_id=str(data.location_id),
             dropoff_location_id=str(data.location_id),
             pickup_datetime=data.pickup_dt,
@@ -226,7 +226,7 @@ class ReservationService:
                 for e in data.extras
             ],
             taxes_snapshot=quote_data.get("line_items", []),
-            booking_agent_id=str(actor_id),
+            booking_agent_id=str(actor_id) if actor_id else None,
             version=1,
         )
 
@@ -239,7 +239,7 @@ class ReservationService:
                     start_time=data.pickup_dt,
                     end_time=data.dropoff_dt,
                     reservation_id=reservation.reservation_id,
-                    created_by=str(actor_id),
+                    created_by=str(actor_id) if actor_id else "GUEST",
                 )
             except Exception as exc:
                 # Exclusion constraint violation → VehicleNotAvailableError

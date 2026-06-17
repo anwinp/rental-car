@@ -2,10 +2,13 @@ import createClient from 'openapi-fetch'
 import type { paths } from './schema'
 
 /**
- * Resolves the tenant slug from the current hostname.
- * e.g. acme.rcm.app → "acme", localhost → "dev"
+ * Resolves the tenant identifier from env var (dev) or hostname (production).
+ * e.g. acme.rcm.app → "acme"; localhost with VITE_TENANT_ID → that UUID
  */
-function resolveTenantFromHostname(hostname: string): string {
+function resolveTenant(hostname: string): string {
+  // Allow override via env var — used in local dev where there's no subdomain
+  const envTenant = (import.meta as Record<string, any>).env?.VITE_TENANT_ID as string | undefined
+  if (envTenant) return envTenant
   const parts = hostname.split('.')
   return parts.length >= 3 ? parts[0] : 'dev'
 }
@@ -23,20 +26,30 @@ export const apiClient = createClient<paths>({
 // Middleware: inject X-Tenant-ID on every outbound request
 apiClient.use({
   onRequest({ request }) {
-    const tenant = resolveTenantFromHostname(window.location.hostname)
+    const tenant = resolveTenant(window.location.hostname)
     request.headers.set('X-Tenant-ID', tenant)
     return request
   },
   onResponse({ response }) {
-    // Bubble RFC 7807 problem details as thrown Error objects for TanStack Query to catch
     if (!response.ok) {
-      return response.json().then((body: Record<string, unknown>) => {
-        const err = new Error(
-          typeof body?.detail === 'string' ? body.detail : response.statusText
-        )
-        Object.assign(err, { status: response.status, body })
-        throw err
-      })
+      const ct = response.headers.get('content-type') ?? ''
+      if (ct.includes('application/json')) {
+        return response.json().then((body: Record<string, unknown>) => {
+          const err = new Error(
+            typeof body?.detail === 'string' ? body.detail : response.statusText
+          )
+          Object.assign(err, { status: response.status, body })
+          throw err
+        })
+      }
+      // Non-JSON response (HTML error page, proxy 404, etc.)
+      const err = new Error(
+        response.status === 404
+          ? 'API endpoint not found. Check that the backend is running.'
+          : `Server error: ${response.status} ${response.statusText}`
+      )
+      Object.assign(err, { status: response.status })
+      throw err
     }
     return response
   },

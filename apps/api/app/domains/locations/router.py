@@ -5,7 +5,8 @@ from datetime import datetime
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Query, Request, status
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_session
@@ -21,6 +22,50 @@ from app.domains.locations.service import LocationService
 
 router = APIRouter()
 _svc = LocationService()
+
+
+class PublicLocation(BaseModel):
+    """Minimal location record for public booking widget — no auth required."""
+    location_id: str
+    name: str
+    short_code: str
+    city: str
+    state_province: Optional[str] = None
+    country_code: str
+    airport_code: Optional[str] = None
+    location_type: str
+
+
+@router.get(
+    "/public",
+    response_model=list[PublicLocation],
+    summary="List active locations (public — no auth, for booking widget)",
+)
+async def list_locations_public(
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+) -> list[PublicLocation]:
+    """Returns active locations for the public booking site — no authentication required."""
+    tenant_id_str = request.headers.get("X-Tenant-ID", "00000000-0000-0000-0000-000000000001")
+    try:
+        tenant_id = UUID(tenant_id_str)
+    except ValueError:
+        tenant_id = UUID("00000000-0000-0000-0000-000000000001")
+
+    locations = await _svc.list_locations(session, tenant_id, is_active=True, limit=200, offset=0)
+    return [
+        PublicLocation(
+            location_id=str(loc.location_id),
+            name=loc.name,
+            short_code=loc.short_code,
+            city=loc.city,
+            state_province=loc.state_province,
+            country_code=loc.country_code,
+            airport_code=loc.airport_code,
+            location_type=loc.location_type,
+        )
+        for loc in locations
+    ]
 
 
 # ── POST /locations ──────────────────────────────────────────────────────────

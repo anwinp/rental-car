@@ -36,11 +36,11 @@ async def _create_tenant(session, tenant_id: str | None = None) -> str:
         text("""
             INSERT INTO tenants
                 (tenant_id, slug, legal_name, primary_email,
-                 billing_address, default_currency, default_timezone, is_active,
+                 billing_address, default_currency, default_timezone,
                  created_at, updated_at)
             VALUES
                 (:tid, :slug, :name, :email,
-                 '{}', 'USD', 'America/Chicago', true,
+                 '{}', 'USD', 'America/Chicago',
                  NOW(), NOW())
             ON CONFLICT (slug) DO NOTHING
         """),
@@ -52,6 +52,28 @@ async def _create_tenant(session, tenant_id: str | None = None) -> str:
         },
     )
     return tid
+
+
+async def _create_staff_user(session, tenant_id: str) -> str:
+    """Insert a minimal staff_user row and return its user_id."""
+    uid = str(uuid.uuid4())
+    await session.execute(
+        text("""
+            INSERT INTO staff_users
+                (user_id, tenant_id, email, password_hash,
+                 first_name, last_name, role, created_at, updated_at)
+            VALUES
+                (:uid, :tid, :email, 'x',
+                 'Test', 'Agent', 'COUNTER_AGENT'::user_role, NOW(), NOW())
+            ON CONFLICT (tenant_id, email) DO NOTHING
+        """),
+        {
+            "uid": uid,
+            "tid": tenant_id,
+            "email": f"agent-{uid[:8]}@example.com",
+        },
+    )
+    return uid
 
 
 async def _create_location(session, tenant_id: str) -> str:
@@ -104,15 +126,15 @@ async def _create_vehicle(session, tenant_id: str, location_id: str, vin: str | 
     await session.execute(
         text("""
             INSERT INTO vehicles
-                (vehicle_id, tenant_id, location_id, class_id,
-                 vin, plate, make, model, model_year, status,
-                 fuel_type, transmission, seat_count, odometer_current,
-                 is_active, created_at, updated_at)
+                (vehicle_id, tenant_id, home_location_id, current_location_id,
+                 vehicle_class_id, vin, plate_number, make, model, model_year,
+                 status, fuel_type, transmission, seats, odometer_current,
+                 created_at, updated_at)
             VALUES
-                (:vid, :tid, :lid, :cid,
-                 :vin, :plate, 'Toyota', 'Camry', 2023, 'AVAILABLE',
-                 'GASOLINE', 'AUTOMATIC', 5, 10000,
-                 true, NOW(), NOW())
+                (:vid, :tid, :lid, :lid,
+                 :cid, :vin, :plate, 'Toyota', 'Camry', 2023,
+                 'AVAILABLE', 'GASOLINE'::fuel_type, 'AUTOMATIC'::transmission_type, 5, 10000,
+                 NOW(), NOW())
         """),
         {
             "vid": vid,
@@ -144,6 +166,7 @@ async def test_exclusion_constraint_blocks_overlapping_vehicle_block(session) ->
     """
     sess, tenant_id = session
     await _create_tenant(sess, tenant_id)
+    user_id = await _create_staff_user(sess, tenant_id)
     location_id = await _create_location(sess, tenant_id)
     vehicle_id = await _create_vehicle(sess, tenant_id, location_id)
 
@@ -156,16 +179,17 @@ async def test_exclusion_constraint_blocks_overlapping_vehicle_block(session) ->
         text("""
             INSERT INTO vehicle_blocks
                 (block_id, tenant_id, vehicle_id, block_type,
-                 start_time, end_time, reason, created_at, updated_at)
+                 start_time, end_time, notes, created_by, created_at, updated_at)
             VALUES
-                (uuid_generate_v4(), :tid, :vid, 'RESERVATION',
-                 :start, :end, 'Test block 1', NOW(), NOW())
+                (uuid_generate_v4(), :tid, :vid, 'RESERVATION'::vehicle_block_type,
+                 :start, :end, 'Test block 1', :uid, NOW(), NOW())
         """),
         {
             "tid": tenant_id,
+            "uid": user_id,
             "vid": vehicle_id,
-            "start": block_start.isoformat(),
-            "end": block_end.isoformat(),
+            "start": block_start,
+            "end": block_end,
         },
     )
     await sess.flush()
@@ -176,16 +200,17 @@ async def test_exclusion_constraint_blocks_overlapping_vehicle_block(session) ->
             text("""
                 INSERT INTO vehicle_blocks
                     (block_id, tenant_id, vehicle_id, block_type,
-                     start_time, end_time, reason, created_at, updated_at)
+                     start_time, end_time, notes, created_by, created_at, updated_at)
                 VALUES
-                    (uuid_generate_v4(), :tid, :vid, 'RESERVATION',
-                     :start, :end, 'Test block 2 (overlap)', NOW(), NOW())
+                    (uuid_generate_v4(), :tid, :vid, 'RESERVATION'::vehicle_block_type,
+                     :start, :end, 'Test block 2 (overlap)', :uid, NOW(), NOW())
             """),
             {
                 "tid": tenant_id,
+                "uid": user_id,
                 "vid": vehicle_id,
-                "start": (block_start + timedelta(hours=12)).isoformat(),
-                "end": (block_end + timedelta(hours=12)).isoformat(),
+                "start": block_start + timedelta(hours=12),
+                "end": block_end + timedelta(hours=12),
             },
         )
         await sess.flush()
@@ -430,24 +455,24 @@ async def test_confirmation_number_unique(session) -> None:
         "dlid": loc_id,
         "clid": class_id,
         "conf": shared_confirmation,
-        "pickup": (now + timedelta(days=1)).isoformat(),
-        "dropoff": (now + timedelta(days=4)).isoformat(),
+        "pickup": now + timedelta(days=1),
+        "dropoff": now + timedelta(days=4),
     }
 
     insert_sql = text("""
         INSERT INTO reservations
             (reservation_id, tenant_id, customer_id,
-             pickup_location_id, dropoff_location_id, class_id,
+             pickup_location_id, dropoff_location_id, vehicle_class_id,
              confirmation_number, status, version,
-             pickup_datetime, dropoff_datetime,
-             base_daily_rate, total_estimated, currency, booking_source,
+             pickup_datetime, return_datetime,
+             base_rate_daily, grand_total, currency, channel,
              created_at, updated_at)
         VALUES
             (uuid_generate_v4(), :tid, :cid,
              :plid, :dlid, :clid,
              :conf, 'CONFIRMED', 1,
              :pickup, :dropoff,
-             45.00, 162.00, 'USD', 'DIRECT',
+             45.00, 162.00, 'USD', 'DIRECT_WEB',
              NOW(), NOW())
     """)
 

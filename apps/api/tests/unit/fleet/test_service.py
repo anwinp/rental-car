@@ -6,6 +6,7 @@ database or Redis connection is needed.
 """
 from __future__ import annotations
 
+import types
 import uuid
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -50,8 +51,8 @@ def _make_vehicle(
     home_location_id: str | None = None,
     vehicle_class_id: str | None = None,
 ) -> Vehicle:
-    """Construct a minimal Vehicle ORM instance without hitting the DB."""
-    v = Vehicle.__new__(Vehicle)
+    """Construct a minimal Vehicle-like namespace without hitting the DB."""
+    v = types.SimpleNamespace()
     v.vehicle_id = str(uuid.uuid4())
     v.tenant_id = str(uuid.uuid4())
     v.vin = "1HGCM82633A004352"

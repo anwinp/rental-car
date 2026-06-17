@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import and_, func, select, text, update
+from sqlalchemy import Text, and_, cast, func, select, text, update
 
 from app.core.repository import BaseRepository
 from app.domains.reservations.models import Reservation, ReservationVersion
@@ -92,7 +92,7 @@ class ReservationRepository(BaseRepository[Reservation]):
             Reservation.deleted_at.is_(None),
         ]
         if status:
-            conditions.append(Reservation.status == status)
+            conditions.append(cast(Reservation.status, Text) == status)
         if location_id:
             conditions.append(
                 Reservation.pickup_location_id == str(location_id)
@@ -123,7 +123,7 @@ class ReservationRepository(BaseRepository[Reservation]):
         """
         result = await self.session.execute(
             select(Reservation).where(
-                Reservation.status == "CONFIRMED",
+                cast(Reservation.status, Text) == "CONFIRMED",
                 Reservation.pickup_datetime < cutoff,
                 Reservation.deleted_at.is_(None),
             )

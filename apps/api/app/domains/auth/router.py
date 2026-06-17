@@ -80,7 +80,7 @@ async def refresh_token(
     return TokenResponse(message="Token refreshed", app_context=app_context)
 
 
-@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
+@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
 async def logout(
     request: Request,
     response: Response,
@@ -119,7 +119,7 @@ async def get_me(
 
 # ── Password Management ───────────────────────────────────────────────────────
 
-@router.post("/change-password", status_code=status.HTTP_204_NO_CONTENT)
+@router.post("/change-password", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
 async def change_password(
     payload: PasswordChange,
     claims: UserClaims = Depends(get_current_user),
@@ -143,7 +143,7 @@ async def request_password_reset(
     return {"message": "If the email exists, a reset link has been sent."}
 
 
-@router.post("/reset-password", status_code=status.HTTP_204_NO_CONTENT)
+@router.post("/reset-password", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
 async def reset_password(
     payload: PasswordResetComplete,
     service: AuthService = Depends(_get_auth_service),
@@ -189,7 +189,7 @@ async def list_sessions(
     return await service.list_sessions(str(claims.user_id))
 
 
-@router.delete("/sessions/{jti}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/sessions/{jti}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
 async def revoke_session(
     jti: str,
     claims: UserClaims = Depends(get_current_user),

@@ -57,7 +57,7 @@ async def capture_payment(
 
 # ── Void ─────────────────────────────────────────────────────────────────────
 
-@router.post("/void", status_code=status.HTTP_204_NO_CONTENT)
+@router.post("/void", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
 async def void_payment(
     payload: VoidRequest,
     claims: UserClaims = Depends(require_permission("payments", "manage")),

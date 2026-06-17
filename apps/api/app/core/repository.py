@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Generic, Optional, Type, TypeVar
 
-from sqlalchemy import and_, func, select, update
+from sqlalchemy import and_, func, inspect as sa_inspect, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import DeclarativeBase
 
@@ -33,6 +33,16 @@ class BaseRepository(Generic[ModelT]):
 
     # ── Private helpers ──────────────────────────────────────────────────────
 
+    def _pk_col(self):
+        """Return the primary key InstrumentedAttribute for the model class."""
+        mapper = sa_inspect(self.model).mapper
+        for prop in mapper.iterate_properties:
+            if hasattr(prop, "columns"):
+                cols = list(prop.columns)
+                if cols and cols[0].primary_key:
+                    return getattr(self.model, prop.key)
+        raise RuntimeError(f"No single-column primary key found for {self.model}")
+
     def _tenant_filter(self):
         """
         Combined tenant isolation + soft-delete filter.
@@ -56,7 +66,7 @@ class BaseRepository(Generic[ModelT]):
         """
         result = await self.session.execute(
             select(self.model).where(
-                self.model.id == id,
+                self._pk_col() == str(id),
                 self._tenant_filter(),
             )
         )
@@ -115,9 +125,9 @@ class BaseRepository(Generic[ModelT]):
         """
         Create a new record.
         tenant_id is always injected from self.tenant_id — callers cannot override it.
+        UUID generation is delegated to the DB via server_default.
         """
         obj = self.model(
-            id=uuid.uuid4(),
             tenant_id=self.tenant_id,
             **kwargs,
         )
@@ -133,7 +143,7 @@ class BaseRepository(Generic[ModelT]):
         """
         await self.session.execute(
             update(self.model)
-            .where(self.model.id == id, self._tenant_filter())
+            .where(self._pk_col() == str(id), self._tenant_filter())
             .values(**kwargs, updated_at=datetime.now(timezone.utc))
         )
         await self.session.flush()
@@ -147,7 +157,7 @@ class BaseRepository(Generic[ModelT]):
         """
         await self.session.execute(
             update(self.model)
-            .where(self.model.id == id, self._tenant_filter())
+            .where(self._pk_col() == str(id), self._tenant_filter())
             .values(deleted_at=datetime.now(timezone.utc))
         )
         await self.session.flush()

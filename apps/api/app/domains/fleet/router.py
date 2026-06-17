@@ -5,13 +5,15 @@ import csv
 import io
 import uuid
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
+from uuid import UUID
 
 from fastapi import (
     APIRouter,
     Depends,
     File,
     Query,
+    Request,
     UploadFile,
     WebSocket,
     WebSocketDisconnect,
@@ -22,7 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_session
 from app.core.rbac import require_permission
 from app.core.redis import WS_TOKEN_KEY, get_session_redis
-from app.core.security import UserClaims, get_current_user, verify_ws_token
+from app.core.security import UserClaims, get_current_user, get_optional_current_user, verify_ws_token
 from app.domains.fleet.schemas import (
     AvailabilityQuery,
     AvailabilityResponse,
@@ -187,7 +189,7 @@ async def transition_status(
 
 @router.delete(
     "/vehicles/{vehicle_id}",
-    status_code=status.HTTP_204_NO_CONTENT,
+    status_code=status.HTTP_204_NO_CONTENT, response_model=None,
     summary="Soft-delete a vehicle",
 )
 async def delete_vehicle(
@@ -228,6 +230,160 @@ async def bulk_import_vehicles(
         rows,
         created_by=str(claims.user_id),
     )
+
+
+# ── Public search ────────────────────────────────────────────────────────────
+
+
+def _derive_class_code(name: str, sipp_prefix: str) -> str:
+    n = name.upper()
+    if "ECON" in n:        return "ECON"
+    if "COMP" in n:        return "COMP"
+    if "MID" in n:         return "MIDZ"
+    if "FULL" in n or "STANDARD" in n: return "FULL"
+    if "SUV" in n:         return "SUVR"
+    if "PREM" in n or "LUX" in n: return "PREM"
+    if "MINI" in n:        return "MINI"
+    return (sipp_prefix + "XXX")[:4].upper()
+
+
+def _default_features(name: str) -> list[str]:
+    n = name.upper()
+    base = ["Air Conditioning", "Automatic Transmission", "Bluetooth"]
+    if "PREM" in n or "LUX" in n:
+        return base + ["Leather Seats", "Heated Seats", "Navigation"]
+    if "SUV" in n:
+        return base + ["All-Wheel Drive", "Third Row Seating", "Roof Rack"]
+    if "ECON" in n or "COMP" in n:
+        return base + ["Fuel Efficient", "USB Charging"]
+    return base + ["Backup Camera", "USB Charging"]
+
+
+async def _resolve_location_id(
+    session: AsyncSession,
+    tenant_id: UUID,
+    raw: str,
+) -> Optional[str]:
+    """
+    Resolve a pickup/dropoff value to a location UUID string.
+    Accepts: UUID string, short_code (exact, case-insensitive), city name (ILIKE), airport_code.
+    Returns None if no match found.
+    """
+    from sqlalchemy import text as sqlt
+    # Fast path: already a UUID
+    try:
+        return str(UUID(raw))
+    except ValueError:
+        pass
+    result = await session.execute(
+        sqlt("""
+            SELECT location_id FROM locations
+            WHERE tenant_id = :tid AND deleted_at IS NULL
+              AND (
+                LOWER(short_code) = LOWER(:q)
+                OR LOWER(city) = LOWER(:q)
+                OR LOWER(airport_code) = LOWER(:q)
+                OR LOWER(name) ILIKE '%' || LOWER(:q) || '%'
+              )
+            LIMIT 1
+        """),
+        {"tid": str(tenant_id), "q": raw},
+    )
+    row = result.first()
+    return str(row[0]) if row else None
+
+
+@router.get(
+    "/search",
+    summary="Public: search available vehicle classes for a date range",
+)
+async def search_fleet(
+    request: Request,
+    pickup_location_id: str = Query(...),
+    dropoff_location_id: Optional[str] = Query(default=None),
+    pickup_date: str = Query(...),
+    dropoff_date: str = Query(...),
+    session: AsyncSession = Depends(get_session),
+    claims: Optional[UserClaims] = Depends(get_optional_current_user),
+) -> dict[str, Any]:
+    """
+    Returns all active vehicle classes with availability counts.
+    No authentication required — used by the public web booking search.
+    Tenant resolved from JWT claims when logged in, else X-Tenant-ID header.
+    Location resolved by UUID, short_code, city name, or airport code.
+    """
+    raw_tenant: Optional[str] = (
+        str(claims.tenant_id) if claims else request.headers.get("X-Tenant-ID")
+    )
+    if not raw_tenant:
+        return {"classes": []}
+    try:
+        tenant_id = UUID(raw_tenant)
+    except ValueError:
+        return {"classes": []}
+
+    try:
+        pickup_dt = datetime.fromisoformat(pickup_date)
+        dropoff_dt = datetime.fromisoformat(dropoff_date)
+    except ValueError:
+        return {"classes": []}
+
+    resolved_location_id = await _resolve_location_id(session, tenant_id, pickup_location_id)
+    if not resolved_location_id:
+        return {"classes": [], "error": f"Location not found: {pickup_location_id}"}
+
+    try:
+        classes = await _svc.list_classes(session, tenant_id)
+    except Exception:
+        return {"classes": []}
+
+    rental_days = max(1, (dropoff_dt - pickup_dt).days)
+
+    # Fetch daily rates for all classes in one query
+    from sqlalchemy import text as sqlt, Numeric
+    rate_rows = await session.execute(sqlt("""
+        SELECT rsi.vehicle_class_id, MIN(rsi.price_per_day)
+        FROM rate_schedule_items rsi
+        JOIN rate_codes rc ON rc.rate_code_id = rsi.rate_code_id
+        WHERE rsi.tenant_id = :tid
+          AND rc.status = 'ACTIVE'
+          AND :days >= rsi.days_min
+          AND (rsi.days_max IS NULL OR :days <= rsi.days_max)
+        GROUP BY rsi.vehicle_class_id
+    """), {"tid": str(tenant_id), "days": rental_days})
+    rates: dict[str, float] = {str(r[0]): float(r[1]) for r in rate_rows.all()}
+
+    results = []
+    for cls in classes:
+        if not getattr(cls, "is_active", True):
+            continue
+
+        available_count = 0
+        try:
+            query = AvailabilityQuery(
+                location_id=resolved_location_id,
+                vehicle_class_id=str(cls.class_id),
+                pickup_dt=pickup_dt,
+                dropoff_dt=dropoff_dt,
+            )
+            avail = await _svc.get_availability(session, tenant_id, query)
+            available_count = avail.available_count
+        except Exception:
+            pass
+
+        results.append({
+            "classId":        str(cls.class_id),
+            "classCode":      _derive_class_code(cls.name, cls.sipp_prefix),
+            "className":      cls.name,
+            "description":    cls.description or f"A {cls.name.lower()} vehicle.",
+            "features":       _default_features(cls.name),
+            "imageUrl":       None,
+            "availableCount": available_count,
+            "baseDailyRate":  rates.get(str(cls.class_id), 0.0),
+            "currencyCode":   "USD",
+        })
+
+    return {"classes": results}
 
 
 # ── Availability ──────────────────────────────────────────────────────────────
@@ -293,7 +449,7 @@ async def create_block(
 
 @router.delete(
     "/blocks/{block_id}",
-    status_code=status.HTTP_204_NO_CONTENT,
+    status_code=status.HTTP_204_NO_CONTENT, response_model=None,
     summary="Soft-delete a vehicle block",
 )
 async def delete_block(

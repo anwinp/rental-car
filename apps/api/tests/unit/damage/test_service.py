@@ -223,10 +223,12 @@ async def test_create_claim_sets_damage_hold():
     with patch.object(svc, "_check_cdw_in_extras", AsyncMock(return_value=False)):
         claim = await svc.create_claim(data, tenant_id, uuid.uuid4())
 
-    # Verify DAMAGE_HOLD was applied to vehicle
+    # Verify DAMAGE_HOLD was applied to vehicle.
+    # c.args[0] is the TextClause; str() on it returns the SQL text.
     all_calls = mock_session.execute.call_args_list
     damage_hold_applied = any(
-        "DAMAGE_HOLD" in str(c) for c in all_calls
+        c.args and "DAMAGE_HOLD" in str(c.args[0])
+        for c in all_calls
     )
     assert damage_hold_applied, (
         f"Expected DAMAGE_HOLD update on vehicle but did not find it in calls: {all_calls}"

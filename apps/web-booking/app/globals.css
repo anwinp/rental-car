@@ -4,72 +4,192 @@
 
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 222.2 84% 4.9%;
-    --card: 0 0% 100%;
-    --card-foreground: 222.2 84% 4.9%;
-    --popover: 0 0% 100%;
-    --popover-foreground: 222.2 84% 4.9%;
-    --primary: 221.2 83.2% 53.3%;
-    --primary-foreground: 210 40% 98%;
-    --secondary: 210 40% 96.1%;
-    --secondary-foreground: 222.2 47.4% 11.2%;
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222.2 47.4% 11.2%;
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
-    --ring: 221.2 83.2% 53.3%;
-    --radius: 0.5rem;
-  }
+    color-scheme: dark;
 
-  .dark {
-    --background: 222.2 84% 4.9%;
-    --foreground: 210 40% 98%;
-    --card: 222.2 84% 4.9%;
-    --card-foreground: 210 40% 98%;
-    --popover: 222.2 84% 4.9%;
-    --popover-foreground: 210 40% 98%;
-    --primary: 217.2 91.2% 59.8%;
-    --primary-foreground: 222.2 47.4% 11.2%;
-    --secondary: 217.2 32.6% 17.5%;
-    --secondary-foreground: 210 40% 98%;
-    --muted: 217.2 32.6% 17.5%;
-    --muted-foreground: 215 20.2% 65.1%;
-    --accent: 217.2 32.6% 17.5%;
-    --accent-foreground: 210 40% 98%;
-    --destructive: 0 62.8% 30.6%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 217.2 32.6% 17.5%;
-    --input: 217.2 32.6% 17.5%;
-    --ring: 224.3 76.3% 48%;
+    /* ── Shadcn / Tailwind HSL vars — Cosmos.network palette ── */
+    --background:           0 0% 10%;        /* #181818 */
+    --foreground:           0 0% 100%;       /* #ffffff */
+    --card:                 0 0% 12%;        /* #303030 */
+    --card-foreground:      0 0% 100%;
+    --popover:              0 0% 12%;
+    --popover-foreground:   0 0% 100%;
+    --primary:              4 76% 48%;       /* #da291c red */
+    --primary-foreground:   0 0% 7%;
+    --secondary:            0 0% 15%;        /* #2a2a2a */
+    --secondary-foreground: 0 0% 80%;
+    --muted:                0 0% 13%;        /* #212121 */
+    --muted-foreground:     0 0% 55%;
+    --accent:               0 0% 15%;
+    --accent-foreground:    0 0% 90%;
+    --destructive:          0 72% 60%;       /* #f04e4e */
+    --destructive-foreground: 0 0% 100%;
+    --border:               0 0% 17%;        /* #2b2b2b */
+    --input:                0 0% 15%;
+    --ring:                 4 76% 48%;       /* red */
+    --radius:               0.5rem;
+
+    /* ── Portal design tokens — Cosmos.network exact palette ── */
+    --p-bg:           #181818;
+    --p-bg-2:         #303030;
+    --p-bg-3:         #2a2a2a;
+
+    --p-brand:        #da291c;   /* ferrari red */
+    --p-brand-dark:   #b01e0a;
+    --p-brand-mid:    #e84238;
+    --p-brand-50:     rgba(218,41,28,0.10);
+    --p-brand-100:    rgba(218,41,28,0.20);
+
+    --p-cyan:         #969696;   /* body gray */
+    --p-cyan-dark:    #767676;
+    --p-cyan-glow:    0 0 24px rgba(150,150,150,0.35);
+
+    --p-cta:          #da291c;
+    --p-cta-dark:     #b01e0a;
+    --p-cta-fg:       #ffffff;
+    --p-cta-glow:     0 0 28px rgba(218,41,28,0.45);
+
+    /* Gradient helpers */
+    --p-grad:         linear-gradient(135deg, #da291c 0%, #b01e0a 100%);
+    --p-grad-text:    linear-gradient(135deg, #da291c 0%, #e84238 100%);
+
+    --p-surface:      #181818;
+    --p-surface-2:    #303030;
+    --p-surface-3:    #2a2a2a;
+    --p-surface-dark: #0f0f0f;
+
+    --p-border:       rgba(255,255,255,0.08);
+    --p-border-mid:   rgba(255,255,255,0.14);
+    --p-border-light: rgba(255,255,255,0.04);
+
+    --p-text-1:       #ffffff;
+    --p-text-2:       rgba(255,255,255,0.70);
+    --p-text-3:       rgba(255,255,255,0.50);
+    --p-text-4:       rgba(255,255,255,0.30);
+
+    --p-success:      #22c55e;
+    --p-success-bg:   rgba(34,197,94,0.10);
+    --p-warn:         #fbbf24;
+    --p-warn-bg:      rgba(251,191,36,0.10);
+    --p-danger:       #f04e4e;
+    --p-danger-bg:    rgba(240,78,78,0.10);
+
+    --p-shadow-xs:    0 1px 3px rgba(0,0,0,0.6);
+    --p-shadow-sm:    0 2px 8px rgba(0,0,0,0.6);
+    --p-shadow:       0 4px 24px rgba(0,0,0,0.65);
+    --p-shadow-md:    0 8px 40px rgba(0,0,0,0.7);
+    --p-shadow-lg:    0 24px 64px rgba(0,0,0,0.75);
+    --p-shadow-brand: 0 0 36px rgba(218,41,28,0.35);
+
+    /* Legacy --rcm-* mapped to Cosmos dark */
+    --rcm-page-bg:    var(--p-surface);
+    --rcm-elevated:   var(--p-surface-2);
+    --rcm-card:       var(--p-surface-2);
+    --rcm-hover:      var(--p-surface-3);
+    --rcm-border:     var(--p-border);
+    --rcm-border-sub: var(--p-border-light);
+    --rcm-text-1:     var(--p-text-1);
+    --rcm-text-2:     var(--p-text-2);
+    --rcm-text-3:     var(--p-text-3);
+    --rcm-accent:     var(--p-brand);
+    --rcm-accent-fg:  #ffffff;
+    --rcm-accent-sub: rgba(218,41,28,0.12);
+    --rcm-success:    var(--p-success);
+    --rcm-success-bg: var(--p-success-bg);
+    --rcm-warn:       var(--p-warn);
+    --rcm-warn-bg:    var(--p-warn-bg);
+    --rcm-danger:     var(--p-danger);
+    --rcm-danger-bg:  var(--p-danger-bg);
+    --rcm-info:       var(--p-cyan);
+    --rcm-info-bg:    rgba(150,150,150,0.10);
   }
 }
 
 @layer base {
-  * {
-    @apply border-border;
-  }
+  * { @apply border-border; box-sizing: border-box; }
   body {
-    @apply bg-background text-foreground;
+    background-color: var(--p-surface);
+    color: var(--p-text-1);
+    font-family: var(--font-sans), 'Inter', system-ui, sans-serif;
+    font-weight: 400;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  h1 {
+    font-family: var(--font-sans), 'Inter', system-ui, sans-serif;
+    font-weight: 500;
+    letter-spacing: -0.04em;
+  }
+  h2 {
+    font-family: var(--font-sans), 'Inter', system-ui, sans-serif;
+    font-weight: 500;
+    letter-spacing: -0.03em;
+  }
+  h3, h4 {
+    font-family: var(--font-sans), 'Inter', system-ui, sans-serif;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+  }
+  /* Uppercase label caps stay at 500 for legibility */
+  .label-caps {
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  /* Stat / accent numerals */
+  .stat-num {
+    font-weight: 400;
+    letter-spacing: -0.04em;
   }
 }
 
-/* Ensure focus-visible rings are always shown for keyboard users */
+/* ── Badge dark-theme overrides ─────────────────────────────────────────── */
+@layer utilities {
+  .bg-green-100   { background-color: rgba(16,217,160,0.12)  !important; }
+  .text-green-800 { color: #10d9a0                            !important; }
+  .bg-amber-100   { background-color: rgba(251,191,36,0.12)  !important; }
+  .text-amber-800 { color: #fbbf24                            !important; }
+  .bg-blue-100    { background-color: rgba(150,150,150,0.12)   !important; }
+  .text-blue-800  { color: #969696                            !important; }
+  .bg-red-100     { background-color: rgba(240,78,78,0.12)   !important; }
+  .text-red-800   { color: #f87171                            !important; }
+  .bg-gray-100    { background-color: rgba(255,255,255,0.08)  !important; }
+  .text-gray-700  { color: rgba(240,240,252,0.6)              !important; }
+}
+
+/* ── Focus rings ─────────────────────────────────────────────────────────── */
 *:focus-visible {
   @apply outline-none ring-2 ring-ring ring-offset-2 ring-offset-background;
 }
 
-/* Respect reduced motion preferences */
+/* ── Scrollbar ───────────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: var(--p-surface-2); }
+::-webkit-scrollbar-thumb { background: rgba(218,41,28,0.3); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(218,41,28,0.55); }
+
+/* ── Smooth scrolling ────────────────────────────────────────────────────── */
+html { scroll-behavior: smooth; }
+
+/* ── Select option theming ───────────────────────────────────────────────── */
+option { background: #303030; color: #ffffff; }
+
+/* ── Cosmos dot-grid helper (used as overlay on sections) ────────────────── */
+.cosmos-dots {
+  background-image: radial-gradient(rgba(255,255,255,0.07) 1px, transparent 1px);
+  background-size: 36px 36px;
+}
+
+/* ── Gradient text helper ────────────────────────────────────────────────── */
+.grad-text {
+  background: var(--p-grad-text);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
 @media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
+  *, *::before, *::after {
     animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
 }

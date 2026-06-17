@@ -27,11 +27,19 @@ async def load_permission_matrix() -> None:
         try:
             async with AsyncSessionLocal() as session:
                 rows = await session.execute(
-                    text("SELECT role_name, permissions_json FROM staff_roles")
+                    text("SELECT role_key, permissions_json FROM staff_roles")
                 )
                 new_matrix: dict[str, FrozenSet[str]] = {}
                 for role_name, permissions in rows:
-                    new_matrix[role_name] = frozenset(permissions or [])
+                    expanded: set[str] = set()
+                    if isinstance(permissions, dict):
+                        for resource, actions in permissions.items():
+                            if isinstance(actions, list):
+                                for action in actions:
+                                    expanded.add(f"{resource}:{action}")
+                            elif isinstance(actions, str):
+                                expanded.add(f"{resource}:{actions}")
+                    new_matrix[role_name] = frozenset(expanded)
                 _PERMISSION_MATRIX = new_matrix
         except Exception:
             # On startup the table may not exist yet (fresh install before migrations).
@@ -46,7 +54,12 @@ async def load_permission_matrix() -> None:
 
 def _has_permission(role: str, resource: str, action: str) -> bool:
     permissions = _PERMISSION_MATRIX.get(role, frozenset())
-    return f"{resource}:{action}" in permissions or f"{resource}:*" in permissions
+    return (
+        f"{resource}:{action}" in permissions
+        or f"{resource}:*" in permissions
+        or "*:*" in permissions
+        or f"*:{action}" in permissions
+    )
 
 
 def _has_location_access(claims: UserClaims, location_id: Optional[uuid.UUID]) -> bool:

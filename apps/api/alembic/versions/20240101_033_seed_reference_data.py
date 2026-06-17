@@ -19,9 +19,13 @@ branch_labels: str | tuple[str, ...] | None = None
 depends_on: str | tuple[str, ...] | None = None
 
 
+def _exec(sql: str) -> None:
+    op.get_bind().exec_driver_sql(sql)
+
+
 def upgrade() -> None:
     # 9 extras catalog (tenant_id NULL = system reference)
-    op.execute("""
+    _exec("""
         INSERT INTO public.extras_catalog (extra_id, tenant_id, code, name, extra_type, pricing_type, tax_treatment) VALUES
           ('00000000-0000-0000-0002-000000000001', NULL, 'CDW',  'Collision Damage Waiver',          'INSURANCE', 'PER_DAY',    'TAXABLE'),
           ('00000000-0000-0000-0002-000000000002', NULL, 'LDW',  'Loss Damage Waiver',               'INSURANCE', 'PER_DAY',    'TAXABLE'),
@@ -36,7 +40,7 @@ def upgrade() -> None:
     """)
 
     # California Airport tax template (1 seed)
-    op.execute("""
+    _exec("""
         INSERT INTO public.tax_templates (template_id, tenant_id, name, is_seed, jurisdictions) VALUES
           ('00000000-0000-0000-0003-000000000001', NULL, 'US-CA-Airport', true, '[
             {"name":"CA State Sales Tax",      "type":"SALES_TAX",        "rate":0.0725, "base":"RENTAL",  "taxable":true},
@@ -48,7 +52,7 @@ def upgrade() -> None:
     """)
 
     # 13 staff roles with permissions_json
-    op.execute("""
+    _exec("""
         INSERT INTO public.staff_roles (role_key, display_name, permissions_json) VALUES
           ('CUSTOMER',          'Customer (Self-Service)', '{"self":["read","update"]}'::JSONB),
           ('CORPORATE_BOOKER',  'Corporate Booker',        '{"reservations":["read","create"],"customers":["read"]}'::JSONB),
@@ -67,7 +71,7 @@ def upgrade() -> None:
     """)
 
     # 30 notification templates
-    op.execute("""
+    _exec("""
         INSERT INTO public.notification_templates (template_id, tenant_id, event_code, channel, subject, body_html) VALUES
           ('00000000-0000-0000-0004-000000000001', NULL, 'booking.confirmed',           'EMAIL', 'Your booking is confirmed — {{confirmation_number}}', '<p>Hi {{first_name}}, reservation {{confirmation_number}} is confirmed for {{pickup_datetime}}.</p>'),
           ('00000000-0000-0000-0004-000000000002', NULL, 'booking.confirmed',           'SMS',   NULL, 'Rental {{confirmation_number}} confirmed. Pick up: {{pickup_location}} at {{pickup_datetime}}.'),
@@ -104,23 +108,10 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.execute("""
-        DELETE FROM public.notification_templates
-         WHERE template_id::TEXT LIKE '00000000-0000-0000-0004-%'
-    """)
-    op.execute("""
-        DELETE FROM public.staff_roles
-         WHERE role_key IN (
+    _exec("DELETE FROM public.notification_templates WHERE template_id::TEXT LIKE '00000000-0000-0000-0004-%'")
+    _exec("""DELETE FROM public.staff_roles WHERE role_key IN (
            'CUSTOMER','CORPORATE_BOOKER','COUNTER_AGENT','SENIOR_AGENT',
            'BRANCH_MANAGER','REGIONAL_MANAGER','FLEET_MANAGER','MAINTENANCE_TECH',
-           'CLAIMS_COORDINATOR','FINANCE','SYSTEM_ADMIN','SUPER_ADMIN','API_PARTNER'
-         )
-    """)
-    op.execute("""
-        DELETE FROM public.tax_templates
-         WHERE template_id = '00000000-0000-0000-0003-000000000001'
-    """)
-    op.execute("""
-        DELETE FROM public.extras_catalog
-         WHERE extra_id::TEXT LIKE '00000000-0000-0000-0002-%'
-    """)
+           'CLAIMS_COORDINATOR','FINANCE','SYSTEM_ADMIN','SUPER_ADMIN','API_PARTNER')""")
+    _exec("DELETE FROM public.tax_templates WHERE template_id = '00000000-0000-0000-0003-000000000001'")
+    _exec("DELETE FROM public.extras_catalog WHERE extra_id::TEXT LIKE '00000000-0000-0000-0002-%'")

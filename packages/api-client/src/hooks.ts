@@ -6,7 +6,13 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { apiClient } from './client'
 import type { components } from './schema'
 
-type AvailabilityQuery = components['schemas']['AvailabilityQuery']
+/** Params for the public /fleet/search endpoint. */
+export interface SearchParams {
+  pickup_location_id: string
+  dropoff_location_id?: string
+  pickup_date: string
+  dropoff_date: string
+}
 type RateQuoteRequest = components['schemas']['RateQuoteRequest']
 type ReservationCreate = components['schemas']['ReservationCreate']
 type CheckoutRequest = components['schemas']['CheckoutRequest']
@@ -15,7 +21,7 @@ type CheckInRequest = components['schemas']['CheckInRequest']
 // Query key factory for consistent cache keys
 export const queryKeys = {
   currentUser: ['auth', 'me'] as const,
-  availability: (params: AvailabilityQuery) => ['fleet', 'availability', params] as const,
+  availability: (params: SearchParams) => ['fleet', 'search', params] as const,
   rateQuote: (params: RateQuoteRequest) => ['pricing', 'quote', params] as const,
   reservations: (filters?: Record<string, unknown>) =>
     ['reservations', filters] as const,
@@ -29,26 +35,32 @@ export const queryKeys = {
 }
 
 /**
- * Fetch available vehicle classes for a given location + date range.
- * Polls every 30s as a WebSocket fallback.
+ * Search available vehicle classes for a location + date range.
+ * Calls the public /fleet/search endpoint — no auth required.
+ * Polls every 30s for live availability updates.
  */
-export function useAvailability(params: AvailabilityQuery, enabled = true) {
+export function useAvailability(params: SearchParams, enabled = true) {
   return useQuery({
     queryKey: queryKeys.availability(params),
     queryFn: async () => {
-      const { data, error } = await (apiClient as never as {
-        GET: (path: string, opts: unknown) => Promise<{ data: unknown; error: unknown }>
-      }).GET('/fleet/availability', {
-        params: { query: params },
+      const qs = new URLSearchParams({ pickup_location_id: params.pickup_location_id, pickup_date: params.pickup_date, dropoff_date: params.dropoff_date })
+      if (params.dropoff_location_id) qs.set('dropoff_location_id', params.dropoff_location_id)
+      const tenantId = process.env.NEXT_PUBLIC_TENANT_ID
+        ?? (typeof window !== 'undefined'
+          ? (window.location.hostname.split('.').length >= 3 ? window.location.hostname.split('.')[0] : 'dev')
+          : 'dev')
+      const res = await fetch(`/api/v1/fleet/search?${qs}`, {
+        credentials: 'include',
+        headers: { 'X-Tenant-ID': tenantId },
       })
-      if (error) throw error
-      return data as components['schemas']['AvailabilityResponse']
+      if (!res.ok) {
+        const ct = res.headers.get('content-type') ?? ''
+        const msg = ct.includes('application/json') ? ((await res.json()) as { detail?: string }).detail ?? res.statusText : `${res.status} ${res.statusText}`
+        throw new Error(msg)
+      }
+      return res.json() as Promise<{ classes: Array<{ classId: string; classCode: string; className: string; description: string; features: string[]; imageUrl?: string; availableCount: number; baseDailyRate: number; currencyCode: string }> }>
     },
-    enabled:
-      enabled &&
-      !!params.pickup_location_id &&
-      !!params.pickup_date &&
-      !!params.dropoff_date,
+    enabled: enabled && !!params.pickup_location_id && !!params.pickup_date && !!params.dropoff_date,
     staleTime: 25_000,
     refetchInterval: 30_000,
   })

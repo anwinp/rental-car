@@ -103,7 +103,7 @@ async def get_readiness_gate(
 
 @router.post(
     "/{tenant_id}/accept-tos",
-    status_code=status.HTTP_204_NO_CONTENT,
+    status_code=status.HTTP_204_NO_CONTENT, response_model=None,
     summary="Record Terms of Service acceptance",
 )
 async def accept_tos(

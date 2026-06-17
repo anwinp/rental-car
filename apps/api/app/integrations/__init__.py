@@ -11,7 +11,6 @@ from app.integrations.avalara_client import (
     AvalaraAddress,
     AvalaraClient,
     AvalaraLineItem,
-    RecallResult as AvalaraRecallResult,
     TaxCode,
     TaxLine,
     TaxTransactionResult,
@@ -33,7 +32,6 @@ __all__ = [
     "TaxCode",
     "TaxLine",
     "TaxTransactionResult",
-    "AvalaraRecallResult",
     # NHTSA
     "NHTSAClient",
     "VinDecodeResult",

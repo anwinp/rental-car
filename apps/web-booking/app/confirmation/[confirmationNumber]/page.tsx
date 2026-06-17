@@ -1,4 +1,3 @@
-import { Providers } from '../../providers'
 import { ConfirmationDetails } from './ConfirmationDetails'
 
 interface ConfirmationPageProps {
@@ -7,12 +6,10 @@ interface ConfirmationPageProps {
 
 export default function ConfirmationPage({ params }: ConfirmationPageProps) {
   return (
-    <Providers>
-      <div className="min-h-screen bg-background px-4 py-12">
-        <div className="mx-auto max-w-2xl">
-          <ConfirmationDetails confirmationNumber={params.confirmationNumber} />
-        </div>
+    <div style={{ minHeight: '100vh', background: 'var(--p-surface)', paddingTop: 48, paddingBottom: 64 }}>
+      <div style={{ maxWidth: 680, margin: '0 auto', padding: '0 20px' }}>
+        <ConfirmationDetails confirmationNumber={params.confirmationNumber} />
       </div>
-    </Providers>
+    </div>
   )
 }

@@ -164,7 +164,7 @@ async def remove_dnr(
     return CustomerResponse.model_validate(customer, from_attributes=True)
 
 
-@router.post("/{customer_id}/gdpr-erasure", status_code=status.HTTP_204_NO_CONTENT)
+@router.post("/{customer_id}/gdpr-erasure", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
 async def gdpr_erasure(
     customer_id: uuid.UUID,
     body: GDPRErasureRequest,

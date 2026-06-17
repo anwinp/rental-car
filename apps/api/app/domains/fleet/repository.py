@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import exists, func, not_, select, update
+from sqlalchemy import Text, cast, exists, func, not_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ResourceNotFoundError
@@ -67,7 +67,7 @@ class FleetRepository(BaseRepository[Vehicle]):
         """All vehicles at a location, optionally filtered by status."""
         filters = [Vehicle.home_location_id == location_id]
         if status_filter:
-            filters.append(Vehicle.status == status_filter)
+            filters.append(cast(Vehicle.status, Text) == status_filter)
         return await self.list(filters=filters)
 
     # ── Availability count ────────────────────────────────────────────────────
@@ -94,7 +94,7 @@ class FleetRepository(BaseRepository[Vehicle]):
                 Vehicle.tenant_id == str(self.tenant_id),
                 Vehicle.home_location_id == location_id,
                 Vehicle.vehicle_class_id == class_id,
-                Vehicle.status == VehicleStatus.AVAILABLE.value,
+                cast(Vehicle.status, Text) == VehicleStatus.AVAILABLE.value,
                 Vehicle.deleted_at.is_(None),
                 not_(
                     exists(

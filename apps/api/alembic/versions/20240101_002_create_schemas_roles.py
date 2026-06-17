@@ -52,6 +52,7 @@ def upgrade() -> None:
 
     op.execute("GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO app_user")
     op.execute("GRANT INSERT                          ON ALL TABLES IN SCHEMA audit  TO app_service")
+    op.execute("ALTER ROLE app_service BYPASSRLS")
 
     op.execute("""
         ALTER DEFAULT PRIVILEGES IN SCHEMA public

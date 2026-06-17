@@ -20,6 +20,9 @@ depends_on: str | tuple[str, ...] | None = None
 
 
 def upgrade() -> None:
+    op.execute("CREATE SCHEMA IF NOT EXISTS partman")
+    op.execute("CREATE SCHEMA IF NOT EXISTS audit")
+    op.execute("CREATE SCHEMA IF NOT EXISTS archive")
     op.execute('CREATE EXTENSION IF NOT EXISTS "uuid-ossp"')
     op.execute('CREATE EXTENSION IF NOT EXISTS "btree_gist"')
     op.execute('CREATE EXTENSION IF NOT EXISTS "pgcrypto"')

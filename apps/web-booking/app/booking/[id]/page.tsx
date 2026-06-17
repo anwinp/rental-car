@@ -1,84 +1,117 @@
 'use client'
 
-import { useState } from 'react'
+import type React from 'react'
+import { useState, useEffect } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { useRateQuote, useCreateReservation } from '@rcm/api-client'
+import { useRateQuote } from '@rcm/api-client'
 import {
-  Button,
-  Card,
-  CardContent,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-  CardDescription,
-  StepperRoot,
-  StepperList,
-  StepperItem,
-  StepperContent,
   Form,
   FormField,
   FormItem,
   FormLabel,
   FormControl,
   FormMessage,
-  Badge,
   Skeleton,
+  Input,
 } from '@rcm/ui'
-import { Input } from '@rcm/ui'
-import { Providers } from '../../providers'
-
-// --- Zod schema for driver details ---
+import { useBookingDraft } from '../../lib/bookingDraftStore'
+import type { DriverData } from '../../lib/bookingDraftStore'
 
 const driverSchema = z.object({
-  first_name: z.string().min(1, 'First name is required'),
-  last_name: z.string().min(1, 'Last name is required'),
-  email: z.string().email('Please enter a valid email address'),
+  first_name: z.string().min(1, 'Required'),
+  last_name: z.string().min(1, 'Required'),
+  email: z.string().email('Valid email required'),
   phone: z.string().optional(),
+  dob: z.string().optional(),
   dl_number: z.string().optional(),
   dl_state: z.string().optional(),
-  dl_country: z.string().optional(),
+  dl_country: z.string().default('US'),
 })
-
 type DriverFormData = z.infer<typeof driverSchema>
 
-// --- Extras Catalog (stub) ---
+const paymentSchema = z.object({
+  card_name: z.string().min(1, 'Name on card is required'),
+  card_number: z.string().min(19, 'Enter a valid card number'),
+  expiry: z.string().regex(/^\d{2}\/\d{2}$/, 'Format: MM/YY'),
+  cvc: z.string().min(3, 'CVC required').max(4),
+})
+type PaymentFormData = z.infer<typeof paymentSchema>
 
 const EXTRAS = [
   { code: 'CDW', name: 'Collision Damage Waiver', dailyRate: 19.99 },
   { code: 'GPS', name: 'GPS Navigation', dailyRate: 7.99 },
   { code: 'CSS', name: 'Child Safety Seat', dailyRate: 9.99 },
   { code: 'PAI', name: 'Personal Accident Insurance', dailyRate: 4.99 },
-  { code: 'RSN', name: 'Roadside Assistance', dailyRate: 3.99 },
+  { code: 'RSA', name: 'Roadside Assistance', dailyRate: 3.99 },
 ]
+
+const STEPS = ['Extras', 'Driver Info', 'Payment', 'Confirmed']
 
 interface BookingPageProps {
   params: { id: string }
-  searchParams: {
-    pickup?: string
-    from?: string
-    to?: string
-  }
+  searchParams: { pickup?: string; from?: string; to?: string; dropoff?: string }
 }
 
-const STEPS = [
-  { label: 'Vehicle & Extras' },
-  { label: 'Driver Details' },
-  { label: 'Rate Summary' },
-  { label: 'Confirmation' },
-]
+function formatCardNumber(v: string) {
+  return v.replace(/\D/g, '').slice(0, 16).replace(/(.{4})/g, '$1 ').trim()
+}
+function formatExpiry(v: string) {
+  const digits = v.replace(/\D/g, '').slice(0, 4)
+  return digits.length > 2 ? `${digits.slice(0, 2)}/${digits.slice(2)}` : digits
+}
+
+// Cosmos dark card styles
+const cosmosCard: React.CSSProperties = {
+  background: 'rgba(255,255,255,0.025)',
+  border: '1px solid rgba(255,255,255,0.07)',
+  borderRadius: 16,
+  backdropFilter: 'blur(12px)',
+  overflow: 'hidden',
+}
+const cosmosCardHeader: React.CSSProperties = {
+  padding: '20px 24px',
+  borderBottom: '1px solid rgba(255,255,255,0.07)',
+}
+const cosmosCardBody: React.CSSProperties = { padding: 24 }
+const cosmosCardFoot: React.CSSProperties = {
+  padding: '16px 24px',
+  borderTop: '1px solid rgba(255,255,255,0.07)',
+  display: 'flex',
+  justifyContent: 'space-between',
+  flexWrap: 'wrap' as const,
+  gap: 10,
+}
+
+const inputStyle: React.CSSProperties = {
+  display: 'block', width: '100%', padding: '10px 14px',
+  background: 'rgba(255,255,255,0.05)',
+  border: '1px solid rgba(255,255,255,0.12)',
+  borderRadius: 10, color: 'var(--p-text-1)', fontSize: 14,
+  fontWeight: 300, outline: 'none',
+  transition: 'border-color 0.15s',
+}
 
 export default function BookingPage({ params, searchParams }: BookingPageProps) {
   const classId = params.id
-  const { pickup = '', from = '', to = '' } = searchParams
+  const pickup = searchParams.pickup ?? ''
+  const from = searchParams.from ?? ''
+  const to = searchParams.to ?? searchParams.dropoff ?? ''
 
+  const draft = useBookingDraft()
   const [activeStep, setActiveStep] = useState(0)
   const [selectedExtras, setSelectedExtras] = useState<string[]>([])
   const [confirmationNumber, setConfirmationNumber] = useState<string | null>(null)
   const [driverData, setDriverData] = useState<DriverFormData | null>(null)
+  const [ageWarning, setAgeWarning] = useState(false)
+  const [isPending, setIsPending] = useState(false)
+  const [bookingError, setBookingError] = useState<string | null>(null)
 
-  // Rate quote query
+  useEffect(() => {
+    if (draft.selectedExtras.length) setSelectedExtras(draft.selectedExtras)
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
   const daysCount = from && to
     ? Math.max(1, Math.ceil((new Date(to).getTime() - new Date(from).getTime()) / 86400000))
     : 1
@@ -91,422 +124,695 @@ export default function BookingPage({ params, searchParams }: BookingPageProps) 
     extras: selectedExtras,
   })
 
-  const createReservation = useCreateReservation()
-
-  // Driver form
-  const form = useForm<DriverFormData>({
+  const driverForm = useForm<DriverFormData>({
     resolver: zodResolver(driverSchema),
     defaultValues: {
-      first_name: '',
-      last_name: '',
-      email: '',
-      phone: '',
-      dl_number: '',
-      dl_state: '',
+      first_name: draft.driverData?.first_name ?? '',
+      last_name: draft.driverData?.last_name ?? '',
+      email: draft.driverData?.email ?? '',
+      phone: draft.driverData?.phone ?? '',
+      dob: draft.driverData?.dob ?? '',
+      dl_number: draft.driverData?.dl_number ?? '',
+      dl_state: draft.driverData?.dl_state ?? '',
       dl_country: 'US',
     },
   })
 
-  // Extra running total (local calc while quote loads)
-  const extrasTotal = selectedExtras.reduce((sum, code) => {
-    const extra = EXTRAS.find((e) => e.code === code)
-    return sum + (extra?.dailyRate ?? 0) * daysCount
-  }, 0)
+  const paymentForm = useForm<PaymentFormData>({
+    resolver: zodResolver(paymentSchema),
+    defaultValues: { card_name: '', card_number: '', expiry: '', cvc: '' },
+  })
 
   function toggleExtra(code: string) {
-    setSelectedExtras((prev) =>
-      prev.includes(code) ? prev.filter((c) => c !== code) : [...prev, code]
-    )
+    const next = selectedExtras.includes(code)
+      ? selectedExtras.filter(c => c !== code)
+      : [...selectedExtras, code]
+    setSelectedExtras(next)
+    draft.setExtras(next)
   }
 
-  async function handleDriverSubmit(data: DriverFormData) {
+  function handleDriverSubmit(data: DriverFormData) {
+    const driverForStore: DriverData = {
+      first_name: data.first_name,
+      last_name: data.last_name,
+      email: data.email,
+      phone: data.phone ?? '',
+      dob: data.dob ?? '',
+      dl_number: data.dl_number ?? '',
+      dl_state: data.dl_state ?? '',
+      dl_country: data.dl_country ?? 'US',
+    }
     setDriverData(data)
+    draft.setDriverData(driverForStore)
     setActiveStep(2)
   }
 
-  async function handleConfirmBooking() {
+  async function handlePaymentSubmit(_data: PaymentFormData) {
     if (!driverData) return
+    setIsPending(true)
+    setBookingError(null)
     try {
-      const result = await createReservation.mutateAsync({
-        pickup_location_id: pickup,
-        pickup_date: from,
-        dropoff_date: to,
-        class_code: classId,
-        extras: selectedExtras,
-        customer: driverData,
+      const tenantId = process.env.NEXT_PUBLIC_TENANT_ID ?? 'dev'
+      const res = await fetch('/api/v1/reservations/guest', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Tenant-ID': tenantId,
+        },
+        body: JSON.stringify({
+          pickup_location: pickup,
+          vehicle_class_id: classId,
+          pickup_date: from,
+          dropoff_date: to,
+          guest_info: {
+            first_name: driverData.first_name,
+            last_name: driverData.last_name,
+            email: driverData.email,
+            phone: driverData.phone || null,
+          },
+          extras: selectedExtras,
+        }),
       })
+      if (!res.ok) {
+        const ct = res.headers.get('content-type') ?? ''
+        const msg = ct.includes('application/json')
+          ? ((await res.json()) as { detail?: string }).detail ?? res.statusText
+          : `${res.status} ${res.statusText}`
+        throw new Error(msg)
+      }
+      const result = await res.json() as { confirmation_number: string; reservation_id: string }
       setConfirmationNumber(result.confirmation_number)
+      draft.reset()
       setActiveStep(3)
     } catch (err) {
-      console.error('Booking failed', err)
+      setBookingError(err instanceof Error ? err.message : 'Booking failed. Please try again.')
+    } finally {
+      setIsPending(false)
     }
   }
 
+  function checkAge(dob: string) {
+    if (!dob) { setAgeWarning(false); return }
+    const age = Math.floor((Date.now() - new Date(dob).getTime()) / (365.25 * 24 * 3600 * 1000))
+    setAgeWarning(age < 25)
+  }
+
+  const extrasTotal = selectedExtras.reduce((sum, code) => {
+    const e = EXTRAS.find(x => x.code === code)
+    return sum + (e?.dailyRate ?? 0) * daysCount
+  }, 0)
+
   return (
-    <Providers>
-      <div className="min-h-screen bg-background px-4 py-8">
-        <div className="mx-auto max-w-3xl">
-          <h1 className="mb-8 text-2xl font-bold">Complete Your Booking</h1>
+    <div style={{ minHeight: '100vh', background: 'var(--p-surface)', padding: '32px 0' }}>
+      <style>{`
+        @keyframes rcm-pop{0%{transform:scale(0.7);opacity:0}100%{transform:scale(1);opacity:1}}
+        @keyframes rcm-glow{0%,100%{box-shadow:0 0 32px rgba(16,217,160,0.3)}50%{box-shadow:0 0 56px rgba(16,217,160,0.6)}}
+      `}</style>
+      <div style={{ maxWidth: 1100, margin: '0 auto', padding: '0 24px' }}>
+        <div style={{ marginBottom: 36 }}>
+          <p style={{ fontSize: 11, fontWeight: 500, color: 'var(--p-cyan)', textTransform: 'uppercase', letterSpacing: '0.16em', marginBottom: 8 }}>
+            Booking
+          </p>
+          <h1 style={{ fontSize: 32, fontWeight: 300, color: 'var(--p-text-1)', letterSpacing: '-0.05em', margin: 0 }}>
+            Complete Your Booking
+          </h1>
+        </div>
 
-          <StepperRoot
-            activeStep={activeStep}
-            totalSteps={STEPS.length}
-            onStepChange={setActiveStep}
-          >
-            <StepperList aria-label="Booking steps">
-              {STEPS.map((step, i) => (
-                <StepperItem
-                  key={i}
-                  step={i}
-                  label={step.label}
-                  disabled={i > activeStep && activeStep < 3}
-                />
-              ))}
-            </StepperList>
+        {/* Step indicator */}
+        <div style={{ display: 'flex', marginBottom: 40 }}>
+          {STEPS.map((label, i) => (
+            <div key={label} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+              <div style={{ display: 'flex', alignItems: 'center', width: '100%' }}>
+                {i > 0 && (
+                  <div style={{
+                    flex: 1, height: 2,
+                    background: i <= activeStep
+                      ? 'linear-gradient(90deg, #22e2a8, #40b3ff)'
+                      : 'rgba(255,255,255,0.08)',
+                    transition: 'background 0.3s',
+                  }} />
+                )}
+                <div style={{
+                  width: 34, height: 34, borderRadius: '50%', flexShrink: 0,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontSize: 13, fontWeight: 500, transition: 'all 0.3s',
+                  background: i < activeStep
+                    ? 'linear-gradient(135deg, #22e2a8, #40b3ff)'
+                    : i === activeStep
+                      ? 'rgba(34,226,168,0.20)'
+                      : 'rgba(255,255,255,0.06)',
+                  border: i === activeStep
+                    ? '2px solid #22e2a8'
+                    : i < activeStep
+                      ? 'none'
+                      : '2px solid rgba(255,255,255,0.1)',
+                  color: i <= activeStep ? '#fff' : 'var(--p-text-4)',
+                  boxShadow: i === activeStep ? '0 0 16px rgba(34,226,168,0.4)' : 'none',
+                }}>
+                  {i < activeStep
+                    ? <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12" /></svg>
+                    : i + 1}
+                </div>
+                {i < STEPS.length - 1 && (
+                  <div style={{
+                    flex: 1, height: 2,
+                    background: i < activeStep
+                      ? 'linear-gradient(90deg, #22e2a8, #40b3ff)'
+                      : 'rgba(255,255,255,0.08)',
+                    transition: 'background 0.3s',
+                  }} />
+                )}
+              </div>
+              <span style={{
+                fontSize: 11, marginTop: 8, fontWeight: i === activeStep ? 500 : 300,
+                color: i === activeStep ? '#22e2a8' : 'var(--p-text-4)',
+                letterSpacing: '0.04em',
+              }}>
+                {label}
+              </span>
+            </div>
+          ))}
+        </div>
 
-            {/* Step 0: Vehicle & Extras */}
-            <StepperContent step={0}>
-              <Card className="mt-6">
-                <CardHeader>
-                  <CardTitle>Select Extras</CardTitle>
-                  <CardDescription>
-                    Customize your rental with additional options.
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <fieldset>
+        {/* Two-column layout */}
+        <div style={{ display: 'grid', gridTemplateColumns: activeStep === 3 ? '1fr' : 'minmax(0,1fr) 300px', gap: 24, alignItems: 'start' }}>
+
+          {/* Main content */}
+          <div>
+
+            {/* Step 0: Extras */}
+            {activeStep === 0 && (
+              <div style={cosmosCard}>
+                <div style={cosmosCardHeader}>
+                  <h2 style={{ fontSize: 20, fontWeight: 300, color: 'var(--p-text-1)', letterSpacing: '-0.03em', margin: 0 }}>Add Extras</h2>
+                  <p style={{ fontSize: 13, fontWeight: 300, color: 'var(--p-text-3)', marginTop: 4 }}>Customize your rental with optional add-ons.</p>
+                </div>
+                <div style={cosmosCardBody}>
+                  <fieldset style={{ border: 0, padding: 0, margin: 0 }}>
                     <legend className="sr-only">Optional extras</legend>
-                    <div className="space-y-3">
-                      {EXTRAS.map((extra) => {
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                      {EXTRAS.map(extra => {
                         const checked = selectedExtras.includes(extra.code)
                         return (
-                          <label
-                            key={extra.code}
-                            className="flex cursor-pointer items-center justify-between rounded-lg border p-4 transition-colors hover:bg-muted/50 has-[:checked]:border-primary has-[:checked]:bg-primary/5"
-                          >
-                            <div className="flex items-center gap-3">
+                          <label key={extra.code} style={{
+                            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                            padding: '14px 16px', borderRadius: 12, cursor: 'pointer',
+                            border: `1px solid ${checked ? 'rgba(34,226,168,0.4)' : 'rgba(255,255,255,0.07)'}`,
+                            background: checked ? 'rgba(34,226,168,0.08)' : 'rgba(255,255,255,0.02)',
+                            transition: 'all 0.15s',
+                          }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                               <input
                                 type="checkbox"
                                 checked={checked}
                                 onChange={() => toggleExtra(extra.code)}
-                                className="h-4 w-4 rounded border-input accent-primary"
+                                style={{ display: 'none' }}
                                 aria-label={extra.name}
                               />
+                              {/* Custom checkbox */}
+                              <span style={{
+                                width: 18, height: 18, borderRadius: 5, flexShrink: 0,
+                                border: `2px solid ${checked ? '#22e2a8' : 'rgba(255,255,255,0.2)'}`,
+                                background: checked ? '#22e2a8' : 'transparent',
+                                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                transition: 'all 0.15s',
+                              }}>
+                                {checked && (
+                                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round">
+                                    <polyline points="20 6 9 17 4 12"/>
+                                  </svg>
+                                )}
+                              </span>
                               <div>
-                                <p className="font-medium">{extra.name}</p>
-                                <p className="text-sm text-muted-foreground">{extra.code}</p>
+                                <div style={{ fontSize: 14, fontWeight: 300, color: 'var(--p-text-1)' }}>{extra.name}</div>
+                                <div style={{ fontSize: 12, fontWeight: 400, color: 'var(--p-text-4)' }}>{extra.code}</div>
                               </div>
                             </div>
-                            <p className="font-semibold">
-                              ${extra.dailyRate.toFixed(2)}<span className="text-xs font-normal text-muted-foreground">/day</span>
-                            </p>
+                            <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                              <div style={{ fontSize: 15, fontWeight: 300, color: checked ? '#22e2a8' : 'var(--p-text-1)' }}>
+                                ${extra.dailyRate.toFixed(2)}
+                              </div>
+                              <div style={{ fontSize: 11, fontWeight: 400, color: 'var(--p-text-4)' }}>/day</div>
+                            </div>
                           </label>
                         )
                       })}
                     </div>
                   </fieldset>
-
-                  {selectedExtras.length > 0 && (
-                    <div className="mt-4 rounded-lg bg-muted/50 p-3 text-sm">
-                      <div className="flex justify-between">
-                        <span>Extras subtotal ({daysCount} day{daysCount !== 1 ? 's' : ''})</span>
-                        <span className="font-semibold">${extrasTotal.toFixed(2)}</span>
-                      </div>
-                    </div>
-                  )}
-                </CardContent>
-                <CardFooter className="justify-end">
-                  <Button onClick={() => setActiveStep(1)}>
-                    Continue to Driver Details
-                  </Button>
-                </CardFooter>
-              </Card>
-            </StepperContent>
+                </div>
+                <div style={{ ...cosmosCardFoot, justifyContent: 'flex-end' }}>
+                  <button
+                    onClick={() => setActiveStep(1)}
+                    style={{
+                      padding: '11px 24px', borderRadius: 10,
+                      background: 'linear-gradient(135deg, #22e2a8 0%, #40b3ff 100%)',
+                      color: '#fff', fontWeight: 500, border: 'none', cursor: 'pointer',
+                      boxShadow: '0 0 20px rgba(34,226,168,0.35)', fontSize: 14,
+                    }}
+                  >
+                    Continue to Driver Info →
+                  </button>
+                </div>
+              </div>
+            )}
 
             {/* Step 1: Driver Details */}
-            <StepperContent step={1}>
-              <Card className="mt-6">
-                <CardHeader>
-                  <CardTitle>Driver Details</CardTitle>
-                  <CardDescription>
-                    Enter the primary driver information.
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <Form {...form}>
-                    <form
-                      id="driver-form"
-                      onSubmit={form.handleSubmit(handleDriverSubmit)}
-                      noValidate
-                      className="space-y-4"
-                    >
-                      <div className="grid grid-cols-2 gap-4">
-                        <FormField
-                          control={form.control}
-                          name="first_name"
-                          render={({ field }) => (
-                            <FormItem>
-                              <FormLabel>First Name <span aria-hidden>*</span></FormLabel>
-                              <FormControl>
-                                <div>
-                                  <Input placeholder="Jane" {...field} />
-                                </div>
-                              </FormControl>
-                              <FormMessage />
-                            </FormItem>
-                          )}
-                        />
-                        <FormField
-                          control={form.control}
-                          name="last_name"
-                          render={({ field }) => (
-                            <FormItem>
-                              <FormLabel>Last Name <span aria-hidden>*</span></FormLabel>
-                              <FormControl>
-                                <div>
-                                  <Input placeholder="Smith" {...field} />
-                                </div>
-                              </FormControl>
-                              <FormMessage />
-                            </FormItem>
-                          )}
-                        />
+            {activeStep === 1 && (
+              <div style={cosmosCard}>
+                <div style={cosmosCardHeader}>
+                  <h2 style={{ fontSize: 20, fontWeight: 300, color: 'var(--p-text-1)', letterSpacing: '-0.03em', margin: 0 }}>Driver Details</h2>
+                  <p style={{ fontSize: 13, fontWeight: 300, color: 'var(--p-text-3)', marginTop: 4 }}>Enter the primary driver&apos;s information.</p>
+                </div>
+                <div style={cosmosCardBody}>
+                  <Form {...driverForm}>
+                    <form id="driver-form" onSubmit={driverForm.handleSubmit(handleDriverSubmit)} noValidate>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
+                        <FormField control={driverForm.control} name="first_name" render={({ field }) => (
+                          <FormItem>
+                            <FormLabel style={{ fontSize: 12, fontWeight: 500, color: 'var(--p-text-3)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>First Name *</FormLabel>
+                            <FormControl><div><Input placeholder="Jane" {...field} style={inputStyle} /></div></FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )} />
+                        <FormField control={driverForm.control} name="last_name" render={({ field }) => (
+                          <FormItem>
+                            <FormLabel style={{ fontSize: 12, fontWeight: 500, color: 'var(--p-text-3)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Last Name *</FormLabel>
+                            <FormControl><div><Input placeholder="Smith" {...field} style={inputStyle} /></div></FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )} />
                       </div>
-                      <FormField
-                        control={form.control}
-                        name="email"
-                        render={({ field }) => (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                        <FormField control={driverForm.control} name="email" render={({ field }) => (
                           <FormItem>
-                            <FormLabel>Email Address <span aria-hidden>*</span></FormLabel>
+                            <FormLabel style={{ fontSize: 12, fontWeight: 500, color: 'var(--p-text-3)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Email Address *</FormLabel>
+                            <FormControl><div><Input type="email" placeholder="jane@example.com" {...field} style={inputStyle} /></div></FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )} />
+                        <FormField control={driverForm.control} name="phone" render={({ field }) => (
+                          <FormItem>
+                            <FormLabel style={{ fontSize: 12, fontWeight: 500, color: 'var(--p-text-3)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Phone Number</FormLabel>
+                            <FormControl><div><Input type="tel" placeholder="+1 (555) 000-0000" {...field} style={inputStyle} /></div></FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )} />
+                        <FormField control={driverForm.control} name="dob" render={({ field }) => (
+                          <FormItem>
+                            <FormLabel style={{ fontSize: 12, fontWeight: 500, color: 'var(--p-text-3)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Date of Birth</FormLabel>
                             <FormControl>
                               <div>
-                                <Input type="email" placeholder="jane@example.com" {...field} />
+                                <Input
+                                  type="date"
+                                  max={new Date().toISOString().slice(0, 10)}
+                                  {...field}
+                                  onChange={e => { field.onChange(e); checkAge(e.target.value) }}
+                                  style={inputStyle}
+                                />
                               </div>
                             </FormControl>
                             <FormMessage />
                           </FormItem>
+                        )} />
+                        {ageWarning && (
+                          <div role="alert" style={{
+                            padding: '10px 14px',
+                            background: 'rgba(251,191,36,0.08)',
+                            border: '1px solid rgba(251,191,36,0.25)',
+                            borderRadius: 10, fontSize: 13, fontWeight: 300,
+                            color: '#fbbf24', display: 'flex', alignItems: 'center', gap: 8,
+                          }}>
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                            Young driver surcharge may apply for drivers under 25.
+                          </div>
                         )}
-                      />
-                      <FormField
-                        control={form.control}
-                        name="phone"
-                        render={({ field }) => (
-                          <FormItem>
-                            <FormLabel>Phone Number</FormLabel>
-                            <FormControl>
-                              <div>
-                                <Input type="tel" placeholder="+1 (555) 000-0000" {...field} />
-                              </div>
-                            </FormControl>
-                            <FormMessage />
-                          </FormItem>
-                        )}
-                      />
-                      <div className="grid grid-cols-3 gap-4">
-                        <FormField
-                          control={form.control}
-                          name="dl_number"
-                          render={({ field }) => (
-                            <FormItem className="col-span-2">
-                              <FormLabel>Driver License Number</FormLabel>
-                              <FormControl>
-                                <div>
-                                  <Input placeholder="D12345678" {...field} />
-                                </div>
-                              </FormControl>
-                              <FormMessage />
-                            </FormItem>
-                          )}
-                        />
-                        <FormField
-                          control={form.control}
-                          name="dl_state"
-                          render={({ field }) => (
+                        <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 16 }}>
+                          <FormField control={driverForm.control} name="dl_number" render={({ field }) => (
                             <FormItem>
-                              <FormLabel>State</FormLabel>
-                              <FormControl>
-                                <div>
-                                  <Input placeholder="CA" maxLength={2} {...field} />
-                                </div>
-                              </FormControl>
+                              <FormLabel style={{ fontSize: 12, fontWeight: 500, color: 'var(--p-text-3)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Driver License #</FormLabel>
+                              <FormControl><div><Input placeholder="D12345678" {...field} style={inputStyle} /></div></FormControl>
                               <FormMessage />
                             </FormItem>
-                          )}
-                        />
+                          )} />
+                          <FormField control={driverForm.control} name="dl_state" render={({ field }) => (
+                            <FormItem>
+                              <FormLabel style={{ fontSize: 12, fontWeight: 500, color: 'var(--p-text-3)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>State</FormLabel>
+                              <FormControl><div><Input placeholder="CA" maxLength={2} {...field} style={inputStyle} /></div></FormControl>
+                              <FormMessage />
+                            </FormItem>
+                          )} />
+                        </div>
                       </div>
                     </form>
                   </Form>
-                </CardContent>
-                <CardFooter className="justify-between">
-                  <Button variant="outline" onClick={() => setActiveStep(0)}>
-                    Back
-                  </Button>
-                  <Button type="submit" form="driver-form">
-                    Continue to Rate Summary
-                  </Button>
-                </CardFooter>
-              </Card>
-            </StepperContent>
+                </div>
+                <div style={cosmosCardFoot}>
+                  <button
+                    onClick={() => setActiveStep(0)}
+                    style={{
+                      padding: '11px 24px', borderRadius: 10,
+                      background: 'transparent', color: 'var(--p-text-2)',
+                      border: '1px solid rgba(255,255,255,0.12)',
+                      fontWeight: 400, cursor: 'pointer', fontSize: 14,
+                    }}
+                  >
+                    ← Back
+                  </button>
+                  <button
+                    type="submit" form="driver-form"
+                    style={{
+                      padding: '11px 24px', borderRadius: 10,
+                      background: 'linear-gradient(135deg, #22e2a8 0%, #40b3ff 100%)',
+                      color: '#fff', fontWeight: 500, border: 'none', cursor: 'pointer',
+                      boxShadow: '0 0 20px rgba(34,226,168,0.35)', fontSize: 14,
+                    }}
+                  >
+                    Continue to Payment →
+                  </button>
+                </div>
+              </div>
+            )}
 
-            {/* Step 2: Rate Summary */}
-            <StepperContent step={2}>
-              <Card className="mt-6">
-                <CardHeader>
-                  <CardTitle>Rate Summary</CardTitle>
-                  <CardDescription>
-                    Review pricing before confirming your booking.
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
-                  {quoteLoading ? (
-                    <div className="space-y-3" aria-busy="true" aria-label="Loading rate summary">
-                      {[...Array(5)].map((_, i) => (
-                        <Skeleton key={i} className="h-6 w-full" />
-                      ))}
-                    </div>
-                  ) : quote ? (
-                    <div className="space-y-2">
-                      {quote.line_items.map((item, i) => (
-                        <div key={i} className="flex justify-between text-sm">
-                          <span
-                            className={
-                              item.type === 'tax' || item.type === 'fee'
-                                ? 'text-muted-foreground'
-                                : undefined
-                            }
-                          >
-                            {item.description}
-                          </span>
-                          <span
-                            className={
-                              item.type === 'discount' ? 'text-green-600' : undefined
-                            }
-                          >
-                            {item.type === 'discount' ? '-' : ''}
-                            {new Intl.NumberFormat('en-US', {
-                              style: 'currency',
-                              currency: item.currency_code,
-                            }).format(Math.abs(item.amount))}
-                          </span>
+            {/* Step 2: Payment */}
+            {activeStep === 2 && (
+              <div style={cosmosCard}>
+                <div style={cosmosCardHeader}>
+                  <h2 style={{ fontSize: 20, fontWeight: 300, color: 'var(--p-text-1)', letterSpacing: '-0.03em', margin: 0 }}>Payment</h2>
+                  <p style={{ fontSize: 13, fontWeight: 300, color: 'var(--p-text-3)', marginTop: 4 }}>Enter your payment details to complete the booking.</p>
+                </div>
+                <div style={cosmosCardBody}>
+                  <Form {...paymentForm}>
+                    <form id="payment-form" onSubmit={paymentForm.handleSubmit(handlePaymentSubmit)} noValidate>
+                      {/* Card visual */}
+                      <div style={{
+                        height: 160, borderRadius: 14,
+                        background: 'linear-gradient(135deg, #0d7a5f 0%, #22e2a8 50%, #40b3ff 100%)',
+                        padding: '24px 28px', marginBottom: 24,
+                        display: 'flex', flexDirection: 'column', justifyContent: 'space-between',
+                        position: 'relative', overflow: 'hidden',
+                        boxShadow: '0 8px 40px rgba(34,226,168,0.3)',
+                      }}>
+                        <div style={{ position: 'absolute', right: -20, top: -20, width: 180, height: 180, borderRadius: '50%', background: 'rgba(255,255,255,0.06)' }} aria-hidden="true" />
+                        <div style={{ position: 'absolute', right: 30, bottom: -40, width: 140, height: 140, borderRadius: '50%', background: 'rgba(255,255,255,0.04)' }} aria-hidden="true" />
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', position: 'relative' }}>
+                          <span style={{ fontSize: 16, fontWeight: 300, color: 'rgba(255,255,255,0.95)', letterSpacing: '0.12em' }}>RCM</span>
+                          <svg width="40" height="26" viewBox="0 0 750 471" fill="none" aria-hidden="true">
+                            <circle cx="284" cy="236" r="200" fill="rgba(255,255,255,0.25)" />
+                            <circle cx="466" cy="236" r="200" fill="rgba(255,255,255,0.12)" />
+                          </svg>
                         </div>
-                      ))}
-                      <div className="mt-4 flex justify-between border-t pt-4 text-base font-bold">
-                        <span>Total</span>
-                        <span>
-                          {new Intl.NumberFormat('en-US', {
-                            style: 'currency',
-                            currency: quote.currency_code,
-                          }).format(quote.total)}
+                        <div style={{ position: 'relative' }}>
+                          <div style={{ fontFamily: 'monospace', fontSize: 18, fontWeight: 300, color: '#fff', letterSpacing: '0.15em' }}>
+                            {paymentForm.watch('card_number') || '•••• •••• •••• ••••'}
+                          </div>
+                          <div style={{ display: 'flex', gap: 24, marginTop: 8 }}>
+                            <div>
+                              <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.6)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Card Holder</div>
+                              <div style={{ fontSize: 13, fontWeight: 300, color: 'rgba(255,255,255,0.9)', marginTop: 2 }}>{paymentForm.watch('card_name') || 'Your Name'}</div>
+                            </div>
+                            <div>
+                              <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.6)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Expires</div>
+                              <div style={{ fontSize: 13, fontWeight: 300, color: 'rgba(255,255,255,0.9)', marginTop: 2 }}>{paymentForm.watch('expiry') || 'MM/YY'}</div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                        <FormField control={paymentForm.control} name="card_name" render={({ field }) => (
+                          <FormItem>
+                            <FormLabel style={{ fontSize: 12, fontWeight: 500, color: 'var(--p-text-3)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Name on Card *</FormLabel>
+                            <FormControl><div><Input placeholder="Jane Smith" autoComplete="cc-name" {...field} style={inputStyle} /></div></FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )} />
+                        <FormField control={paymentForm.control} name="card_number" render={({ field }) => (
+                          <FormItem>
+                            <FormLabel style={{ fontSize: 12, fontWeight: 500, color: 'var(--p-text-3)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Card Number *</FormLabel>
+                            <FormControl>
+                              <div>
+                                <Input
+                                  placeholder="1234 5678 9012 3456"
+                                  inputMode="numeric"
+                                  autoComplete="cc-number"
+                                  maxLength={19}
+                                  {...field}
+                                  onChange={e => field.onChange(formatCardNumber(e.target.value))}
+                                  style={inputStyle}
+                                />
+                              </div>
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )} />
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+                          <FormField control={paymentForm.control} name="expiry" render={({ field }) => (
+                            <FormItem>
+                              <FormLabel style={{ fontSize: 12, fontWeight: 500, color: 'var(--p-text-3)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Expiry *</FormLabel>
+                              <FormControl>
+                                <div>
+                                  <Input
+                                    placeholder="MM/YY"
+                                    inputMode="numeric"
+                                    autoComplete="cc-exp"
+                                    maxLength={5}
+                                    {...field}
+                                    onChange={e => field.onChange(formatExpiry(e.target.value))}
+                                    style={inputStyle}
+                                  />
+                                </div>
+                              </FormControl>
+                              <FormMessage />
+                            </FormItem>
+                          )} />
+                          <FormField control={paymentForm.control} name="cvc" render={({ field }) => (
+                            <FormItem>
+                              <FormLabel style={{ fontSize: 12, fontWeight: 500, color: 'var(--p-text-3)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>CVC *</FormLabel>
+                              <FormControl>
+                                <div>
+                                  <Input
+                                    type="password"
+                                    placeholder="123"
+                                    inputMode="numeric"
+                                    autoComplete="cc-csc"
+                                    maxLength={4}
+                                    {...field}
+                                    onChange={e => field.onChange(e.target.value.replace(/\D/g, ''))}
+                                    style={inputStyle}
+                                  />
+                                </div>
+                              </FormControl>
+                              <FormMessage />
+                            </FormItem>
+                          )} />
+                        </div>
+                      </div>
+
+                      <div style={{ marginTop: 16, padding: '10px 14px', background: 'rgba(16,217,160,0.07)', border: '1px solid rgba(16,217,160,0.2)', borderRadius: 10, display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, fontWeight: 300, color: '#10d9a0' }}>
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                        Secured with 256-bit SSL encryption · Demo mode
+                      </div>
+
+                      {bookingError && (
+                        <div role="alert" style={{ marginTop: 16, padding: '10px 14px', background: 'rgba(240,78,78,0.08)', border: '1px solid rgba(240,78,78,0.25)', borderRadius: 10, fontSize: 13, fontWeight: 300, color: '#f04e4e' }}>
+                          {bookingError}
+                        </div>
+                      )}
+                    </form>
+                  </Form>
+                </div>
+                <div style={cosmosCardFoot}>
+                  <button
+                    onClick={() => setActiveStep(1)}
+                    style={{
+                      padding: '11px 24px', borderRadius: 10,
+                      background: 'transparent', color: 'var(--p-text-2)',
+                      border: '1px solid rgba(255,255,255,0.12)',
+                      fontWeight: 400, cursor: 'pointer', fontSize: 14,
+                    }}
+                  >
+                    ← Back
+                  </button>
+                  <button
+                    type="submit"
+                    form="payment-form"
+                    disabled={isPending}
+                    aria-busy={isPending}
+                    style={{
+                      padding: '11px 24px', borderRadius: 10,
+                      background: isPending
+                        ? 'rgba(34,226,168,0.4)'
+                        : 'linear-gradient(135deg, #22e2a8 0%, #40b3ff 100%)',
+                      color: '#fff', fontWeight: 500, border: 'none',
+                      cursor: isPending ? 'not-allowed' : 'pointer',
+                      boxShadow: '0 0 20px rgba(34,226,168,0.35)', fontSize: 14,
+                    }}
+                  >
+                    {isPending ? 'Confirming…' : 'Confirm & Pay'}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Step 3: Confirmed */}
+            {activeStep === 3 && (
+              <div style={{ ...cosmosCard, textAlign: 'center' }}>
+                <div style={{ padding: '56px 40px' }}>
+                  {/* Animated success ring */}
+                  <div style={{ position: 'relative', width: 88, height: 88, margin: '0 auto 24px', animation: 'rcm-pop 0.5s cubic-bezier(0.34,1.56,0.64,1) both' }}>
+                    <div style={{
+                      position: 'absolute', inset: 0, borderRadius: '50%',
+                      background: 'rgba(16,217,160,0.12)',
+                      border: '2px solid rgba(16,217,160,0.3)',
+                      animation: 'rcm-glow 2s ease-in-out infinite',
+                    }} />
+                    <div style={{
+                      position: 'absolute', inset: 8, borderRadius: '50%',
+                      background: 'rgba(16,217,160,0.15)',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    }}>
+                      <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#10d9a0" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12" /></svg>
+                    </div>
+                  </div>
+
+                  <h2 style={{ fontSize: 32, fontWeight: 300, color: 'var(--p-text-1)', letterSpacing: '-0.05em', marginBottom: 10 }}>Booking Confirmed!</h2>
+                  <p style={{ fontSize: 14, fontWeight: 300, color: 'var(--p-text-3)', marginBottom: 32 }}>
+                    A confirmation has been sent to{' '}
+                    <span style={{ color: '#22e2a8', fontWeight: 400 }}>{driverData?.email}</span>
+                  </p>
+
+                  {confirmationNumber && (
+                    <div style={{
+                      background: 'rgba(34,226,168,0.08)',
+                      border: '1px solid rgba(34,226,168,0.2)',
+                      borderRadius: 14, padding: '20px 32px',
+                      display: 'inline-block', marginBottom: 36,
+                    }}>
+                      <p style={{ fontSize: 11, fontWeight: 500, color: 'var(--p-text-4)', textTransform: 'uppercase', letterSpacing: '0.16em', marginBottom: 10 }}>Confirmation Number</p>
+                      <code style={{ fontFamily: 'monospace', fontSize: 30, fontWeight: 300, color: '#22e2a8', letterSpacing: '0.12em' }}>
+                        {confirmationNumber}
+                      </code>
+                    </div>
+                  )}
+
+                  <div style={{ display: 'flex', gap: 12, justifyContent: 'center', flexWrap: 'wrap' }}>
+                    <a
+                      href={`/confirmation/${confirmationNumber}`}
+                      style={{
+                        padding: '11px 24px', borderRadius: 10,
+                        background: 'transparent', color: 'var(--p-text-2)',
+                        border: '1px solid rgba(255,255,255,0.12)',
+                        fontWeight: 400, textDecoration: 'none', fontSize: 14,
+                      }}
+                    >
+                      View Full Details
+                    </a>
+                    <a
+                      href="/"
+                      style={{
+                        padding: '11px 24px', borderRadius: 10,
+                        background: 'linear-gradient(135deg, #22e2a8 0%, #40b3ff 100%)',
+                        color: '#fff', fontWeight: 500, textDecoration: 'none', fontSize: 14,
+                        boxShadow: '0 0 20px rgba(34,226,168,0.35)',
+                      }}
+                    >
+                      Book Another Car
+                    </a>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Sticky sidebar */}
+          {activeStep < 3 && (
+            <div style={{
+              background: 'rgba(255,255,255,0.025)',
+              border: '1px solid rgba(255,255,255,0.07)',
+              borderRadius: 16,
+              backdropFilter: 'blur(12px)',
+              position: 'sticky',
+              top: 80,
+            }}>
+              <div style={{ padding: '16px 20px', borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
+                <p style={{ fontSize: 11, fontWeight: 500, color: 'var(--p-cyan)', textTransform: 'uppercase', letterSpacing: '0.16em', marginBottom: 4 }}>Summary</p>
+                <h3 style={{ fontSize: 16, fontWeight: 300, color: 'var(--p-text-1)', letterSpacing: '-0.02em', margin: 0 }}>Price Breakdown</h3>
+                <p style={{ fontSize: 12, fontWeight: 300, color: 'var(--p-text-4)', marginTop: 2 }}>{daysCount} day{daysCount !== 1 ? 's' : ''}</p>
+              </div>
+              <div style={{ padding: 20 }}>
+                {quoteLoading ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    {[...Array(4)].map((_, i) => <Skeleton key={i} className="h-4 w-full" />)}
+                  </div>
+                ) : quote ? (
+                  <>
+                    {quote.line_items.map((item, i) => (
+                      <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 10 }}>
+                        <span style={{ fontWeight: 300, color: item.type === 'tax' || item.type === 'fee' ? 'var(--p-text-4)' : 'var(--p-text-3)' }}>
+                          {item.description}
+                        </span>
+                        <span style={{ fontWeight: 400, color: item.type === 'discount' ? '#10d9a0' : 'var(--p-text-1)' }}>
+                          {item.type === 'discount' ? '-' : ''}
+                          {new Intl.NumberFormat('en-US', { style: 'currency', currency: item.currency_code }).format(Math.abs(item.amount))}
                         </span>
                       </div>
+                    ))}
+                    <div style={{ height: 1, background: 'rgba(255,255,255,0.07)', margin: '12px 0' }} />
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 18 }}>
+                      <span style={{ fontWeight: 300, color: 'var(--p-text-1)' }}>Total</span>
+                      <span style={{ fontWeight: 300, color: '#22e2a8', letterSpacing: '-0.02em' }}>
+                        {new Intl.NumberFormat('en-US', { style: 'currency', currency: quote.currency_code }).format(quote.total)}
+                      </span>
                     </div>
-                  ) : (
-                    <p className="text-muted-foreground text-sm">
-                      Rate information unavailable. You can still complete your booking.
-                    </p>
-                  )}
+                  </>
+                ) : (
+                  <>
+                    {selectedExtras.length > 0 && (
+                      <>
+                        {selectedExtras.map(code => {
+                          const e = EXTRAS.find(x => x.code === code)
+                          if (!e) return null
+                          return (
+                            <div key={code} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 8 }}>
+                              <span style={{ fontWeight: 300, color: 'var(--p-text-3)' }}>{e.name}</span>
+                              <span style={{ fontWeight: 400, color: 'var(--p-text-1)' }}>${(e.dailyRate * daysCount).toFixed(2)}</span>
+                            </div>
+                          )
+                        })}
+                        <div style={{ height: 1, background: 'rgba(255,255,255,0.07)', margin: '10px 0' }} />
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14 }}>
+                          <span style={{ fontWeight: 300, color: 'var(--p-text-1)' }}>Extras subtotal</span>
+                          <span style={{ fontWeight: 400, color: '#22e2a8' }}>${extrasTotal.toFixed(2)}</span>
+                        </div>
+                      </>
+                    )}
+                    {selectedExtras.length === 0 && (
+                      <p style={{ fontSize: 13, fontWeight: 300, color: 'var(--p-text-4)' }}>Select extras to see pricing.</p>
+                    )}
+                  </>
+                )}
 
-                  {/* Stripe placeholder */}
-                  <div
-                    className="mt-6 rounded-lg border-2 border-dashed border-muted-foreground/30 bg-muted/20 p-8 text-center"
-                    role="region"
-                    aria-label="Payment form — coming soon"
-                  >
-                    <p className="text-sm font-medium text-muted-foreground">
-                      Stripe Payment Element
-                    </p>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      Payment integration coming in the next sprint
-                    </p>
+                {(from || to) && (
+                  <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid rgba(255,255,255,0.07)' }}>
+                    {from && (
+                      <div style={{ fontSize: 12, fontWeight: 300, color: 'var(--p-text-4)', marginBottom: 4 }}>
+                        <span style={{ color: 'var(--p-text-3)', fontWeight: 400 }}>Pickup</span>{' '}
+                        {new Date(from).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                      </div>
+                    )}
+                    {to && (
+                      <div style={{ fontSize: 12, fontWeight: 300, color: 'var(--p-text-4)' }}>
+                        <span style={{ color: 'var(--p-text-3)', fontWeight: 400 }}>Return</span>{' '}
+                        {new Date(to).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                      </div>
+                    )}
                   </div>
-                </CardContent>
-                <CardFooter className="justify-between">
-                  <Button variant="outline" onClick={() => setActiveStep(1)}>
-                    Back
-                  </Button>
-                  <Button
-                    onClick={handleConfirmBooking}
-                    disabled={createReservation.isPending}
-                    aria-busy={createReservation.isPending}
-                  >
-                    {createReservation.isPending ? 'Booking...' : 'Confirm Booking'}
-                  </Button>
-                </CardFooter>
-              </Card>
-
-              {createReservation.isError && (
-                <div
-                  role="alert"
-                  aria-live="polite"
-                  className="mt-4 rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-sm text-destructive"
-                >
-                  {createReservation.error instanceof Error
-                    ? createReservation.error.message
-                    : 'Booking failed. Please try again.'}
-                </div>
-              )}
-            </StepperContent>
-
-            {/* Step 3: Confirmation */}
-            <StepperContent step={3}>
-              <Card className="mt-6">
-                <CardHeader>
-                  <div className="flex items-center gap-3">
-                    <div className="flex h-12 w-12 items-center justify-center rounded-full bg-green-100">
-                      <svg
-                        xmlns="http://www.w3.org/2000/svg"
-                        width="24"
-                        height="24"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        className="text-green-700"
-                        aria-hidden="true"
-                      >
-                        <polyline points="20 6 9 17 4 12" />
-                      </svg>
-                    </div>
-                    <div>
-                      <CardTitle>Booking Confirmed!</CardTitle>
-                      <CardDescription>
-                        A confirmation has been sent to {driverData?.email}
-                      </CardDescription>
-                    </div>
-                  </div>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  {confirmationNumber && (
-                    <div className="rounded-lg bg-muted p-4 text-center">
-                      <p className="text-sm text-muted-foreground">Confirmation Number</p>
-                      <p className="mt-1 text-3xl font-bold tracking-wider">
-                        {confirmationNumber}
-                      </p>
-                    </div>
-                  )}
-                  <p className="text-sm text-muted-foreground">
-                    Please keep this confirmation number handy when you pick up your vehicle.
-                    You can also manage your booking online.
-                  </p>
-                </CardContent>
-                <CardFooter className="justify-between">
-                  <a
-                    href={`/manage/${confirmationNumber}`}
-                    className="text-sm text-primary underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  >
-                    Manage My Booking
-                  </a>
-                  <Button asChild>
-                    <a href="/">Book Another Car</a>
-                  </Button>
-                </CardFooter>
-              </Card>
-            </StepperContent>
-          </StepperRoot>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       </div>
-    </Providers>
+    </div>
   )
 }

@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Optional
 
-from sqlalchemy import select, and_, text
+from sqlalchemy import Text, and_, cast, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import BusinessRuleError, ResourceNotFoundError
@@ -397,7 +397,7 @@ class DamageService:
             DamageClaim.tenant_id == str(tenant_id),
         ]
         if status:
-            conditions.append(DamageClaim.status == status)
+            conditions.append(cast(DamageClaim.status, Text) == status)
         if vehicle_id:
             conditions.append(DamageClaim.vehicle_id == str(vehicle_id))
         if date_from:

@@ -49,7 +49,7 @@ def upgrade() -> None:
         CREATE POLICY tenant_isolation ON public.rate_schedule_items
           USING (tenant_id = current_setting('app.current_tenant_id', true)::uuid)
     """)
-    op.execute("ALTER TABLE public.rate_schedule_items NO FORCE ROW LEVEL SECURITY FOR ROLE app_service")
+
 
 
 def downgrade() -> None:

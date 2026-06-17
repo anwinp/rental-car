@@ -197,7 +197,7 @@ def set_auth_cookies(
 
 
 async def get_current_user(
-    access_token: Optional[str] = Cookie(default=None, alias="access_token"),
+    access_token: Optional[str] = Cookie(default=None, alias="rcm_access"),
 ) -> UserClaims:
     """
     FastAPI dependency. Validates the access token from the httpOnly cookie.
@@ -221,6 +221,22 @@ async def get_current_user(
         )
 
     return claims
+
+
+async def get_optional_current_user(
+    access_token: Optional[str] = Cookie(default=None, alias="rcm_access"),
+) -> Optional[UserClaims]:
+    """Like get_current_user but returns None instead of raising 401 when unauthenticated."""
+    if not access_token:
+        return None
+    try:
+        claims = decode_token(access_token)
+        redis = get_session_redis()
+        if await redis.sismember(REVOKED_TOKENS_SET, claims.jti):
+            return None
+        return claims
+    except HTTPException:
+        return None
 
 
 async def verify_ws_token(

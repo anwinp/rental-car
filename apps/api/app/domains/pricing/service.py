@@ -108,6 +108,15 @@ class PricingService:
             dropoff_dt=request.dropoff_dt,
             cdp_code=request.cdp_code,
         )
+        if rate_code is None and request.cdp_code is not None:
+            # CDP code not matched — fall back to standard (RACK/PROMOTIONAL) rate
+            rate_code = await self._repo.get_active_rate_code(
+                location_id=request.location_id,
+                vehicle_class_id=request.vehicle_class_id,
+                pickup_dt=request.pickup_dt,
+                dropoff_dt=request.dropoff_dt,
+                cdp_code=None,
+            )
         if rate_code is None:
             raise ResourceNotFoundError(
                 resource="rate_code",

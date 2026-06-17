@@ -6,6 +6,7 @@ Function-scoped session rolls back after every test for isolation.
 """
 from __future__ import annotations
 
+import os
 import uuid
 from typing import AsyncGenerator
 from unittest.mock import AsyncMock
@@ -15,11 +16,17 @@ import pytest
 import pytest_asyncio
 from sqlalchemy import MetaData, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
 
 # ---------------------------------------------------------------------------
-# Test database URL — matches GitHub Actions postgres:16 service
+# Test database URL — override via TEST_DATABASE_URL env var in CI.
+# Falls back to the local Docker dev DB (port 5434) so integration tests
+# can run against the fully-migrated Alembic schema with all triggers/RLS.
 # ---------------------------------------------------------------------------
-TEST_DATABASE_URL = "postgresql+asyncpg://rcm_user:rcm_pass@localhost:5432/rcm_test"
+TEST_DATABASE_URL = os.getenv(
+    "TEST_DATABASE_URL",
+    "postgresql+asyncpg://rcm:rcm_dev_password@127.0.0.1:5434/rcm_dev",
+)
 
 
 def _collect_metadata() -> MetaData:
@@ -74,14 +81,21 @@ def _collect_metadata() -> MetaData:
 
 @pytest_asyncio.fixture(scope="session")
 async def engine():
-    """Create test engine, create all tables, yield, drop all."""
-    metadata = _collect_metadata()
-    test_engine = create_async_engine(TEST_DATABASE_URL, echo=False)
-    async with test_engine.begin() as conn:
-        await conn.run_sync(metadata.create_all)
+    """
+    Create test engine and yield it.
+
+    When running against the local dev DB (rcm_dev) the schema is already
+    managed by Alembic migrations including triggers, RLS, and GiST indexes.
+    We do NOT call create_all/drop_all here to avoid destroying the dev schema.
+    In CI, TEST_DATABASE_URL points to a disposable postgres:16 service and
+    Alembic migrations are run as a pre-test step.
+    """
+    test_engine = create_async_engine(
+        TEST_DATABASE_URL,
+        echo=False,
+        poolclass=NullPool,  # fresh connection per test; avoids asyncpg state contamination
+    )
     yield test_engine
-    async with test_engine.begin() as conn:
-        await conn.run_sync(metadata.drop_all)
     await test_engine.dispose()
 
 
@@ -95,8 +109,9 @@ async def session(engine) -> AsyncGenerator[tuple[AsyncSession, str], None]:
     """Per-test async session that rolls back all changes after the test."""
     async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     test_tenant_id = str(uuid.uuid4())
-    async with async_session() as sess:
-        await sess.begin()
+    sess = async_session()
+    await sess.begin()
+    try:
         # Inject GUC session variables so RLS policies and audit triggers fire correctly
         await sess.execute(
             text("SELECT set_config('app.current_tenant_id', :v, true)"),
@@ -119,7 +134,12 @@ async def session(engine) -> AsyncGenerator[tuple[AsyncSession, str], None]:
             {"v": str(uuid.uuid4())},
         )
         yield sess, test_tenant_id
-        await sess.rollback()
+    finally:
+        try:
+            await sess.rollback()
+        except Exception:
+            pass
+        await sess.close()
 
 
 # ---------------------------------------------------------------------------

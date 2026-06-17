@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Optional
 
-from sqlalchemy import and_, insert, select, update
+from sqlalchemy import Text, and_, cast, insert, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -66,7 +66,7 @@ class PaymentRepository:
             select(Payment).where(
                 and_(
                     Payment.reservation_id == reservation_id,
-                    Payment.status == "AUTHORIZED",
+                    cast(Payment.status, Text) == "AUTHORIZED",
                     Payment.payment_type == "PREAUTH",
                     self._tenant_filter(),
                 )
@@ -120,7 +120,7 @@ class PaymentRepository:
         result = await self._session.execute(
             select(Payment).where(
                 and_(
-                    Payment.status == "AUTHORIZED",
+                    cast(Payment.status, Text) == "AUTHORIZED",
                     Payment.payment_type == "PREAUTH",
                     Payment.auth_expiry_at.isnot(None),
                     Payment.auth_expiry_at <= cutoff_expr,

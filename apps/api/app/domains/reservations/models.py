@@ -37,9 +37,9 @@ class Reservation(Base):
     reservation_id: Mapped[str] = mapped_column(
         UUID(as_uuid=False), primary_key=True, server_default=func.uuid_generate_v4()
     )
-    tenant_id: Mapped[str] = mapped_column(
-        UUID(as_uuid=False), ForeignKey("tenants.tenant_id"), nullable=False
-    )
+    # Cross-domain FKs are enforced at DB level; omit ORM-level ForeignKey()
+    # to avoid DeclarativeBase resolution errors across domains.
+    tenant_id: Mapped[str] = mapped_column(UUID(as_uuid=False), nullable=False)
     # System-wide unique (GAP-006: no tenant scope on UNIQUE constraint)
     confirmation_number: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
 
@@ -49,19 +49,13 @@ class Reservation(Base):
     # Version counter incremented on each modification
     version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
 
-    customer_id: Mapped[str] = mapped_column(
-        UUID(as_uuid=False), ForeignKey("customers.customer_id"), nullable=False
-    )
+    customer_id: Mapped[str] = mapped_column(UUID(as_uuid=False), nullable=False)
     corporate_account_id: Mapped[Optional[str]] = mapped_column(
         UUID(as_uuid=False), nullable=True
     )
 
-    pickup_location_id: Mapped[str] = mapped_column(
-        UUID(as_uuid=False), ForeignKey("locations.location_id"), nullable=False
-    )
-    dropoff_location_id: Mapped[str] = mapped_column(
-        UUID(as_uuid=False), ForeignKey("locations.location_id"), nullable=False
-    )
+    pickup_location_id: Mapped[str] = mapped_column(UUID(as_uuid=False), nullable=False)
+    dropoff_location_id: Mapped[str] = mapped_column(UUID(as_uuid=False), nullable=False)
     pickup_datetime: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
@@ -72,25 +66,19 @@ class Reservation(Base):
         DateTime(timezone=True), nullable=True
     )
 
-    vehicle_class_id: Mapped[str] = mapped_column(
-        UUID(as_uuid=False), ForeignKey("vehicle_classes.class_id"), nullable=False
-    )
+    vehicle_class_id: Mapped[str] = mapped_column(UUID(as_uuid=False), nullable=False)
     assigned_vehicle_id: Mapped[Optional[str]] = mapped_column(
-        UUID(as_uuid=False), ForeignKey("vehicles.vehicle_id"), nullable=True
+        UUID(as_uuid=False), nullable=True
     )
 
-    rate_code_id: Mapped[Optional[str]] = mapped_column(
-        UUID(as_uuid=False), ForeignKey("rate_codes.rate_code_id"), nullable=True
-    )
+    rate_code_id: Mapped[Optional[str]] = mapped_column(UUID(as_uuid=False), nullable=True)
     cdp_code: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     promo_code: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     currency: Mapped[str] = mapped_column(String(3), nullable=False, server_default="USD")
 
     # Financial snapshot columns
-    base_rate_daily: Mapped[Optional[Decimal]] = mapped_column(
-        Numeric(10, 2), nullable=True
-    )
+    base_rate_daily: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 2), nullable=True)
     base_total: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 2), nullable=True)
     extras_total: Mapped[Decimal] = mapped_column(
         Numeric(10, 2), nullable=False, server_default="0"
@@ -150,9 +138,7 @@ class Reservation(Base):
     is_training: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default="false"
     )
-    booking_agent_id: Mapped[Optional[str]] = mapped_column(
-        UUID(as_uuid=False), ForeignKey("staff_users.user_id"), nullable=True
-    )
+    booking_agent_id: Mapped[Optional[str]] = mapped_column(UUID(as_uuid=False), nullable=True)
 
     # The rate quote token used at booking — validated against Redis
     rate_quote_token: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -173,6 +159,7 @@ class Reservation(Base):
         back_populates="reservation",
         order_by="ReservationVersion.version_number.asc()",
         lazy="select",
+        foreign_keys="ReservationVersion.reservation_id",
     )
 
     __table_args__ = (
@@ -198,9 +185,7 @@ class ReservationVersion(Base):
     version_id: Mapped[str] = mapped_column(
         UUID(as_uuid=False), primary_key=True, server_default=func.uuid_generate_v4()
     )
-    tenant_id: Mapped[str] = mapped_column(
-        UUID(as_uuid=False), ForeignKey("tenants.tenant_id"), nullable=False
-    )
+    tenant_id: Mapped[str] = mapped_column(UUID(as_uuid=False), nullable=False)
     reservation_id: Mapped[str] = mapped_column(
         UUID(as_uuid=False),
         ForeignKey("reservations.reservation_id"),
@@ -209,24 +194,12 @@ class ReservationVersion(Base):
     version_number: Mapped[int] = mapped_column(Integer, nullable=False)
 
     status_at_version: Mapped[str] = mapped_column(Text, nullable=False)
-    pickup_location_id: Mapped[str] = mapped_column(
-        UUID(as_uuid=False), nullable=False
-    )
-    dropoff_location_id: Mapped[str] = mapped_column(
-        UUID(as_uuid=False), nullable=False
-    )
-    pickup_datetime: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
-    )
-    return_datetime: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
-    )
-    vehicle_class_id: Mapped[str] = mapped_column(
-        UUID(as_uuid=False), nullable=False
-    )
-    rate_code_id: Mapped[Optional[str]] = mapped_column(
-        UUID(as_uuid=False), nullable=True
-    )
+    pickup_location_id: Mapped[str] = mapped_column(UUID(as_uuid=False), nullable=False)
+    dropoff_location_id: Mapped[str] = mapped_column(UUID(as_uuid=False), nullable=False)
+    pickup_datetime: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    return_datetime: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    vehicle_class_id: Mapped[str] = mapped_column(UUID(as_uuid=False), nullable=False)
+    rate_code_id: Mapped[Optional[str]] = mapped_column(UUID(as_uuid=False), nullable=True)
     grand_total: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 2), nullable=True)
 
     # Full snapshot of extras at this version
@@ -243,7 +216,9 @@ class ReservationVersion(Base):
 
     # Relationship back to parent reservation
     reservation: Mapped["Reservation"] = relationship(
-        "Reservation", back_populates="versions"
+        "Reservation",
+        back_populates="versions",
+        foreign_keys=[reservation_id],
     )
 
     __table_args__ = (

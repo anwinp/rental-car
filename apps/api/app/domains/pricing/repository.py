@@ -6,7 +6,7 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Optional
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import Text, and_, case, cast, func, or_, select
 
 from app.core.repository import BaseRepository
 from app.domains.pricing.models import ExtrasCatalog, RateCode, RateScheduleItem
@@ -59,7 +59,7 @@ class PricingRepository(BaseRepository[RateCode]):
                 .where(
                     *base_conditions,
                     RateCode.cdp_code == cdp_code,
-                    RateCode.rate_type == "CORPORATE",
+                    cast(RateCode.rate_type, Text) == "CORPORATE",
                 )
                 .order_by(RateCode.created_at.asc())
                 .limit(1)
@@ -76,10 +76,10 @@ class PricingRepository(BaseRepository[RateCode]):
             .order_by(
                 # Prefer more specific rate types first:
                 # PROMOTIONAL > CORPORATE > RACK (GOVERNMENT, INSURANCE, etc. as-is)
-                func.case(
-                    (RateCode.rate_type == "PROMOTIONAL", 1),
-                    (RateCode.rate_type == "CORPORATE", 2),
-                    (RateCode.rate_type == "GOVERNMENT", 3),
+                case(
+                    (cast(RateCode.rate_type, Text) == "PROMOTIONAL", 1),
+                    (cast(RateCode.rate_type, Text) == "CORPORATE", 2),
+                    (cast(RateCode.rate_type, Text) == "GOVERNMENT", 3),
                     else_=10,
                 ).asc(),
                 RateCode.created_at.asc(),

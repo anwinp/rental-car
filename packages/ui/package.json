@@ -13,14 +13,14 @@
       "types": "./dist/index.d.ts"
     },
     "./auth": {
-      "import": "./dist/auth.js",
-      "require": "./dist/auth.cjs",
-      "types": "./dist/auth.d.ts"
+      "import": "./dist/auth/index.js",
+      "require": "./dist/auth/index.cjs",
+      "types": "./dist/auth/index.d.ts"
     },
     "./query": {
-      "import": "./dist/query.js",
-      "require": "./dist/query.cjs",
-      "types": "./dist/query.d.ts"
+      "import": "./dist/query/index.js",
+      "require": "./dist/query/index.cjs",
+      "types": "./dist/query/index.d.ts"
     }
   },
   "scripts": {

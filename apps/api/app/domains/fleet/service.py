@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Optional
 from uuid import UUID
 
+from sqlalchemy import Text, cast
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import (
@@ -172,7 +173,7 @@ class FleetService:
         if location_id:
             filters.append(Vehicle.home_location_id == location_id)
         if status:
-            filters.append(Vehicle.status == status)
+            filters.append(cast(Vehicle.status, Text) == status)
         if class_id:
             filters.append(Vehicle.vehicle_class_id == class_id)
         return await repo.list(limit=limit, offset=offset, filters=filters or None)
@@ -385,7 +386,7 @@ class FleetService:
                 filters=[
                     Vehicle.home_location_id == query.location_id,
                     Vehicle.vehicle_class_id == query.vehicle_class_id,
-                    Vehicle.status == VehicleStatus.AVAILABLE.value,
+                    cast(Vehicle.status, Text) == VehicleStatus.AVAILABLE.value,
                 ]
             )
             response.vehicles = [VehicleResponse.model_validate(v) for v in vehicles]

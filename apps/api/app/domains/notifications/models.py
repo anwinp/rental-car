@@ -68,16 +68,13 @@ class NotificationLog(Base):
 
     # Composite PK required by pg_partman: (log_id, created_at)
     log_id: Mapped[str] = mapped_column(
-        UUID(as_uuid=False), nullable=False, server_default=func.uuid_generate_v4()
+        UUID(as_uuid=False), primary_key=True, server_default=func.uuid_generate_v4()
     )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now()
+        DateTime(timezone=True), primary_key=True, server_default=func.now()
     )
 
-    # Primary key spanning both columns (matches DDL)
-    __table_args__ = (
-        {"info": {"primary_key_columns": ["log_id", "created_at"]}},
-    )
+    __table_args__ = ({"schema": None},)
 
     tenant_id: Mapped[str] = mapped_column(UUID(as_uuid=False), nullable=False)
     customer_id: Mapped[Optional[str]] = mapped_column(UUID(as_uuid=False), nullable=True)

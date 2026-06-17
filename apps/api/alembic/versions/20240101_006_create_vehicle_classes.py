@@ -47,7 +47,7 @@ def upgrade() -> None:
         CREATE POLICY tenant_isolation ON public.vehicle_classes
           USING (tenant_id IS NULL OR tenant_id = current_setting('app.current_tenant_id', true)::uuid)
     """)
-    op.execute("ALTER TABLE public.vehicle_classes NO FORCE ROW LEVEL SECURITY FOR ROLE app_service")
+
 
 
 def downgrade() -> None:

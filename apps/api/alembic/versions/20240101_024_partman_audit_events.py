@@ -26,7 +26,7 @@ def upgrade() -> None:
           p_parent_table    => 'audit.audit_events',
           p_control         => 'event_time',
           p_type            => 'range',
-          p_interval        => 'monthly',
+          p_interval        => '1 month',
           p_premake         => 3,
           p_start_partition => '2025-01-01'
         )

@@ -352,7 +352,7 @@ class TestCancelReservationWithFee:
         with pytest.raises(BusinessRuleError):
             await svc.cancel_reservation(
                 reservation_id=UUID(reservation.reservation_id),
-                data=CancellationRequest(reason="Test", waive_fee=False),
+                data=CancellationRequest(reason="Test cancellation", waive_fee=False),
                 actor_id=ACTOR_ID,
                 actor_roles=["COUNTER_AGENT"],
             )

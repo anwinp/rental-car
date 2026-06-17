@@ -3,13 +3,21 @@ version: '3.9'
 
 services:
   postgres:
-    image: postgres:16-alpine
+    build:
+      context: docker/postgres
+      dockerfile: Dockerfile
+    command: >
+      postgres
+      -c shared_preload_libraries='pg_cron,pg_partman_bgw'
+      -c cron.database_name=rcm_dev
+      -c pg_partman_bgw.dbname=rcm_dev
+      -c pg_partman_bgw.interval=3600
     environment:
       POSTGRES_DB: rcm_dev
       POSTGRES_USER: rcm
       POSTGRES_PASSWORD: rcm_dev_password
     ports:
-      - "5432:5432"
+      - "5434:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -37,7 +45,7 @@ services:
     image: redis:7-alpine
     command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru --port 6379
     ports:
-      - "6379:6379"
+      - "6382:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s

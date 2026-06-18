@@ -7,6 +7,9 @@ type ApiVehicle = {
   current_location_id: string | null; vehicle_class_id: string
   plate_number: string | null; odometer_current: number
   is_active: boolean
+  is_promo: boolean
+  promo_image_url: string | null
+  promo_label: string | null
 }
 
 type Location = {
@@ -138,6 +141,12 @@ export function FleetPage() {
       if (form.home_location_id !== vehicle.home_location_id) patch.home_location_id = form.home_location_id
       if (Number(form.odometer_current) !== vehicle.odometer_current) patch.odometer_current = Number(form.odometer_current)
       if (form.status !== vehicle.status) patch.status = form.status
+      const isPromo = form.is_promo === 'true'
+      if (isPromo !== vehicle.is_promo) patch.is_promo = isPromo
+      const imageUrl = form.promo_image_url.trim() || null
+      if (imageUrl !== vehicle.promo_image_url) patch.promo_image_url = imageUrl
+      const promoLabel = form.promo_label.trim() || null
+      if (promoLabel !== vehicle.promo_label) patch.promo_label = promoLabel
       if (Object.keys(patch).length === 0) return
       await patchVehicle(vehicle.vehicle_id, patch)
     },
@@ -186,6 +195,9 @@ export function FleetPage() {
       status:           v.status,
       home_location_id: v.home_location_id,
       odometer_current: String(v.odometer_current),
+      is_promo:         String(v.is_promo ?? false),
+      promo_image_url:  v.promo_image_url ?? '',
+      promo_label:      v.promo_label ?? '',
     })
   }
 
@@ -552,6 +564,44 @@ export function FleetPage() {
                   value={editForm.odometer_current} onChange={e => efi('odometer_current', e.target.value)}
                   className="field-input h-9 px-3 text-[13px] w-full num" />
               </div>
+
+              {/* Promo section */}
+              <div style={{ borderTop: '1px solid var(--border-sub)', paddingTop: 14 }}>
+                <p className="text-[11px] font-semibold tracking-wider uppercase mb-3" style={{ color: 'var(--text-3)' }}>
+                  Promotional Display
+                </p>
+                <label className="flex items-center gap-2 mb-3 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={editForm.is_promo === 'true'}
+                    onChange={e => efi('is_promo', String(e.target.checked))}
+                    className="w-4 h-4 accent-red-600"
+                  />
+                  <span className="text-[13px]" style={{ color: 'var(--text-1)' }}>Feature on homepage</span>
+                </label>
+                {editForm.is_promo === 'true' && (
+                  <>
+                    <div className="mb-3">
+                      <ModalLabel>Promo Label <span style={{ fontWeight: 400 }}>(badge on image)</span></ModalLabel>
+                      <input type="text" placeholder="e.g. Most Requested"
+                        value={editForm.promo_label} onChange={e => efi('promo_label', e.target.value)}
+                        className="field-input h-9 px-3 text-[13px] w-full" />
+                    </div>
+                    <div>
+                      <ModalLabel>Promo Image URL</ModalLabel>
+                      <input type="url" placeholder="https://..."
+                        value={editForm.promo_image_url} onChange={e => efi('promo_image_url', e.target.value)}
+                        className="field-input h-9 px-3 text-[13px] w-full" />
+                      {editForm.promo_image_url && (
+                        <img src={editForm.promo_image_url} alt="preview"
+                          style={{ marginTop: 8, width: '100%', aspectRatio: '16/9', objectFit: 'cover', border: '1px solid var(--border-sub)' }}
+                          onError={e => { (e.currentTarget as HTMLImageElement).style.display = 'none' }} />
+                      )}
+                    </div>
+                  </>
+                )}
+              </div>
+
               <div className="flex items-center justify-end gap-2 pt-2" style={{ borderTop: '1px solid var(--border-sub)' }}>
                 <button type="button" onClick={() => setEditVehicle(null)} className="btn-secondary">Cancel</button>
                 <button type="submit" className="btn-primary" disabled={editMutation.isPending}>

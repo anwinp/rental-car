@@ -297,6 +297,48 @@ async def _resolve_location_id(
 
 
 @router.get(
+    "/promo",
+    summary="Public: list vehicles marked as promotional",
+)
+async def list_promo_vehicles(
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+) -> list[dict[str, Any]]:
+    """Returns vehicles with is_promo=true, ordered by make/model. No auth required."""
+    from sqlalchemy import select, cast, Text as SAText
+    from app.domains.fleet.models import Vehicle
+
+    tenant_id: str = request.headers.get("X-Tenant-ID") or ""
+
+    stmt = (
+        select(Vehicle)
+        .where(
+            cast(Vehicle.tenant_id, SAText) == tenant_id,
+            Vehicle.is_promo == True,  # noqa: E712
+            Vehicle.deleted_at.is_(None),
+        )
+        .order_by(Vehicle.make, Vehicle.model)
+    )
+    result = await session.execute(stmt)
+    vehicles = result.scalars().all()
+    return [
+        {
+            "vehicle_id": v.vehicle_id,
+            "make": v.make,
+            "model": v.model,
+            "model_year": v.model_year,
+            "trim": v.trim,
+            "exterior_color": v.exterior_color,
+            "vehicle_class_id": v.vehicle_class_id,
+            "promo_image_url": v.promo_image_url,
+            "promo_label": v.promo_label,
+            "status": v.status,
+        }
+        for v in vehicles
+    ]
+
+
+@router.get(
     "/search",
     summary="Public: search available vehicle classes for a date range",
 )

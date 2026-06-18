@@ -31,6 +31,15 @@ export default defineConfig({
       devOptions: { enabled: true },
     }),
   ],
+  server: {
+    port: 3001,
+    proxy: {
+      '/api': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+      },
+    },
+  },
   resolve: {
     alias: {
       '@': '/src',

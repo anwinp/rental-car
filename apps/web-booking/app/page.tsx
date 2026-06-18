@@ -4,14 +4,18 @@ import { useState, useEffect, useRef } from 'react'
 
 const RED = '#da291c'
 const RED_ACTIVE = '#b01e0a'
-const TENANT_ID = process.env.NEXT_PUBLIC_TENANT_ID ?? '00000000-0000-0000-0000-000000000001'
+const TENANT_ID = '00000000-0000-0000-0000-000000000001'
 
-const VEHICLES = [
-  { name: 'RCM Stradale V8',    price: 1200, zero60: '2.9s', hp: 710,  img: '/assets/hero_cinema.png',     waitlist: false },
-  { name: 'RCM GT Berlinetta',  price: 950,  zero60: '3.2s', hp: 620,  img: '/assets/action_cinema.png',   waitlist: false },
-  { name: 'RCM Pista Track-Ed', price: 1800, zero60: '2.7s', hp: 800,  img: '/assets/interior_cinema.png', waitlist: false },
-  { name: 'RCM Spider',         price: 1400, zero60: '3.0s', hp: 680,  img: null,                          waitlist: true  },
-]
+interface PromoVehicle {
+  vehicle_id: string
+  make: string
+  model: string
+  model_year: number
+  trim: string | null
+  promo_image_url: string | null
+  promo_label: string | null
+  status: string
+}
 
 const INPUT_DARK: React.CSSProperties = {
   background: '#181818',
@@ -274,52 +278,63 @@ function LocationCombobox({
 
 // ── Vehicle Card ──────────────────────────────────────────────────────────────
 
-function VehicleCard({ name, price, zero60, hp, img, waitlist }: typeof VEHICLES[0]) {
+function VehicleCard({ make, model, model_year, trim, promo_image_url, promo_label, status }: PromoVehicle) {
   const [hov, setHov] = useState(false)
+  const available = status === 'AVAILABLE'
+  const displayName = `${model_year} ${make} ${model}${trim ? ' ' + trim : ''}`
   return (
-    <div style={{ background: '#ffffff', border: '1px solid #d2d2d2', borderRadius: 0, padding: 24, display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+    <div style={{ background: '#ffffff', border: '1px solid #d2d2d2', borderRadius: 0, display: 'flex', flexDirection: 'column', justifyContent: 'space-between', overflow: 'hidden' }}>
       <div>
-        {img
-          ? <img src={img} alt={name} style={{ width: '100%', aspectRatio: '4/3', objectFit: 'cover', display: 'block', marginBottom: 16 }} />
+        {promo_image_url
+          ? (
+            <div style={{ position: 'relative' }}>
+              <img src={promo_image_url} alt={displayName} style={{ width: '100%', aspectRatio: '16/9', objectFit: 'cover', display: 'block' }} />
+              {promo_label && (
+                <span style={{
+                  position: 'absolute', top: 12, left: 12,
+                  background: RED, color: '#fff',
+                  fontSize: 10, fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase',
+                  padding: '4px 10px',
+                }}>
+                  {promo_label}
+                </span>
+              )}
+            </div>
+          )
           : (
-            <div style={{ width: '100%', aspectRatio: '4/3', background: '#e0e0e0', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 16 }}>
-              <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: '1.1px', textTransform: 'uppercase', color: '#666' }}>Waitlist</span>
+            <div style={{ width: '100%', aspectRatio: '16/9', background: '#e8e8e8', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: '1.1px', textTransform: 'uppercase', color: '#999' }}>No Image</span>
             </div>
           )
         }
-        <h3 style={{ fontSize: 18, fontWeight: 700, color: '#181818', lineHeight: 1.2, marginBottom: 8 }}>{name}</h3>
-        <p style={{ fontSize: 18, fontWeight: 700, color: RED, margin: 0 }}>
-          ${price.toLocaleString()}
-          <span style={{ fontSize: 14, fontWeight: 400, color: '#666666' }}> / DAY</span>
-        </p>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 16, borderTop: '1px solid #d2d2d2', paddingTop: 16 }}>
-          <div style={{ display: 'flex', flexDirection: 'column' }}>
-            <span style={{ fontSize: 24, fontWeight: 700, color: '#181818', letterSpacing: '-0.5px', lineHeight: 1 }}>{zero60}</span>
-            <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: '1.1px', textTransform: 'uppercase', color: '#666666', marginTop: 2 }}>0-60 MPH</span>
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column' }}>
-            <span style={{ fontSize: 24, fontWeight: 700, color: '#181818', letterSpacing: '-0.5px', lineHeight: 1 }}>{hp}</span>
-            <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: '1.1px', textTransform: 'uppercase', color: '#666666', marginTop: 2 }}>HORSEPOWER</span>
-          </div>
+        <div style={{ padding: '20px 20px 0' }}>
+          <h3 style={{ fontSize: 17, fontWeight: 700, color: '#181818', lineHeight: 1.2, marginBottom: 4 }}>{displayName}</h3>
+          {!available && (
+            <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', color: '#999' }}>
+              Currently Unavailable
+            </span>
+          )}
         </div>
       </div>
-      <a
-        href={waitlist ? '#' : '/search'}
-        onMouseEnter={() => setHov(true)}
-        onMouseLeave={() => setHov(false)}
-        style={{
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          marginTop: 24, height: 48,
-          border: waitlist ? '1px solid #cccccc' : '1px solid #181818',
-          background: waitlist ? 'transparent' : (hov ? '#181818' : 'transparent'),
-          color: waitlist ? '#999999' : (hov ? '#ffffff' : '#181818'),
-          fontSize: 14, fontWeight: 700, letterSpacing: '1.4px', textTransform: 'uppercase',
-          textDecoration: 'none', cursor: waitlist ? 'not-allowed' : 'pointer',
-          transition: 'background 0.2s, color 0.2s', borderRadius: 0,
-        }}
-      >
-        {waitlist ? 'Unavailable' : 'Reserve'}
-      </a>
+      <div style={{ padding: '16px 20px 20px' }}>
+        <a
+          href={available ? '/search' : '#'}
+          onMouseEnter={() => setHov(true)}
+          onMouseLeave={() => setHov(false)}
+          style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            height: 48, width: '100%',
+            border: available ? '1px solid #181818' : '1px solid #cccccc',
+            background: available ? (hov ? '#181818' : 'transparent') : 'transparent',
+            color: available ? (hov ? '#ffffff' : '#181818') : '#999999',
+            fontSize: 13, fontWeight: 700, letterSpacing: '1.4px', textTransform: 'uppercase',
+            textDecoration: 'none', cursor: available ? 'pointer' : 'not-allowed',
+            transition: 'background 0.2s, color 0.2s', borderRadius: 0,
+          }}
+        >
+          {available ? 'Reserve' : 'Unavailable'}
+        </a>
+      </div>
     </div>
   )
 }
@@ -335,8 +350,19 @@ export default function HomePage() {
   const [toDate,        setToDate]        = useState('')
   const [btnHov,        setBtnHov]        = useState(false)
   const [livHov,        setLivHov]        = useState(false)
+  const [promoVehicles, setPromoVehicles] = useState<PromoVehicle[]>([])
+  const [loadingPromo,  setLoadingPromo]  = useState(true)
   const [locations,     setLocations]     = useState<PublicLocation[]>([])
   const [loadingLoc,    setLoadingLoc]    = useState(true)
+
+  useEffect(() => {
+    let cancelled = false
+    fetch('/api/v1/fleet/promo', { headers: { 'X-Tenant-ID': TENANT_ID } })
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then((data: PromoVehicle[]) => { if (!cancelled) { setPromoVehicles(data); setLoadingPromo(false) } })
+      .catch(() => { if (!cancelled) setLoadingPromo(false) })
+    return () => { cancelled = true }
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -424,9 +450,9 @@ export default function HomePage() {
                 style={{
                   background: btnHov ? RED_ACTIVE : RED,
                   color: '#ffffff',
-                  fontSize: 14, fontWeight: 700, letterSpacing: '1.4px', textTransform: 'uppercase',
+                  fontSize: 11, fontWeight: 700, letterSpacing: '1.4px', textTransform: 'uppercase',
                   height: 48, border: 'none', cursor: 'pointer', borderRadius: 0, width: '100%',
-                  transition: 'background 0.2s', fontFamily: 'inherit',
+                  transition: 'background 0.2s', fontFamily: 'inherit', padding: '0 12px',
                 }}
               >
                 Check Availability
@@ -439,12 +465,27 @@ export default function HomePage() {
       {/* ── 2. FLEET (white) ────────────────────────────────────────────────── */}
       <section id="fleet" style={{ background: '#ffffff', color: '#181818', padding: '96px 48px' }}>
         <div style={{ maxWidth: 1280, margin: '0 auto' }}>
-          <h2 style={{ fontSize: 36, fontWeight: 500, letterSpacing: '-0.36px', color: '#181818', marginBottom: 32 }}>
+          <h2 style={{ fontSize: 36, fontWeight: 500, letterSpacing: '-0.36px', color: '#181818', marginBottom: 8 }}>
             Reserve Your Vehicle
           </h2>
-          <div className="fleet-grid" style={{ display: 'grid', gap: 24 }}>
-            {VEHICLES.map(v => <VehicleCard key={v.name} {...v} />)}
-          </div>
+          <p style={{ fontSize: 14, color: '#666666', marginBottom: 32 }}>
+            Featured vehicles available now. <a href="/search" style={{ color: RED, fontWeight: 600, textDecoration: 'none' }}>See full inventory</a>
+          </p>
+          {loadingPromo ? (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 24 }}>
+              {[...Array(4)].map((_, i) => (
+                <div key={i} style={{ background: '#f0f0f0', aspectRatio: '3/4', border: '1px solid #e0e0e0' }} />
+              ))}
+            </div>
+          ) : promoVehicles.length === 0 ? (
+            <div style={{ padding: '48px 0', textAlign: 'center' }}>
+              <p style={{ fontSize: 14, color: '#999999' }}>No featured vehicles at this time. <a href="/search" style={{ color: RED, textDecoration: 'none', fontWeight: 600 }}>Browse all available vehicles</a></p>
+            </div>
+          ) : (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 24 }}>
+              {promoVehicles.map(v => <VehicleCard key={v.vehicle_id} {...v} />)}
+            </div>
+          )}
         </div>
       </section>
 
@@ -478,7 +519,145 @@ export default function HomePage() {
         </div>
       </section>
 
-      {/* ── 4. LIVERY BAND (red) ────────────────────────────────────────────── */}
+      {/* ── 4. LOCATIONS ────────────────────────────────────────────────────── */}
+      <section id="locations" style={{ background: '#111111', padding: '96px 48px', borderTop: '1px solid #222222' }}>
+        <div style={{ maxWidth: 1280, margin: '0 auto' }}>
+          <p style={{ fontSize: 11, fontWeight: 600, color: '#666666', textTransform: 'uppercase', letterSpacing: '1.2px', marginBottom: 12 }}>
+            Rental Locations
+          </p>
+          <h2 style={{ fontSize: 36, fontWeight: 500, color: '#ffffff', letterSpacing: '-0.05em', marginBottom: 12 }}>
+            Available Nationwide
+          </h2>
+          <p style={{ fontSize: 14, fontWeight: 400, color: '#969696', maxWidth: 520, lineHeight: 1.6, marginBottom: 48 }}>
+            Premium vehicles waiting at major airports across the United States. Walk off the jet and into the driver&apos;s seat.
+          </p>
+
+          {loadingLoc ? (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 2 }}>
+              {[...Array(6)].map((_, i) => (
+                <div key={i} style={{ height: 160, background: '#1e1e1e', border: '1px solid rgba(255,255,255,0.06)' }} />
+              ))}
+            </div>
+          ) : (
+            <div style={{ display: 'grid', gap: 2, gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))' }}>
+              {[...locations].sort((a, b) => a.city.localeCompare(b.city)).map(loc => (
+                <a
+                  key={loc.location_id}
+                  href={`/search?pickup=${loc.short_code}`}
+                  style={{
+                    textDecoration: 'none', display: 'block',
+                    background: '#181818', border: '1px solid rgba(255,255,255,0.07)',
+                    transition: 'border-color 0.2s, background 0.2s',
+                  }}
+                  onMouseEnter={e => {
+                    const el = e.currentTarget as HTMLElement
+                    el.style.borderColor = 'rgba(218,41,28,0.45)'
+                    el.style.background = '#1e1e1e'
+                  }}
+                  onMouseLeave={e => {
+                    const el = e.currentTarget as HTMLElement
+                    el.style.borderColor = 'rgba(255,255,255,0.07)'
+                    el.style.background = '#181818'
+                  }}
+                >
+                  <div style={{
+                    padding: '28px 24px', height: '100%', boxSizing: 'border-box',
+                    display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: 20,
+                  }}>
+                    {/* Top: code + type */}
+                    <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
+                      <span style={{
+                        fontFamily: 'monospace', fontSize: 32, fontWeight: 700,
+                        color: 'rgba(255,255,255,0.12)', letterSpacing: '0.04em', lineHeight: 1,
+                      }}>
+                        {loc.airport_code ?? loc.short_code}
+                      </span>
+                      <span style={{
+                        fontSize: 10, fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase',
+                        color: '#666666', border: '1px solid #303030', padding: '3px 8px',
+                      }}>
+                        {loc.location_type === 'AIRPORT' ? 'Airport' : loc.location_type.charAt(0) + loc.location_type.slice(1).toLowerCase()}
+                      </span>
+                    </div>
+
+                    {/* Bottom: name + city + CTA */}
+                    <div>
+                      <p style={{ fontSize: 15, fontWeight: 500, color: '#ffffff', letterSpacing: '-0.01em', marginBottom: 4, lineHeight: 1.3 }}>
+                        {loc.name}
+                      </p>
+                      <p style={{ fontSize: 12, fontWeight: 400, color: '#666666', marginBottom: 16 }}>
+                        {loc.city}{loc.state_province ? `, ${loc.state_province}` : ''} · {loc.country_code}
+                      </p>
+                      <span style={{
+                        fontSize: 12, fontWeight: 700, color: RED,
+                        letterSpacing: '1px', textTransform: 'uppercase',
+                        display: 'flex', alignItems: 'center', gap: 6,
+                      }}>
+                        Search Cars
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                          <path d="M5 12h14M12 5l7 7-7 7"/>
+                        </svg>
+                      </span>
+                    </div>
+                  </div>
+                </a>
+              ))}
+            </div>
+          )}
+        </div>
+      </section>
+
+      {/* ── 5. CONCIERGE / ABOUT ────────────────────────────────────────────── */}
+      <section id="about" style={{ background: '#181818', borderTop: '1px solid #222222', padding: '96px 48px' }}>
+        <div style={{ maxWidth: 1280, margin: '0 auto', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 80, alignItems: 'center' }}>
+          {/* Left: copy */}
+          <div>
+            <p style={{ fontSize: 11, fontWeight: 600, color: '#666666', textTransform: 'uppercase', letterSpacing: '1.2px', marginBottom: 12 }}>
+              Concierge Service
+            </p>
+            <h2 style={{ fontSize: 36, fontWeight: 500, color: '#ffffff', letterSpacing: '-0.05em', marginBottom: 20, lineHeight: 1.15 }}>
+              Your personal pit crew, on call 24/7
+            </h2>
+            <p style={{ fontSize: 14, fontWeight: 400, color: '#969696', lineHeight: 1.7, marginBottom: 16 }}>
+              Every reservation comes with a dedicated concierge. From airport handoffs and custom driving routes to hotel coordination and track bookings — we handle the details so you can focus on the road.
+            </p>
+            <p style={{ fontSize: 14, fontWeight: 400, color: '#969696', lineHeight: 1.7, marginBottom: 40 }}>
+              Available via phone, text, or in-app. Response time under 5 minutes, guaranteed.
+            </p>
+            <a
+              href="/search"
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 10,
+                height: 48, padding: '0 32px',
+                background: RED, color: '#ffffff',
+                fontSize: 13, fontWeight: 700, letterSpacing: '1.4px', textTransform: 'uppercase',
+                textDecoration: 'none', borderRadius: 0, transition: 'opacity 0.15s',
+              }}
+              onMouseEnter={e => (e.currentTarget as HTMLElement).style.opacity = '0.85'}
+              onMouseLeave={e => (e.currentTarget as HTMLElement).style.opacity = '1'}
+            >
+              Reserve now
+            </a>
+          </div>
+
+          {/* Right: service pillars */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            {[
+              { title: 'Airport Meet & Greet',    body: 'Your vehicle is ready at the curb when you land. No queues, no desks.' },
+              { title: 'Bespoke Driving Routes',  body: 'Curated itineraries for canyon runs, coastal roads, and track days.' },
+              { title: 'Vehicle Delivery',         body: 'We deliver directly to your hotel, residence, or event venue.' },
+              { title: 'Priority Modifications',   body: 'Date changes, upgrades, and extras handled instantly — no fees.' },
+            ].map(item => (
+              <div key={item.title} style={{ background: '#242424', border: '1px solid rgba(255,255,255,0.07)', padding: '20px 24px' }}>
+                <p style={{ fontSize: 13, fontWeight: 600, color: '#ffffff', letterSpacing: '-0.01em', marginBottom: 6 }}>{item.title}</p>
+                <p style={{ fontSize: 13, fontWeight: 400, color: '#666666', lineHeight: 1.6 }}>{item.body}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ── 6. LIVERY BAND (red) ────────────────────────────────────────────── */}
       <section style={{ background: RED, padding: '96px 48px', textAlign: 'center' }}>
         <h2 style={{ fontSize: 36, fontWeight: 500, letterSpacing: '-0.36px', color: '#ffffff', marginBottom: 16 }}>
           Join The Club

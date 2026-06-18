@@ -142,6 +142,30 @@ class VehicleSwapRequest(BaseModel):
 
 # ── Rental Agreement Read ─────────────────────────────────────────────────────
 
+class ActiveRentalItem(BaseModel):
+    """Enriched active rental — RA joined with customer, vehicle, and reservation."""
+    model_config = {"from_attributes": True}
+
+    ra_id: str
+    ra_number: str
+    reservation_id: Optional[str] = None
+    confirmation_number: Optional[str] = None
+    customer_id: str
+    customer_name: str
+    customer_email: str
+    vehicle_id: str
+    vehicle_make: str
+    vehicle_model: str
+    model_year: int
+    plate_number: Optional[str] = None
+    status: str
+    odometer_out: int
+    fuel_level_out_pct: Optional[int] = None
+    created_at: Optional[datetime] = None
+    scheduled_return_date: Optional[datetime] = None
+    reservation_total: Optional[Decimal] = None
+
+
 class RentalAgreementResponse(BaseModel):
     """Full RA read model."""
     model_config = {"from_attributes": True}

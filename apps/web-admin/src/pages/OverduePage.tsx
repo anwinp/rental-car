@@ -50,7 +50,7 @@ type SortKey = 'ra_number' | 'customerName' | 'expectedReturn' | 'daysOverdue'
 
 // ── fetchJSON helper ──────────────────────────────────────────────────────────
 
-const TENANT = (import.meta.env.VITE_TENANT_ID as string | undefined) ?? 'dev'
+const TENANT = '00000000-0000-0000-0000-000000000001'
 
 async function fetchJSON<T>(path: string, opts?: RequestInit): Promise<T> {
   const res = await fetch(`/api/v1${path}`, {

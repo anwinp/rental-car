@@ -16,7 +16,8 @@ export function SearchBar({ pickup, from, to, sort, classFilter }: SearchBarProp
   const [loc, setLoc]         = useState(pickup)
   const [pickupDate, setPickup] = useState(from.slice(0, 10))
   const [returnDate, setReturn] = useState(to.slice(0, 10))
-  const [expanded, setExpanded] = useState(false)
+  // Auto-open when dates are missing (e.g. arriving from a location link)
+  const [expanded, setExpanded] = useState(!from || !to)
 
   // sync when URL params change (e.g. browser back)
   useEffect(() => { setLoc(pickup) },           [pickup])

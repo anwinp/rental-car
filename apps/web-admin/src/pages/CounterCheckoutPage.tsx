@@ -1,5 +1,6 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useAuth } from '@rcm/ui/auth'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -13,6 +14,7 @@ type Reservation = {
   return_date: string
   assigned_vehicle: string | null
   status: string
+  total?: number
 }
 
 type ReservationDetail = {
@@ -61,7 +63,7 @@ type CheckoutResult = {
 
 // ── API helpers ───────────────────────────────────────────────────────────────
 
-const TENANT = import.meta.env.VITE_TENANT_ID ?? 'dev'
+const TENANT = '00000000-0000-0000-0000-000000000001'
 
 async function fetchJSON(path: string) {
   const res = await fetch(`/api/v1${path}`, {
@@ -162,13 +164,19 @@ function FuelGauge({ value, onChange }: { value: number; onChange?: (v: number) 
   )
 }
 
+// ── Location picker (when agent has multiple) ─────────────────────────────────
+
+type Location = { location_id: string; short_code: string; city: string; name: string }
+
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
-const STEPS = ['Find Reservation', 'Select Vehicle', 'Counter Details', 'Confirm']
+const STEPS = ['Find Reservation', 'Select Vehicle', 'Counter Details', 'Payment', 'Confirm']
 
 export function CounterCheckoutPage() {
   const qc = useQueryClient()
+  const { user } = useAuth()
   const [step, setStep] = useState(0)
+  const [activeLocationId, setActiveLocationId] = useState<string | null>(null)
   const [search, setSearch] = useState('')
   const [selectedRes, setSelectedRes] = useState<Reservation | null>(null)
   const [selectedResDetail, setSelectedResDetail] = useState<ReservationDetail | null>(null)
@@ -191,18 +199,40 @@ export function CounterCheckoutPage() {
   const [selectedExtras, setSelectedExtras] = useState<string[]>([])
   const [agentNotes, setAgentNotes] = useState('')
   const [checkoutResult, setCheckoutResult] = useState<CheckoutResult | null>(null)
+  const [paymentCardLast4, setPaymentCardLast4] = useState('')
+  const [paymentCardType, setPaymentCardType] = useState('VISA')
+  const [depositAmount, setDepositAmount] = useState('250.00')
+
+  // ── Derive active location from user profile ──────────────────────────────
+
+  const userLocationIds: string[] = (user?.location_ids ?? []).map(String)
+
+  useEffect(() => {
+    if (!activeLocationId && userLocationIds.length > 0) {
+      setActiveLocationId(userLocationIds[0])
+    }
+  }, [userLocationIds.join(',')])
 
   // ── Data queries ──────────────────────────────────────────────────────────
 
+  const { data: allLocations = [] } = useQuery<Location[]>({
+    queryKey: ['locations-list'],
+    queryFn: () => fetchJSON('/locations'),
+  })
+
+  const activeLocation = allLocations.find(l => l.location_id === activeLocationId)
+
+  const locParam = activeLocationId ? `&location_id=${activeLocationId}` : ''
+
   const { data: reservations = [], isLoading: resLoading } = useQuery<Reservation[]>({
-    queryKey: ['reservations-confirmed'],
-    queryFn: () => fetchJSON('/reservations/crm-list?status=CONFIRMED&limit=200'),
+    queryKey: ['reservations-confirmed', activeLocationId],
+    queryFn: () => fetchJSON(`/reservations/crm-list?status=CONFIRMED&limit=200${locParam}`),
     refetchInterval: 30000,
   })
 
   const { data: availableVehicles = [] } = useQuery<Vehicle[]>({
-    queryKey: ['vehicles-available'],
-    queryFn: () => fetchJSON('/fleet/vehicles?status=AVAILABLE&limit=200'),
+    queryKey: ['vehicles-available', activeLocationId],
+    queryFn: () => fetchJSON(`/fleet/vehicles?status=AVAILABLE&limit=200${activeLocationId ? `&location_id=${activeLocationId}` : ''}`),
     enabled: step >= 1,
   })
 
@@ -246,7 +276,7 @@ export function CounterCheckoutPage() {
       qc.invalidateQueries({ queryKey: ['reservations-confirmed'] })
       qc.invalidateQueries({ queryKey: ['vehicles-available'] })
       qc.invalidateQueries({ queryKey: ['fleet-vehicles'] })
-      setStep(4)
+      setStep(5)
     },
   })
 
@@ -269,73 +299,258 @@ export function CounterCheckoutPage() {
 
   const fmtDate = (d: string) => new Date(d).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 
-  // ── Completed ─────────────────────────────────────────────────────────────
+  // ── Helpers ───────────────────────────────────────────────────────────────
 
-  if (step === 4 && checkoutResult) {
+  const customerName = isWalkUp
+    ? `${walkUpFirstName} ${walkUpLastName}`.trim()
+    : (selectedRes?.customer_name ?? '')
+  const customerEmail = isWalkUp ? walkUpEmail : (selectedRes?.customer_email ?? '')
+  const returnDate = isWalkUp ? '' : (selectedRes?.return_date ?? '')
+
+  const resetAll = () => {
+    setStep(0)
+    setSelectedRes(null)
+    setSelectedResDetail(null)
+    setSelectedVehicle(null)
+    setSearch('')
+    setOdometerOut('')
+    setFuelLevelOut(8)
+    setSelectedExtras([])
+    setAgentNotes('')
+    setIsWalkUp(false)
+    setWalkUpClassId('')
+    setWalkUpEmail('')
+    setWalkUpCustomerId(null)
+    setWalkUpCustomerName('')
+    setWalkUpFirstName('')
+    setWalkUpLastName('')
+    setWalkUpPhone('')
+    setWalkUpLookupDone(false)
+    setWalkUpIsNew(false)
+    setWalkUpActiveRental(false)
+    setWalkUpError('')
+    setCheckoutResult(null)
+    setPaymentCardLast4('')
+    setPaymentCardType('VISA')
+    setDepositAmount('250.00')
+  }
+
+  // ── Completed — Rental Contract ───────────────────────────────────────────
+
+  if (step === 5 && checkoutResult) {
+    const checkedOutAt = new Date(checkoutResult.checked_out_at)
+    const locationLabel = activeLocation
+      ? `${activeLocation.city || activeLocation.name}${activeLocation.short_code ? ` (${activeLocation.short_code})` : ''}`
+      : 'Counter'
+    const vehicleLabel = selectedVehicle
+      ? `${selectedVehicle.model_year} ${selectedVehicle.make} ${selectedVehicle.model}`
+      : ''
+    const extrasList = extras
+      .filter((e: Extra) => selectedExtras.includes(e.extra_id))
+      .map((e: Extra) => ({ name: e.name, price: Number(e.default_price) }))
+
+    const printContract = () => {
+      const w = window.open('', '_blank', 'width=800,height=1000')
+      if (!w) return
+      w.document.write(`<!DOCTYPE html><html><head><title>Rental Agreement ${checkoutResult.ra_number}</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Arial', sans-serif; font-size: 12px; color: #111; padding: 32px; max-width: 750px; margin: 0 auto; }
+  h1 { font-size: 22px; font-weight: 800; letter-spacing: 2px; text-transform: uppercase; }
+  h2 { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.2px; color: #444; margin: 20px 0 6px; border-bottom: 1px solid #ddd; padding-bottom: 4px; }
+  .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 24px; border-bottom: 2px solid #111; padding-bottom: 16px; }
+  .ra-number { font-size: 20px; font-weight: 800; color: #1a1a8c; }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 24px; }
+  .field { display: flex; justify-content: space-between; padding: 4px 0; border-bottom: 1px dotted #e0e0e0; }
+  .label { color: #555; }
+  .val { font-weight: 600; text-align: right; }
+  .terms { font-size: 10px; color: #555; line-height: 1.5; margin-top: 8px; }
+  .sig-block { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; margin-top: 32px; }
+  .sig-line { border-bottom: 1.5px solid #111; margin-bottom: 4px; height: 40px; }
+  .sig-label { font-size: 10px; color: #555; }
+  .badge { display: inline-block; background: #e8eaff; color: #1a1a8c; font-size: 11px; font-weight: 700; padding: 2px 10px; border-radius: 3px; }
+  @media print { body { padding: 16px; } button { display: none; } }
+</style></head><body>
+<div class="header">
+  <div>
+    <h1>RCM Rentals</h1>
+    <div style="font-size:11px;color:#666;margin-top:4px">${locationLabel}</div>
+  </div>
+  <div style="text-align:right">
+    <div class="ra-number">${checkoutResult.ra_number}</div>
+    <div style="font-size:11px;color:#666;margin-top:2px">RENTAL AGREEMENT</div>
+    <div style="font-size:11px;color:#666">${checkedOutAt.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</div>
+  </div>
+</div>
+
+<h2>Customer</h2>
+<div class="grid-2">
+  <div class="field"><span class="label">Name</span><span class="val">${customerName}</span></div>
+  <div class="field"><span class="label">Email</span><span class="val">${customerEmail || '—'}</span></div>
+</div>
+
+<h2>Vehicle</h2>
+<div class="grid-2">
+  <div class="field"><span class="label">Vehicle</span><span class="val">${vehicleLabel}</span></div>
+  <div class="field"><span class="label">Plate</span><span class="val">${selectedVehicle?.plate_number ?? '—'}</span></div>
+  <div class="field"><span class="label">VIN</span><span class="val">${checkoutResult.vin}</span></div>
+  <div class="field"><span class="label">Odometer Out</span><span class="val">${Number(odometerOut).toLocaleString()} mi</span></div>
+  <div class="field"><span class="label">Fuel Level</span><span class="val">${['Empty','1/8','1/4','3/8','1/2','5/8','3/4','7/8','Full'][fuelLevelOut]}</span></div>
+</div>
+
+<h2>Rental Period</h2>
+<div class="grid-2">
+  <div class="field"><span class="label">Check-out</span><span class="val">${checkedOutAt.toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' })}</span></div>
+  ${returnDate ? `<div class="field"><span class="label">Return by</span><span class="val">${new Date(returnDate).toLocaleDateString('en-US', { dateStyle: 'medium' })}</span></div>` : ''}
+  <div class="field"><span class="label">Pickup Location</span><span class="val">${locationLabel}</span></div>
+  ${!isWalkUp && selectedRes?.confirmation_number ? `<div class="field"><span class="label">Confirmation #</span><span class="val">${selectedRes.confirmation_number}</span></div>` : ''}
+</div>
+
+<h2>Payment</h2>
+<div class="grid-2">
+  <div class="field"><span class="label">Security Deposit</span><span class="val">$${Number(depositAmount).toFixed(2)}</span></div>
+  <div class="field"><span class="label">Card</span><span class="val">${paymentCardType} ···· ${paymentCardLast4 || '????'}</span></div>
+  <div class="field"><span class="label">Pre-Auth Status</span><span class="val"><span class="badge">CAPTURED</span></span></div>
+  <div class="field"><span class="label">Balance Due</span><span class="val">At return</span></div>
+</div>
+
+${extrasList.length > 0 ? `<h2>Add-ons</h2><div class="grid-2">${extrasList.map(e => `<div class="field"><span class="label">${e.name}</span><span class="val">$${e.price.toFixed(2)}/day</span></div>`).join('')}</div>` : ''}
+
+${agentNotes ? `<h2>Agent Notes</h2><p style="font-size:11px;color:#444;margin-top:4px">${agentNotes}</p>` : ''}
+
+<h2>Terms &amp; Conditions</h2>
+<p class="terms">The renter agrees to return the vehicle in the same condition as received, with the same fuel level, to the designated location by the agreed return date. Renter is liable for all damages, traffic violations, and tolls incurred during the rental period. The security deposit will be released upon satisfactory return of the vehicle. Renter must be at least 21 years of age and hold a valid driver's license. Smoking, off-road use, and towing are prohibited. Additional charges apply for late returns, excessive mileage, and fuel discrepancies.</p>
+
+<div class="sig-block">
+  <div>
+    <div class="sig-line"></div>
+    <div class="sig-label">Customer Signature &amp; Date</div>
+  </div>
+  <div>
+    <div class="sig-line"></div>
+    <div class="sig-label">Agent Signature &amp; Date — ${user?.first_name ?? ''} ${user?.last_name ?? ''}</div>
+  </div>
+</div>
+
+<div style="margin-top:32px;font-size:10px;color:#aaa;text-align:center;border-top:1px solid #eee;padding-top:12px">
+  RCM Fleet Management · Agreement ${checkoutResult.ra_number} · Printed ${new Date().toLocaleString()}
+</div>
+<script>window.onload=()=>window.print()</script>
+</body></html>`)
+      w.document.close()
+    }
+
     return (
-      <div className="page-root" style={{ maxWidth: 560, margin: '0 auto', padding: '2rem 1rem' }}>
-        <div className="card p-8 text-center">
-          <div className="flex h-14 w-14 items-center justify-center rounded-full mx-auto mb-4"
-               style={{ background: 'rgba(34,197,94,.12)' }}>
-            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="var(--success)" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
-          </div>
-          <h2 className="text-2xl font-bold mb-1" style={{ color: 'var(--text-1)' }}>Checkout Complete</h2>
-          <p className="text-sm mb-6" style={{ color: 'var(--text-3)' }}>Vehicle has been checked out successfully.</p>
-
-          <div className="rounded-lg p-4 mb-6 text-left space-y-2" style={{ background: 'var(--page-bg)', border: '1px solid var(--border)' }}>
-            <div className="flex justify-between text-sm">
-              <span style={{ color: 'var(--text-3)' }}>Rental Agreement</span>
-              <span className="font-bold text-lg" style={{ color: 'var(--accent)' }}>{checkoutResult.ra_number}</span>
+      <div className="page-root" style={{ padding: '2rem' }}>
+        <div style={{ maxWidth: 700, margin: '0 auto' }}>
+          {/* Success banner */}
+          <div className="flex items-center gap-3 rounded-lg px-4 py-3 mb-6"
+               style={{ background: 'rgba(34,197,94,.08)', border: '1px solid rgba(34,197,94,.2)' }}>
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full"
+                 style={{ background: 'rgba(34,197,94,.15)' }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--success)" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
             </div>
-            <div className="flex justify-between text-sm">
-              <span style={{ color: 'var(--text-3)' }}>Vehicle ID</span>
-              <span style={{ color: 'var(--text-2)' }}>{checkoutResult.vehicle_id.slice(0, 8).toUpperCase()}</span>
+            <div>
+              <p className="text-sm font-semibold" style={{ color: 'var(--success)' }}>Checkout complete</p>
+              <p className="text-xs" style={{ color: 'var(--text-3)' }}>Agreement {checkoutResult.ra_number} is active</p>
             </div>
-            <div className="flex justify-between text-sm">
-              <span style={{ color: 'var(--text-3)' }}>VIN</span>
-              <span style={{ color: 'var(--text-2)' }}>{checkoutResult.vin}</span>
-            </div>
-            <div className="flex justify-between text-sm">
-              <span style={{ color: 'var(--text-3)' }}>Status</span>
-              <span style={{ color: 'var(--success)' }}>{checkoutResult.status}</span>
-            </div>
-            <div className="flex justify-between text-sm">
-              <span style={{ color: 'var(--text-3)' }}>Checked out at</span>
-              <span style={{ color: 'var(--text-2)' }}>{fmtDate(checkoutResult.checked_out_at)}</span>
+            <div className="ml-auto flex gap-2">
+              <button className="btn-primary text-xs px-4 py-1.5" onClick={printContract}>
+                Print Contract
+              </button>
+              <button className="btn-secondary text-xs px-4 py-1.5" onClick={resetAll}>
+                New Checkout
+              </button>
             </div>
           </div>
 
-          <div className="flex gap-3 justify-center">
-            <button
-              className="btn-primary px-6 py-2.5"
-              onClick={() => {
-                setStep(0)
-                setSelectedRes(null)
-                setSelectedResDetail(null)
-                setSelectedVehicle(null)
-                setSearch('')
-                setOdometerOut('')
-                setFuelLevelOut(8)
-                setSelectedExtras([])
-                setAgentNotes('')
-                setIsWalkUp(false)
-                setWalkUpClassId('')
-                setWalkUpEmail('')
-                setWalkUpCustomerId(null)
-                setWalkUpCustomerName('')
-                setWalkUpFirstName('')
-                setWalkUpLastName('')
-                setWalkUpPhone('')
-                setWalkUpLookupDone(false)
-                setWalkUpIsNew(false)
-                setWalkUpActiveRental(false)
-                setWalkUpError('')
-                setCheckoutResult(null)
-              }}
-            >
-              New Checkout
-            </button>
-            <a href="/returns" className="btn-secondary px-6 py-2.5">Process Return</a>
+          {/* Contract preview */}
+          <div className="card p-6 space-y-5" style={{ fontFamily: 'system-ui, sans-serif' }}>
+            {/* Header */}
+            <div className="flex items-start justify-between pb-4" style={{ borderBottom: '2px solid var(--border)' }}>
+              <div>
+                <p className="text-xl font-black tracking-widest uppercase" style={{ color: 'var(--text-1)' }}>RCM Rentals</p>
+                <p className="text-xs mt-0.5" style={{ color: 'var(--text-3)' }}>{locationLabel}</p>
+              </div>
+              <div className="text-right">
+                <p className="text-xl font-black" style={{ color: 'var(--accent)' }}>{checkoutResult.ra_number}</p>
+                <p className="text-xs" style={{ color: 'var(--text-3)' }}>RENTAL AGREEMENT</p>
+                <p className="text-xs" style={{ color: 'var(--text-3)' }}>{checkedOutAt.toLocaleDateString('en-US', { dateStyle: 'medium' })}</p>
+              </div>
+            </div>
+
+            {/* Customer */}
+            <Section label="Customer">
+              <Row label="Name" value={customerName} accent />
+              {customerEmail && <Row label="Email" value={customerEmail} />}
+            </Section>
+
+            {/* Vehicle */}
+            <Section label="Vehicle">
+              <Row label="Vehicle" value={vehicleLabel} />
+              <Row label="Plate" value={selectedVehicle?.plate_number ?? '—'} />
+              <Row label="VIN" value={checkoutResult.vin} />
+              <Row label="Odometer Out" value={`${Number(odometerOut).toLocaleString()} mi`} />
+              <Row label="Fuel Level" value={['Empty','1/8','1/4','3/8','1/2','5/8','3/4','7/8','Full'][fuelLevelOut]} />
+            </Section>
+
+            {/* Rental Period */}
+            <Section label="Rental Period">
+              <Row label="Check-out" value={fmtDate(checkoutResult.checked_out_at)} />
+              {returnDate && <Row label="Return by" value={new Date(returnDate).toLocaleDateString('en-US', { dateStyle: 'medium' })} />}
+              <Row label="Location" value={locationLabel} />
+              {!isWalkUp && selectedRes?.confirmation_number && (
+                <Row label="Confirmation #" value={selectedRes.confirmation_number} />
+              )}
+            </Section>
+
+            {/* Payment */}
+            <Section label="Payment">
+              <Row label="Security Deposit" value={`$${Number(depositAmount).toFixed(2)}`} />
+              <Row label="Card" value={`${paymentCardType} ···· ${paymentCardLast4 || '????'}`} />
+              <Row label="Pre-Auth" value="CAPTURED" accent />
+              <Row label="Balance Due" value="Calculated at return" />
+            </Section>
+
+            {/* Add-ons */}
+            {extrasList.length > 0 && (
+              <Section label="Add-ons">
+                {extrasList.map(e => (
+                  <Row key={e.name} label={e.name} value={`$${e.price.toFixed(2)}/day`} />
+                ))}
+              </Section>
+            )}
+
+            {agentNotes && (
+              <Section label="Agent Notes">
+                <p className="text-xs" style={{ color: 'var(--text-2)' }}>{agentNotes}</p>
+              </Section>
+            )}
+
+            {/* Terms */}
+            <Section label="Terms & Conditions">
+              <p className="text-[10.5px] leading-relaxed" style={{ color: 'var(--text-3)' }}>
+                The renter agrees to return the vehicle in the same condition as received, with the same fuel level, to the designated location by the agreed return date. Renter is liable for all damages, traffic violations, and tolls incurred during the rental period. The security deposit will be released upon satisfactory return. Renter must hold a valid driver's license. Smoking and off-road use are prohibited.
+              </p>
+            </Section>
+
+            {/* Signatures */}
+            <div className="grid grid-cols-2 gap-8 pt-4" style={{ borderTop: '1px solid var(--border)' }}>
+              <div>
+                <div className="h-10 mb-2" style={{ borderBottom: '1.5px solid var(--text-1)' }} />
+                <p className="text-[10.5px]" style={{ color: 'var(--text-3)' }}>Customer Signature &amp; Date</p>
+              </div>
+              <div>
+                <div className="h-10 mb-2" style={{ borderBottom: '1.5px solid var(--text-1)' }} />
+                <p className="text-[10.5px]" style={{ color: 'var(--text-3)' }}>
+                  Agent: {user?.first_name} {user?.last_name} &amp; Date
+                </p>
+              </div>
+            </div>
+
+            <p className="text-[10px] text-center pt-2" style={{ color: 'var(--text-3)', borderTop: '1px solid var(--border)' }}>
+              RCM Fleet Management · Agreement {checkoutResult.ra_number} · {checkedOutAt.toLocaleString()}
+            </p>
           </div>
         </div>
       </div>
@@ -757,13 +972,125 @@ export function CounterCheckoutPage() {
     </div>
   )
 
-  // ── Step 3: Confirm ───────────────────────────────────────────────────────
+  // ── Step 3: Payment ──────────────────────────────────────────────────────
+
+  const renderStep3 = () => {
+    const cardTypes = ['VISA', 'MASTERCARD', 'AMEX', 'DISCOVER']
+    const canProceed = paymentCardLast4.length === 4 && /^\d{4}$/.test(paymentCardLast4)
+
+    return (
+      <div className="space-y-5">
+        {/* Context bar */}
+        {selectedVehicle && (
+          <div className="rounded-lg p-3 text-xs" style={{ background: 'var(--page-bg)', border: '1px solid var(--border)' }}>
+            <span style={{ color: 'var(--text-3)' }}>Vehicle: </span>
+            <span className="font-medium" style={{ color: 'var(--text-1)' }}>
+              {selectedVehicle.model_year} {selectedVehicle.make} {selectedVehicle.model}
+            </span>
+            <span className="mx-2" style={{ color: 'var(--border)' }}>|</span>
+            <span style={{ color: 'var(--text-3)' }}>Plate: </span>
+            <span className="font-medium" style={{ color: 'var(--text-1)' }}>{selectedVehicle.plate_number ?? 'None'}</span>
+          </div>
+        )}
+
+        {/* Pre-auth / deposit */}
+        <div className="rounded-lg p-4 space-y-4" style={{ border: '1px solid var(--border)', background: 'var(--card-bg)' }}>
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-1)' }}>Security Deposit (Pre-Authorization)</h3>
+            <span className="text-xs px-2 py-0.5 rounded-full font-medium"
+                  style={{ background: 'rgba(245,158,11,.1)', color: '#b45309' }}>
+              Hold — not charged
+            </span>
+          </div>
+
+          <div>
+            <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-2)' }}>
+              Deposit Amount ($)
+            </label>
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              className="field-input w-full text-sm"
+              value={depositAmount}
+              onChange={e => setDepositAmount(e.target.value)}
+            />
+            <p className="text-[10.5px] mt-1" style={{ color: 'var(--text-3)' }}>
+              Standard deposit is $250. Adjust for premium vehicles or corporate accounts.
+            </p>
+          </div>
+        </div>
+
+        {/* Card details */}
+        <div className="rounded-lg p-4 space-y-4" style={{ border: '1px solid var(--border)', background: 'var(--card-bg)' }}>
+          <h3 className="text-sm font-semibold" style={{ color: 'var(--text-1)' }}>Payment Method</h3>
+
+          <div>
+            <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-2)' }}>Card Type</label>
+            <div className="flex gap-2">
+              {cardTypes.map(t => (
+                <button
+                  key={t}
+                  type="button"
+                  onClick={() => setPaymentCardType(t)}
+                  className="flex-1 py-2 text-xs font-semibold rounded-lg transition-colors"
+                  style={{
+                    border: paymentCardType === t ? '1.5px solid var(--accent)' : '1.5px solid var(--border)',
+                    background: paymentCardType === t ? 'rgba(99,102,241,.08)' : 'var(--page-bg)',
+                    color: paymentCardType === t ? 'var(--accent)' : 'var(--text-2)',
+                  }}
+                >
+                  {t}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-2)' }}>
+              Last 4 Digits
+            </label>
+            <input
+              type="text"
+              inputMode="numeric"
+              maxLength={4}
+              className="field-input w-full text-sm tracking-widest"
+              placeholder="0000"
+              value={paymentCardLast4}
+              onChange={e => setPaymentCardLast4(e.target.value.replace(/\D/g, '').slice(0, 4))}
+            />
+          </div>
+
+          <div className="rounded-lg px-3 py-2.5 text-xs flex items-start gap-2"
+               style={{ background: 'rgba(99,102,241,.06)', border: '1px solid rgba(99,102,241,.15)', color: 'var(--text-2)' }}>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="2" className="mt-0.5 shrink-0">
+              <circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>
+            </svg>
+            Card is swiped/tapped at the terminal. Only the last 4 digits are recorded here for reference. Full payment is settled at vehicle return.
+          </div>
+        </div>
+
+        <div className="flex gap-3 pt-1">
+          <button className="btn-secondary flex-1 py-2.5 text-sm" onClick={() => setStep(2)}>Back</button>
+          <button
+            className="btn-primary flex-1 py-2.5 text-sm disabled:opacity-50"
+            disabled={!canProceed}
+            onClick={() => setStep(4)}
+          >
+            Payment Collected — Review & Confirm
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  // ── Step 4: Confirm ───────────────────────────────────────────────────────
 
   const selectedExtraNames = extras
     .filter((e: Extra) => selectedExtras.includes(e.extra_id))
     .map((e: Extra) => e.name)
 
-  const renderStep3 = () => (
+  const renderStep4 = () => (
     <div className="space-y-5">
       <div className="rounded-lg divide-y" style={{ border: '1px solid var(--border)' }}>
         <Row label="Type" value={isWalkUp ? 'Walk-up Customer' : 'Pre-booked Reservation'} />
@@ -795,6 +1122,8 @@ export function CounterCheckoutPage() {
           <Row label="Extras" value={selectedExtraNames.join(', ')} />
         )}
         {agentNotes && <Row label="Agent Notes" value={agentNotes} />}
+        <Row label="Payment" value={`${paymentCardType} ···· ${paymentCardLast4}`} />
+        <Row label="Deposit" value={`$${Number(depositAmount).toFixed(2)} pre-auth`} />
       </div>
 
       {checkoutMutation.isError && (
@@ -804,7 +1133,7 @@ export function CounterCheckoutPage() {
       )}
 
       <div className="flex gap-3 pt-1">
-        <button className="btn-secondary flex-1 py-2.5 text-sm" onClick={() => setStep(2)} disabled={checkoutMutation.isPending}>
+        <button className="btn-secondary flex-1 py-2.5 text-sm" onClick={() => setStep(3)} disabled={checkoutMutation.isPending}>
           Back
         </button>
         <button
@@ -825,14 +1154,57 @@ export function CounterCheckoutPage() {
 
   // ── Layout ────────────────────────────────────────────────────────────────
 
+  const agentLocations = allLocations.filter(l => userLocationIds.includes(l.location_id))
+
+  if (userLocationIds.length === 0) {
+    return (
+      <div className="page-root" style={{ padding: '2rem' }}>
+        <div className="card p-8 text-center" style={{ maxWidth: 480, margin: '0 auto' }}>
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--text-3)" strokeWidth="1.75" className="mx-auto mb-3">
+            <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/>
+          </svg>
+          <h2 className="text-lg font-semibold mb-2" style={{ color: 'var(--text-1)' }}>No Location Assigned</h2>
+          <p className="text-sm" style={{ color: 'var(--text-3)' }}>
+            Your account has not been assigned to a location yet. Contact your branch manager to get set up.
+          </p>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="page-root">
       <div style={{ padding: '0 2rem' }}>
-        <div className="mb-6">
-          <h1 className="text-xl font-bold" style={{ color: 'var(--text-1)' }}>Counter Checkout</h1>
-          <p className="text-sm mt-0.5" style={{ color: 'var(--text-3)' }}>
-            Process a vehicle checkout for a pre-booked or walk-up customer.
-          </p>
+        <div className="mb-6 flex items-start justify-between gap-4">
+          <div>
+            <h1 className="text-xl font-bold" style={{ color: 'var(--text-1)' }}>Counter Checkout</h1>
+            <p className="text-sm mt-0.5" style={{ color: 'var(--text-3)' }}>
+              Process a vehicle checkout for a pre-booked or walk-up customer.
+            </p>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            {agentLocations.length > 1 ? (
+              <select
+                className="field-input text-sm py-1.5 px-3"
+                value={activeLocationId ?? ''}
+                onChange={e => { setActiveLocationId(e.target.value); setStep(0); setSelectedRes(null) }}
+              >
+                {agentLocations.map(l => (
+                  <option key={l.location_id} value={l.location_id}>
+                    {l.city || l.name || l.short_code}
+                  </option>
+                ))}
+              </select>
+            ) : activeLocation && (
+              <div className="flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold"
+                   style={{ background: 'rgba(99,102,241,.1)', color: 'var(--accent)', border: '1px solid rgba(99,102,241,.2)' }}>
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                  <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/>
+                </svg>
+                {activeLocation.city || activeLocation.name || activeLocation.short_code}
+              </div>
+            )}
+          </div>
         </div>
 
         <div className="card p-6">
@@ -842,6 +1214,7 @@ export function CounterCheckoutPage() {
           {step === 1 && renderStep1()}
           {step === 2 && renderStep2()}
           {step === 3 && renderStep3()}
+          {step === 4 && renderStep4()}
         </div>
       </div>
     </div>
@@ -852,9 +1225,21 @@ export function CounterCheckoutPage() {
 
 function Row({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
   return (
-    <div className="flex justify-between items-start px-4 py-3 gap-4">
+    <div className="flex justify-between items-start px-4 py-3 gap-4" style={{ borderBottom: '1px solid var(--border)' }}>
       <span className="text-xs shrink-0" style={{ color: 'var(--text-3)' }}>{label}</span>
       <span className="text-xs font-medium text-right" style={{ color: accent ? 'var(--accent)' : 'var(--text-1)' }}>{value}</span>
+    </div>
+  )
+}
+
+function Section({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <p className="text-[10.5px] font-semibold uppercase tracking-widest mb-2"
+         style={{ color: 'var(--text-3)' }}>{label}</p>
+      <div className="rounded-lg overflow-hidden" style={{ border: '1px solid var(--border)' }}>
+        {children}
+      </div>
     </div>
   )
 }

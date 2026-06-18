@@ -29,6 +29,7 @@ import { MaintenancePage } from './pages/MaintenancePage'
 import { CorporatePage } from './pages/CorporatePage'
 
 const ADMIN_ROLES = [
+  UserRole.COUNTER_AGENT,
   UserRole.BRANCH_MANAGER,
   UserRole.REGIONAL_MANAGER,
   UserRole.FLEET_MANAGER,
@@ -39,6 +40,7 @@ const ADMIN_ROLES = [
   UserRole.SUPER_ADMIN,
   UserRole.MAINTENANCE_TECH,
 ]
+
 
 function EyeIcon({ off }: { off?: boolean }) {
   return off ? (
@@ -76,6 +78,10 @@ function LoginPage() {
         return
       }
       setUser(data)
+      if (data.role === 'COUNTER_AGENT') {
+        navigate('/checkout', { replace: true })
+        return
+      }
       navigate('/dashboard', { replace: true })
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Login failed. Please try again.'
@@ -235,6 +241,7 @@ function LoginPage() {
     </div>
   )
 }
+
 
 function UnauthorizedPage() {
   return (

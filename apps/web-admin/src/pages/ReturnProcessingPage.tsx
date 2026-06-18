@@ -1,24 +1,34 @@
 import { useState, useMemo, type FormEvent } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 
+// ── Constants ────────────────────────────────────────────────────────────────
+
+const TENANT = '00000000-0000-0000-0000-000000000001'
+
 // ── Types ────────────────────────────────────────────────────────────────────
 
-type CrmReservation = {
-  reservation_id: string; confirmation_number: string; customer_name: string
-  customer_email: string; pickup_date: string; return_date: string
-  class_name: string; status: string; total: number; assigned_vehicle: string | null
+type ActiveRental = {
+  ra_id: string
+  ra_number: string
+  reservation_id: string | null
+  confirmation_number: string | null
+  customer_id: string
+  customer_name: string
+  customer_email: string
+  vehicle_id: string
+  vehicle_make: string
+  vehicle_model: string
+  model_year: number
+  plate_number: string | null
+  status: string
+  odometer_out: number
+  fuel_level_out_pct: number | null
+  created_at: string
+  scheduled_return_date: string | null
+  reservation_total: number | null
 }
 
 type Location = { location_id: string; short_code: string; name: string; city: string; state_province: string }
-type ApiVehicle = { vehicle_id: string; make: string; model: string; model_year: number; plate_number: string | null; odometer_current: number; home_location_id: string; status: string }
-
-type RentalAgreement = {
-  ra_id: string; ra_number: string; reservation_id: string | null
-  vehicle_id: string | null; customer_id: string | null; status: string
-  odometer_out: number | null; fuel_level_out_pct: number | null
-  odometer_in: number | null; fuel_level_in_pct: number | null
-  actual_return_datetime: string | null; agent_notes: string | null
-}
 
 type CheckInResponse = {
   rental_agreement_id: string; returned_at: string
@@ -38,26 +48,19 @@ type Step = 1 | 2 | 3 | 4
 
 // ── API helpers ──────────────────────────────────────────────────────────────
 
-async function fetchCheckedOut(): Promise<CrmReservation[]> {
-  const res = await fetch('/api/v1/reservations/crm-list?status=CHECKED_OUT&limit=100', { credentials: 'include' })
+const HEADERS = {
+  'Content-Type': 'application/json',
+  'X-Tenant-ID': TENANT,
+}
+
+async function fetchActiveRentals(): Promise<ActiveRental[]> {
+  const res = await fetch('/api/v1/checkout/active-rentals', { credentials: 'include', headers: HEADERS })
   if (!res.ok) throw new Error('Failed to load active rentals')
   return res.json()
 }
 
 async function fetchLocations(): Promise<Location[]> {
-  const res = await fetch('/api/v1/locations', { credentials: 'include' })
-  if (!res.ok) return []
-  return res.json()
-}
-
-async function fetchVehicle(vehicleId: string): Promise<ApiVehicle> {
-  const res = await fetch(`/api/v1/fleet/vehicles/${vehicleId}`, { credentials: 'include' })
-  if (!res.ok) throw new Error('Vehicle not found')
-  return res.json()
-}
-
-async function fetchRA(reservationId: string): Promise<RentalAgreement[]> {
-  const res = await fetch(`/api/v1/checkout/agreements?reservation_id=${reservationId}`, { credentials: 'include' })
+  const res = await fetch('/api/v1/locations', { credentials: 'include', headers: HEADERS })
   if (!res.ok) return []
   return res.json()
 }
@@ -65,7 +68,7 @@ async function fetchRA(reservationId: string): Promise<RentalAgreement[]> {
 async function postCheckIn(body: object): Promise<CheckInResponse> {
   const res = await fetch('/api/v1/checkout/check-in', {
     method: 'POST', credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
+    headers: HEADERS,
     body: JSON.stringify(body),
   })
   if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error((e as any).detail ?? 'Check-in failed') }
@@ -75,7 +78,7 @@ async function postCheckIn(body: object): Promise<CheckInResponse> {
 async function postBlock(body: object) {
   const res = await fetch('/api/v1/fleet/blocks', {
     method: 'POST', credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
+    headers: HEADERS,
     body: JSON.stringify(body),
   })
   if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error((e as any).detail ?? 'Block creation failed') }
@@ -85,7 +88,7 @@ async function postBlock(body: object) {
 async function patchVehicle(vehicleId: string, body: object) {
   const res = await fetch(`/api/v1/fleet/vehicles/${vehicleId}`, {
     method: 'PATCH', credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
+    headers: HEADERS,
     body: JSON.stringify(body),
   })
   if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error((e as any).detail ?? 'Vehicle update failed') }
@@ -143,7 +146,6 @@ function FuelGauge({ value, onChange, readonly }: { value: number; onChange?: (v
               style={{
                 background: i < value ? color : 'var(--border)',
                 cursor: readonly ? 'default' : 'pointer',
-                opacity: readonly ? 1 : undefined,
               }} />
           ))}
         </div>
@@ -201,10 +203,7 @@ export function ReturnProcessingPage() {
   const [step, setStep] = useState<Step>(1)
   const [search, setSearch] = useState('')
 
-  // Selection
-  const [selectedRes, setSelectedRes] = useState<CrmReservation | null>(null)
-  const [rentalAgreement, setRentalAgreement] = useState<RentalAgreement | null>(null)
-  const [vehicle, setVehicle] = useState<ApiVehicle | null>(null)
+  const [selectedRental, setSelectedRental] = useState<ActiveRental | null>(null)
 
   // Step 2 form
   const [odometerIn, setOdometerIn] = useState('')
@@ -221,8 +220,8 @@ export function ReturnProcessingPage() {
   const [completed, setCompleted] = useState(false)
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null)
 
-  const { data: activeRentals = [], isLoading: loadingRentals } = useQuery<CrmReservation[]>({
-    queryKey: ['checked-out-reservations'], queryFn: fetchCheckedOut, staleTime: 30_000,
+  const { data: activeRentals = [], isLoading: loadingRentals } = useQuery<ActiveRental[]>({
+    queryKey: ['active-rentals'], queryFn: fetchActiveRentals, staleTime: 30_000,
   })
 
   const { data: locations = [] } = useQuery<Location[]>({
@@ -236,10 +235,12 @@ export function ReturnProcessingPage() {
     if (!search) return activeRentals
     const q = search.toLowerCase()
     return activeRentals.filter(r =>
-      r.confirmation_number.toLowerCase().includes(q) ||
+      r.ra_number.toLowerCase().includes(q) ||
+      (r.confirmation_number ?? '').toLowerCase().includes(q) ||
       r.customer_name.toLowerCase().includes(q) ||
       r.customer_email.toLowerCase().includes(q) ||
-      (r.assigned_vehicle ?? '').toLowerCase().includes(q)
+      `${r.vehicle_make} ${r.vehicle_model}`.toLowerCase().includes(q) ||
+      (r.plate_number ?? '').toLowerCase().includes(q)
     )
   }, [activeRentals, search])
 
@@ -251,58 +252,40 @@ export function ReturnProcessingPage() {
     setTimeout(() => setToast(null), 4000)
   }
 
-  async function selectReservation(res: CrmReservation) {
-    setSelectedRes(res)
-    // Load rental agreement and vehicle in parallel
-    const [ras] = await Promise.all([
-      res.reservation_id ? fetchRA(res.reservation_id) : Promise.resolve([] as RentalAgreement[]),
-    ])
-    const activeRA = ras.find(r => r.status === 'ACTIVE') ?? null
-    setRentalAgreement(activeRA)
-    // Load vehicle if we have the vehicle_id
-    const vehicleId = activeRA?.vehicle_id ?? null
-    if (vehicleId) {
-      try {
-        const veh = await fetchVehicle(vehicleId)
-        setVehicle(veh)
-        setOdometerIn(String(veh.odometer_current))
-        setReturnLocationId(veh.home_location_id)
-      } catch {}
-    } else {
-      setVehicle(null)
-    }
+  function selectRental(rental: ActiveRental) {
+    setSelectedRental(rental)
+    setOdometerIn(String(rental.odometer_out))
+    const fuelSegments = rental.fuel_level_out_pct != null
+      ? Math.round((rental.fuel_level_out_pct / 100) * 8)
+      : 8
+    setFuelLevel(Math.max(0, Math.min(8, fuelSegments)))
     setStep(2)
   }
 
   const processMutation = useMutation({
     mutationFn: async () => {
-      if (!selectedRes) throw new Error('No reservation selected')
+      if (!selectedRental) throw new Error('No rental selected')
+
+      if (selectedRental.status === 'RETURNED' || selectedRental.status === 'CLOSED') {
+        throw new Error(`This rental has already been returned (status: ${selectedRental.status}). Refresh to see updated data.`)
+      }
 
       let checkIn: CheckInResponse | null = null
 
-      // 1. Check-in via API if RA exists and is still active
-      if (rentalAgreement?.ra_id) {
-        if (rentalAgreement.status === 'RETURNED' || rentalAgreement.status === 'CLOSED') {
-          throw new Error(`This rental has already been returned (RA status: ${rentalAgreement.status}). Refresh the page to see updated rental status.`)
-        }
-        if (rentalAgreement.status === 'ACTIVE' || rentalAgreement.status === 'EXTENDED') {
-          checkIn = await postCheckIn({
-            rental_agreement_id: rentalAgreement.ra_id,
-            odometer_in: Number(odometerIn),
-            fuel_level_in: fuelLevel,
-            agent_notes: agentNotes || null,
-          })
-          setCheckInResult(checkIn)
-        }
+      if (selectedRental.status === 'ACTIVE' || selectedRental.status === 'EXTENDED') {
+        checkIn = await postCheckIn({
+          rental_agreement_id: selectedRental.ra_id,
+          odometer_in: Number(odometerIn),
+          fuel_level_in: fuelLevel,
+          agent_notes: agentNotes || null,
+        })
+        setCheckInResult(checkIn)
       }
 
-      const vehicleId = rentalAgreement?.vehicle_id ?? vehicle?.vehicle_id
-      if (!vehicleId) throw new Error('No vehicle linked to this rental')
-
+      const vehicleId = selectedRental.vehicle_id
       const now = new Date()
       const twoHoursLater = new Date(now.getTime() + 2 * 60 * 60 * 1000)
 
-      // 2. Create vehicle block based on disposition
       const blockType = disposition === 'CLEANING' ? 'TURNAROUND' : disposition === 'DAMAGE_HOLD' ? 'HOLD' : 'MAINTENANCE'
       const blockReason = disposition === 'CLEANING'
         ? 'Post-return cleaning and inspection'
@@ -310,8 +293,6 @@ export function ReturnProcessingPage() {
         ? `Damage hold — ${Object.entries(damageZones).filter(([,v]) => v !== 'GOOD').map(([k]) => k).join(', ')}`
         : 'Mechanical inspection required'
 
-      // Block creation is best-effort — a 409 means the vehicle already has a block
-      // (e.g., overlapping test data or a prior return in progress). Log but don't fail.
       try {
         await postBlock({
           vehicle_id: vehicleId,
@@ -323,12 +304,9 @@ export function ReturnProcessingPage() {
         })
       } catch (blockErr) {
         const msg = blockErr instanceof Error ? blockErr.message : ''
-        // Only suppress 409 conflicts — a scheduling conflict means the vehicle
-        // is already queued; the status patch still takes effect below.
         if (!msg.toLowerCase().includes('available') && !msg.includes('409')) throw blockErr
       }
 
-      // 3. Update vehicle status and location
       const newVehicleStatus = disposition === 'CLEANING' ? 'CLEANING' : disposition === 'DAMAGE_HOLD' ? 'DAMAGE_HOLD' : 'MAINTENANCE'
       const vehiclePatch: Record<string, unknown> = {
         status: newVehicleStatus,
@@ -342,7 +320,7 @@ export function ReturnProcessingPage() {
     onSuccess: () => {
       setCompleted(true)
       setStep(4)
-      qc.invalidateQueries({ queryKey: ['checked-out-reservations'] })
+      qc.invalidateQueries({ queryKey: ['active-rentals'] })
       qc.invalidateQueries({ queryKey: ['fleet-vehicles'] })
     },
     onError: (e: Error) => showToast(e.message, false),
@@ -351,36 +329,39 @@ export function ReturnProcessingPage() {
   function handleInspectSubmit(e: FormEvent) {
     e.preventDefault()
     if (!odometerIn || Number(odometerIn) < 0) { showToast('Enter a valid odometer reading', false); return }
-    // Auto-suggest disposition based on damage
     if (majorDamage && disposition === 'CLEANING') setDisposition('DAMAGE_HOLD')
     setStep(3)
   }
 
   function reset() {
-    setStep(1); setSearch(''); setSelectedRes(null); setRentalAgreement(null); setVehicle(null)
+    setStep(1); setSearch(''); setSelectedRental(null)
     setOdometerIn(''); setFuelLevel(8); setAgentNotes(''); setReturnLocationId(''); setCompleted(false)
     setCheckInResult(null); setDisposition('CLEANING')
     setDamageZones(Object.fromEntries(DAMAGE_ZONES.map(z => [z.id, 'GOOD' as DamageLevel])))
   }
 
   // ── Charge estimates ──
-  const odometerOut = rentalAgreement?.odometer_out ?? vehicle?.odometer_current ?? 0
+  const odometerOut = selectedRental?.odometer_out ?? 0
   const milesDriven = Math.max(0, Number(odometerIn) - odometerOut)
-  const fuelOut = rentalAgreement?.fuel_level_out_pct ?? 100
+  const fuelOutPct = selectedRental?.fuel_level_out_pct ?? 100
   const fuelNow = Math.round((fuelLevel / 8) * 100)
-  const fuelDeficit = Math.max(0, fuelOut - fuelNow)
+  const fuelDeficit = Math.max(0, fuelOutPct - fuelNow)
   const fuelCharge = checkInResult ? toNum(checkInResult.fuel_charge) : (fuelDeficit > 12 ? Math.ceil(fuelDeficit / 12.5) * 15 : 0)
   const timeCharge = checkInResult ? toNum(checkInResult.time_extension_charge) : 0
   const mileageCharge = checkInResult ? toNum(checkInResult.mileage_overage_charge) : 0
   const totalExtra = fuelCharge + timeCharge + mileageCharge
 
-  const returnDate = selectedRes?.return_date ? new Date(selectedRes.return_date) : null
+  const returnDate = selectedRental?.scheduled_return_date ? new Date(selectedRental.scheduled_return_date) : null
   const now = new Date()
-  const isLate = returnDate && now > returnDate
-  const isEarlyReturn = returnDate && now < returnDate
+  const isLate = returnDate ? now > returnDate : false
+  const isEarlyReturn = returnDate ? now < returnDate : false
   const earlyDays = isEarlyReturn && returnDate
     ? Math.ceil((returnDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
     : 0
+
+  const vehicleDesc = selectedRental
+    ? `${selectedRental.model_year} ${selectedRental.vehicle_make} ${selectedRental.vehicle_model}`
+    : ''
 
   return (
     <div className="space-y-5 max-w-4xl">
@@ -418,7 +399,7 @@ export function ReturnProcessingPage() {
               <svg className="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
               </svg>
-              <input type="search" placeholder="Search by confirmation number, customer, or plate…"
+              <input type="search" placeholder="Search by RA number, customer, vehicle, or plate…"
                 value={search} onChange={e => setSearch(e.target.value)}
                 className="field-input h-9 pl-8 text-[13px] w-full" />
             </div>
@@ -435,11 +416,12 @@ export function ReturnProcessingPage() {
           )}
 
           <div className="space-y-2">
-            {filtered.map(res => {
-              const late = new Date() > new Date(res.return_date)
+            {filtered.map(rental => {
+              const late = rental.scheduled_return_date ? new Date() > new Date(rental.scheduled_return_date) : false
+              const isWalkUp = !rental.reservation_id
               return (
-                <button key={res.reservation_id} type="button"
-                  onClick={() => selectReservation(res)}
+                <button key={rental.ra_id} type="button"
+                  onClick={() => selectRental(rental)}
                   className="w-full text-left rounded-lg px-4 py-3.5 transition-colors"
                   style={{ background: 'var(--elevated)', border: '1px solid var(--border)' }}
                   onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--accent)' }}
@@ -447,23 +429,29 @@ export function ReturnProcessingPage() {
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
-                        <span className="text-[13px] font-semibold" style={{ color: 'var(--text-1)' }}>{res.customer_name}</span>
-                        <span className="font-mono text-[11px]" style={{ color: 'var(--text-3)' }}>{res.confirmation_number}</span>
+                        <span className="text-[13px] font-semibold" style={{ color: 'var(--text-1)' }}>{rental.customer_name}</span>
+                        <span className="font-mono text-[11px]" style={{ color: 'var(--text-3)' }}>{rental.ra_number}</span>
+                        {isWalkUp && (
+                          <span className="rounded-full px-1.5 py-0.5 text-[10px] font-semibold" style={{ background: 'rgba(99,102,241,0.12)', color: '#6366f1' }}>WALK-UP</span>
+                        )}
                         {late && (
                           <span className="rounded px-1.5 py-0.5 text-[10px] font-semibold" style={{ background: 'var(--danger-bg)', color: 'var(--danger)' }}>OVERDUE</span>
                         )}
                       </div>
                       <p className="text-[12px] mt-0.5" style={{ color: 'var(--text-3)' }}>
-                        {res.class_name}
-                        {res.assigned_vehicle ? ` · ${res.assigned_vehicle}` : ''}
-                        {' · '}Due {new Date(res.return_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                        {rental.model_year} {rental.vehicle_make} {rental.vehicle_model}
+                        {rental.plate_number ? ` · ${rental.plate_number}` : ''}
+                        {rental.scheduled_return_date
+                          ? ` · Due ${new Date(rental.scheduled_return_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`
+                          : ' · No due date'}
                       </p>
                     </div>
                     <div className="text-right shrink-0">
-                      <p className="text-[13px] font-semibold num" style={{ color: 'var(--text-1)' }}>
-                        ${res.total?.toFixed(2)}
-                      </p>
-                      <p className="text-[11px]" style={{ color: 'var(--text-3)' }}>{res.customer_email}</p>
+                      {rental.reservation_total != null
+                        ? <p className="text-[13px] font-semibold num" style={{ color: 'var(--text-1)' }}>${Number(rental.reservation_total).toFixed(2)}</p>
+                        : <p className="text-[12px]" style={{ color: 'var(--text-3)' }}>—</p>
+                      }
+                      <p className="text-[11px]" style={{ color: 'var(--text-3)' }}>{rental.customer_email}</p>
                     </div>
                   </div>
                 </button>
@@ -474,36 +462,34 @@ export function ReturnProcessingPage() {
       )}
 
       {/* ── Step 2: Inspect Vehicle ── */}
-      {step === 2 && selectedRes && (
+      {step === 2 && selectedRental && (
         <form onSubmit={handleInspectSubmit} className="space-y-4">
           {/* Rental summary card */}
           <div className="panel px-5 py-4">
             <div className="flex items-start justify-between gap-4 flex-wrap">
               <div>
                 <p className="text-[11px] font-semibold uppercase tracking-widest mb-1" style={{ color: 'var(--text-3)' }}>Returning</p>
-                <p className="text-[15px] font-bold" style={{ color: 'var(--text-1)' }}>{selectedRes.customer_name}</p>
+                <p className="text-[15px] font-bold" style={{ color: 'var(--text-1)' }}>{selectedRental.customer_name}</p>
                 <p className="text-[12px] mt-0.5" style={{ color: 'var(--text-3)' }}>
-                  {selectedRes.confirmation_number} · {selectedRes.class_name}
-                  {vehicle ? ` · ${vehicle.model_year} ${vehicle.make} ${vehicle.model}` : ''}
-                  {vehicle?.plate_number ? ` · ${vehicle.plate_number}` : ''}
+                  {selectedRental.ra_number}
+                  {selectedRental.confirmation_number ? ` · ${selectedRental.confirmation_number}` : ' · Walk-up'}
+                  {' · '}{vehicleDesc}
+                  {selectedRental.plate_number ? ` · ${selectedRental.plate_number}` : ''}
                 </p>
               </div>
               <div className="text-right">
-                {rentalAgreement
-                  ? <span className="badge-green">RA Found</span>
-                  : <span className="badge-amber">No RA on file</span>
-                }
-                {rentalAgreement && (
-                  <p className="text-[11px] mt-1 font-mono" style={{ color: 'var(--text-3)' }}>{rentalAgreement.ra_number}</p>
-                )}
+                <span className="badge-green">RA Found</span>
+                <p className="text-[11px] mt-1 font-mono" style={{ color: 'var(--text-3)' }}>{selectedRental.ra_number}</p>
               </div>
             </div>
 
             <div className="mt-3 grid grid-cols-3 gap-3 text-center" style={{ borderTop: '1px solid var(--border-sub)', paddingTop: 12 }}>
               {[
-                { label: 'Picked Up', value: new Date(selectedRes.pickup_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) },
-                { label: 'Due Back', value: new Date(selectedRes.return_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) },
-                { label: 'Base Total', value: `$${selectedRes.total?.toFixed(2)}` },
+                { label: 'Checked Out', value: new Date(selectedRental.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) },
+                { label: 'Due Back', value: selectedRental.scheduled_return_date
+                    ? new Date(selectedRental.scheduled_return_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+                    : 'N/A' },
+                { label: 'Base Total', value: selectedRental.reservation_total != null ? `$${Number(selectedRental.reservation_total).toFixed(2)}` : '—' },
               ].map(s => (
                 <div key={s.label}>
                   <p className="text-[10px] font-semibold uppercase tracking-widest mb-0.5" style={{ color: 'var(--text-3)' }}>{s.label}</p>
@@ -539,11 +525,9 @@ export function ReturnProcessingPage() {
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <SectionLabel>Odometer at Return (mi)</SectionLabel>
-                {rentalAgreement?.odometer_out && (
-                  <p className="text-[11px] mb-1.5" style={{ color: 'var(--text-3)' }}>
-                    Out: {rentalAgreement.odometer_out.toLocaleString()} mi
-                  </p>
-                )}
+                <p className="text-[11px] mb-1.5" style={{ color: 'var(--text-3)' }}>
+                  Out: {selectedRental.odometer_out.toLocaleString()} mi
+                </p>
                 <input required type="number" min={odometerOut} placeholder="Current mileage"
                   value={odometerIn} onChange={e => setOdometerIn(e.target.value)}
                   className="field-input h-9 px-3 text-[13px] w-full num" />
@@ -573,9 +557,9 @@ export function ReturnProcessingPage() {
 
             <div>
               <SectionLabel>Fuel Level at Return</SectionLabel>
-              {rentalAgreement?.fuel_level_out_pct !== undefined && rentalAgreement.fuel_level_out_pct !== null && (
+              {selectedRental.fuel_level_out_pct != null && (
                 <p className="text-[11px] mb-2" style={{ color: 'var(--text-3)' }}>
-                  Rented at {rentalAgreement.fuel_level_out_pct}%
+                  Rented at {selectedRental.fuel_level_out_pct}%
                 </p>
               )}
               <FuelGauge value={fuelLevel} onChange={setFuelLevel} />
@@ -587,35 +571,25 @@ export function ReturnProcessingPage() {
             <div>
               <SectionLabel>Vehicle Condition</SectionLabel>
               <p className="text-[12px]" style={{ color: 'var(--text-3)' }}>
-                Click each zone to cycle through Good → Minor damage → Major damage
+                Click each zone to cycle through Good — Minor damage — Major damage
               </p>
             </div>
 
-            {/* Car diagram zones */}
             <div className="space-y-2">
-              {/* Top row: Front */}
               <div className="grid grid-cols-1 gap-2">
-                <DamageZoneButton
-                  zone={DAMAGE_ZONES[0]}
-                  value={damageZones['FRONT']}
+                <DamageZoneButton zone={DAMAGE_ZONES[0]} value={damageZones['FRONT']}
                   onChange={v => setDamageZones(p => ({ ...p, FRONT: v }))} />
               </div>
-              {/* Middle row: Left / Interior / Right */}
               <div className="grid grid-cols-3 gap-2">
                 {['LEFT', 'INTERIOR', 'RIGHT'].map(id => (
-                  <DamageZoneButton key={id}
-                    zone={DAMAGE_ZONES.find(z => z.id === id)!}
-                    value={damageZones[id]}
-                    onChange={v => setDamageZones(p => ({ ...p, [id]: v }))} />
+                  <DamageZoneButton key={id} zone={DAMAGE_ZONES.find(z => z.id === id)!}
+                    value={damageZones[id]} onChange={v => setDamageZones(p => ({ ...p, [id]: v }))} />
                 ))}
               </div>
-              {/* Bottom row: Rear / Glass */}
               <div className="grid grid-cols-2 gap-2">
                 {['REAR', 'GLASS'].map(id => (
-                  <DamageZoneButton key={id}
-                    zone={DAMAGE_ZONES.find(z => z.id === id)!}
-                    value={damageZones[id]}
-                    onChange={v => setDamageZones(p => ({ ...p, [id]: v }))} />
+                  <DamageZoneButton key={id} zone={DAMAGE_ZONES.find(z => z.id === id)!}
+                    value={damageZones[id]} onChange={v => setDamageZones(p => ({ ...p, [id]: v }))} />
                 ))}
               </div>
             </div>
@@ -635,9 +609,7 @@ export function ReturnProcessingPage() {
           {/* Post-return Disposition */}
           <div className="panel px-5 py-4 space-y-3">
             <SectionLabel>Post-Return Disposition</SectionLabel>
-            <p className="text-[12px]" style={{ color: 'var(--text-3)' }}>
-              Where does this vehicle go after return?
-            </p>
+            <p className="text-[12px]" style={{ color: 'var(--text-3)' }}>Where does this vehicle go after return?</p>
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
               {([
                 { value: 'CLEANING' as Disposition, label: 'Cleaning Queue', desc: 'Standard turnaround — clean and inspect before release', color: '#10b981' },
@@ -674,16 +646,15 @@ export function ReturnProcessingPage() {
       )}
 
       {/* ── Step 3: Review & Charges ── */}
-      {step === 3 && selectedRes && (
+      {step === 3 && selectedRental && (
         <div className="space-y-4">
-          {/* Summary */}
           <div className="panel px-5 py-4">
             <SectionLabel>Return Summary</SectionLabel>
             <div className="mt-2 space-y-2">
               {[
-                { label: 'Customer', value: selectedRes.customer_name },
-                { label: 'Confirmation', value: selectedRes.confirmation_number },
-                { label: 'Vehicle Class', value: selectedRes.class_name + (vehicle ? ` — ${vehicle.model_year} ${vehicle.make} ${vehicle.model}` : '') },
+                { label: 'Customer', value: selectedRental.customer_name },
+                { label: 'RA Number', value: selectedRental.ra_number },
+                { label: 'Vehicle', value: vehicleDesc },
                 { label: 'Return Location', value: returnLocationId ? `${locMap[returnLocationId]?.short_code} — ${locMap[returnLocationId]?.city}` : 'Not specified' },
                 { label: 'Mileage at Return', value: `${Number(odometerIn).toLocaleString()} mi (${milesDriven.toLocaleString()} driven)` },
                 { label: 'Fuel Level', value: `${Math.round((fuelLevel / 8) * 100)}% (${fuelLevel}/8)` },
@@ -707,7 +678,6 @@ export function ReturnProcessingPage() {
             </div>
           </div>
 
-          {/* Early Return Notice */}
           {isEarlyReturn && (
             <div className="rounded-lg px-4 py-3" style={{ background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.3)' }}>
               <p className="text-[12px] font-semibold" style={{ color: '#6366f1' }}>Early Return</p>
@@ -722,23 +692,23 @@ export function ReturnProcessingPage() {
             <SectionLabel>Charge Estimate</SectionLabel>
             <div className="mt-2 space-y-1.5">
               {[
-                { label: 'Base rental', value: selectedRes.total, neutral: true },
+                { label: 'Base rental', value: selectedRental.reservation_total },
                 { label: `Time extension${isLate ? ' (late return)' : ''}`, value: timeCharge, warn: isLate && timeCharge > 0 },
                 { label: 'Fuel surcharge', value: fuelCharge, warn: fuelCharge > 0 },
                 { label: 'Mileage overage', value: mileageCharge, warn: mileageCharge > 0 },
               ].map(row => (
                 <div key={row.label} className="flex items-center justify-between gap-4 py-1"
                   style={{ borderBottom: '1px solid var(--border-sub)' }}>
-                  <span className="text-[12px]" style={{ color: row.warn ? '#d97706' : 'var(--text-2)' }}>{row.label}</span>
-                  <span className="text-[12px] font-semibold num" style={{ color: row.warn ? '#d97706' : 'var(--text-1)' }}>
-                    ${row.value?.toFixed(2) ?? '0.00'}
+                  <span className="text-[12px]" style={{ color: (row as any).warn ? '#d97706' : 'var(--text-2)' }}>{row.label}</span>
+                  <span className="text-[12px] font-semibold num" style={{ color: (row as any).warn ? '#d97706' : 'var(--text-1)' }}>
+                    {row.value != null ? `$${Number(row.value).toFixed(2)}` : '—'}
                   </span>
                 </div>
               ))}
               {totalExtra > 0 && (
                 <div className="flex items-center justify-between gap-4 pt-2">
                   <span className="text-[13px] font-bold" style={{ color: 'var(--text-1)' }}>Additional Charges</span>
-                  <span className="text-[14px] font-bold num" style={{ color: totalExtra > 0 ? '#d97706' : '#10b981' }}>
+                  <span className="text-[14px] font-bold num" style={{ color: '#d97706' }}>
                     ${totalExtra.toFixed(2)}
                   </span>
                 </div>
@@ -757,15 +727,15 @@ export function ReturnProcessingPage() {
             <SectionLabel>What Happens Next</SectionLabel>
             <div className="mt-3 space-y-2">
               {[
-                { n: 1, text: 'Return processed — rental agreement closed', done: false },
-                { n: 2, text: `Vehicle moved to ${disposition === 'CLEANING' ? 'cleaning queue (TURNAROUND block)' : disposition === 'DAMAGE_HOLD' ? 'damage hold' : 'maintenance queue'}`, done: false },
-                { n: 3, text: disposition === 'CLEANING' ? 'Inspection by fleet tech — 2hr window' : 'Fleet team assessment and work order', done: false },
-                { n: 4, text: disposition === 'CLEANING' ? 'Vehicle returns to available pool at return location' : 'Vehicle released after clearance', done: false },
-              ].map(item => (
-                <div key={item.n} className="flex items-start gap-3">
+                'Return processed — rental agreement closed',
+                `Vehicle moved to ${disposition === 'CLEANING' ? 'cleaning queue (TURNAROUND block)' : disposition === 'DAMAGE_HOLD' ? 'damage hold' : 'maintenance queue'}`,
+                disposition === 'CLEANING' ? 'Inspection by fleet tech — 2hr window' : 'Fleet team assessment and work order',
+                disposition === 'CLEANING' ? 'Vehicle returns to available pool at return location' : 'Vehicle released after clearance',
+              ].map((text, n) => (
+                <div key={n} className="flex items-start gap-3">
                   <div className="flex h-5 w-5 items-center justify-center rounded-full shrink-0 text-[10px] font-bold"
-                    style={{ background: 'var(--accent)', color: 'white', marginTop: 1 }}>{item.n}</div>
-                  <p className="text-[12px]" style={{ color: 'var(--text-2)' }}>{item.text}</p>
+                    style={{ background: 'var(--accent)', color: 'white', marginTop: 1 }}>{n + 1}</div>
+                  <p className="text-[12px]" style={{ color: 'var(--text-2)' }}>{text}</p>
                 </div>
               ))}
             </div>
@@ -784,7 +754,7 @@ export function ReturnProcessingPage() {
       )}
 
       {/* ── Step 4: Complete ── */}
-      {step === 4 && completed && (
+      {step === 4 && completed && selectedRental && (
         <div className="panel px-6 py-8 text-center space-y-4">
           <div className="flex h-14 w-14 items-center justify-center rounded-full mx-auto"
             style={{ background: 'rgba(16,185,129,0.15)' }}>
@@ -795,15 +765,15 @@ export function ReturnProcessingPage() {
           <div>
             <h2 className="text-[18px] font-bold" style={{ color: 'var(--text-1)' }}>Return Complete</h2>
             <p className="text-[13px] mt-1" style={{ color: 'var(--text-3)' }}>
-              {selectedRes?.customer_name}'s rental has been successfully processed.
+              {selectedRental.customer_name}'s rental has been successfully processed.
             </p>
           </div>
 
           <div className="rounded-lg px-5 py-4 mx-auto max-w-sm text-left space-y-2"
             style={{ background: 'var(--elevated)', border: '1px solid var(--border)' }}>
             {[
-              { label: 'Confirmation', value: selectedRes?.confirmation_number },
-              { label: 'Vehicle', value: vehicle ? `${vehicle.model_year} ${vehicle.make} ${vehicle.model}` : selectedRes?.class_name },
+              { label: 'RA Number', value: selectedRental.ra_number },
+              { label: 'Vehicle', value: vehicleDesc },
               { label: 'Return Location', value: returnLocationId ? `${locMap[returnLocationId]?.short_code} — ${locMap[returnLocationId]?.city}` : 'Not recorded' },
               { label: 'Mileage', value: `${Number(odometerIn).toLocaleString()} mi` },
               { label: 'Fuel', value: `${Math.round((fuelLevel / 8) * 100)}%` },

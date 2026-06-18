@@ -19,18 +19,10 @@ const COUNTER_ROLES = [
 ]
 
 function LoginPage() {
-  return (
-    <div className="flex min-h-screen flex-col items-center justify-center p-8">
-      <h1 className="text-3xl font-bold">Counter Login</h1>
-      <p className="mt-2 text-muted-foreground">Sign in to access the counter station.</p>
-      <a
-        href="/api/v1/auth/login"
-        className="mt-6 inline-flex min-h-[44px] items-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
-      >
-        Sign In
-      </a>
-    </div>
-  )
+  // No login here — authentication happens at the admin app.
+  // Redirect there and it will send the user back after login.
+  window.location.replace('http://localhost:3002/login')
+  return null
 }
 
 function Dashboard() {

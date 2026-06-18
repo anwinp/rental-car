@@ -165,6 +165,9 @@ class VehicleUpdate(BaseModel):
     residual_value: Optional[Decimal] = None
     book_value: Optional[Decimal] = None
     photos: Optional[list[str]] = None
+    is_promo: Optional[bool] = None
+    promo_image_url: Optional[str] = None
+    promo_label: Optional[str] = None
 
 
 class VehicleResponse(BaseModel):
@@ -208,6 +211,9 @@ class VehicleResponse(BaseModel):
 
     photos: list
     telematics_device_id: Optional[str] = None
+    is_promo: bool = False
+    promo_image_url: Optional[str] = None
+    promo_label: Optional[str] = None
 
     created_at: datetime
     updated_at: datetime

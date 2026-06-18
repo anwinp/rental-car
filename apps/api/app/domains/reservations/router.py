@@ -358,6 +358,7 @@ async def create_reservation(
 async def list_reservations_crm(
     status_filter: Optional[str] = Query(default=None, alias="status"),
     search: Optional[str] = Query(default=None, description="Search confirmation, customer name, or email"),
+    location_id: Optional[str] = Query(default=None, description="Filter by pickup location UUID"),
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     claims: UserClaims = Depends(get_current_user),
@@ -368,6 +369,10 @@ async def list_reservations_crm(
 
     where_clauses = ["r.tenant_id = :tid", "r.deleted_at IS NULL"]
     params: dict = {"tid": tenant_id, "limit": limit, "offset": offset}
+
+    if location_id:
+        where_clauses.append("CAST(r.pickup_location_id AS text) = :location_id")
+        params["location_id"] = location_id
 
     if status_filter:
         where_clauses.append("r.status = :status")

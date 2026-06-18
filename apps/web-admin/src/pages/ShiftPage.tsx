@@ -33,7 +33,7 @@ type ShiftReport = {
 
 // ── fetchJSON helper ──────────────────────────────────────────────────────────
 
-const TENANT = import.meta.env.VITE_TENANT_ID ?? 'dev'
+const TENANT = '00000000-0000-0000-0000-000000000001'
 
 async function fetchJSON(path: string, opts?: RequestInit) {
   const res = await fetch(`/api/v1${path}`, {

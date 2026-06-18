@@ -13,6 +13,7 @@ export interface UserProfile {
   role: UserRole
   roles: UserRole[]
   tenant_id: string
+  location_ids: string[]
 }
 
 interface AuthContextValue {

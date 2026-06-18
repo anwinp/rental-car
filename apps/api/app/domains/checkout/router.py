@@ -11,6 +11,7 @@ from app.core.database import get_session
 from app.core.rbac import require_permission
 from app.core.security import UserClaims
 from app.domains.checkout.schemas import (
+    ActiveRentalItem,
     CheckInRequest,
     CheckInResponse,
     CheckoutRequest,
@@ -101,6 +102,57 @@ async def get_agreement(
     svc = CheckoutService(session, claims.tenant_id)
     ra = await svc.get_rental_agreement(ra_id, claims.tenant_id)
     return RentalAgreementResponse.model_validate(ra, from_attributes=True)
+
+
+# ── Active rentals (enriched, for return processing) ─────────────────────────
+
+@router.get("/active-rentals", response_model=list[ActiveRentalItem])
+async def list_active_rentals(
+    claims: UserClaims = Depends(require_permission("reservations", "read")),
+    session: AsyncSession = Depends(get_session),
+) -> list[ActiveRentalItem]:
+    """
+    Return all ACTIVE/EXTENDED rental agreements enriched with customer and vehicle info.
+    Used by the Return Processing page to show all current rentals (walk-up + reservation).
+    """
+    from sqlalchemy import text
+    result = await session.execute(
+        text("""
+            SELECT
+              ra.ra_id::text,
+              ra.ra_number,
+              ra.reservation_id::text,
+              r.confirmation_number,
+              ra.customer_id::text,
+              COALESCE(c.first_name || ' ' || c.last_name, 'Unknown') AS customer_name,
+              COALESCE(c.email, '') AS customer_email,
+              ra.vehicle_id::text,
+              COALESCE(v.make, '') AS vehicle_make,
+              COALESCE(v.model, '') AS vehicle_model,
+              COALESCE(v.model_year, 0) AS model_year,
+              v.plate_number,
+              ra.status,
+              ra.odometer_out,
+              ra.fuel_level_out_pct,
+              ra.created_at,
+              r.return_datetime AS scheduled_return_date,
+              r.grand_total AS reservation_total
+            FROM rental_agreements ra
+            LEFT JOIN customers c
+              ON ra.customer_id = c.customer_id AND c.tenant_id = ra.tenant_id
+            LEFT JOIN vehicles v
+              ON ra.vehicle_id = v.vehicle_id AND v.tenant_id = ra.tenant_id
+            LEFT JOIN reservations r
+              ON ra.reservation_id = r.reservation_id
+            WHERE ra.tenant_id = :tid
+              AND ra.status IN ('ACTIVE', 'EXTENDED')
+            ORDER BY ra.created_at DESC
+            LIMIT 100
+        """),
+        {"tid": str(claims.tenant_id)},
+    )
+    rows = result.mappings().all()
+    return [ActiveRentalItem.model_validate(dict(row)) for row in rows]
 
 
 # ── Shift management ──────────────────────────────────────────────────────────

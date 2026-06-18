@@ -145,6 +145,11 @@ class Vehicle(Base):
     telematics_device_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     telematics_provider: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
+    # ── Promotional display ───────────────────────────────────────────────────
+    is_promo: Mapped[bool] = mapped_column(nullable=False, server_default="false")
+    promo_image_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    promo_label: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
     # ── Timestamps / soft delete ──────────────────────────────────────────────
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()

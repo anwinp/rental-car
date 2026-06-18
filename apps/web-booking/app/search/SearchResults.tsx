@@ -93,19 +93,28 @@ export function SearchResults({
   useEffect(() => { setActive(initialFilter) }, [initialFilter])
 
   if (!enabled) {
+    const hasLocation = !!pickupLocationId
     return (
       <div style={{ padding: '80px 0', textAlign: 'center' }}>
-        <p style={{ fontSize: 11, fontWeight: 600, color: '#666666', textTransform: 'uppercase', letterSpacing: '1.1px', marginBottom: 16 }}>Ready to drive?</p>
-        <h2 style={{ fontSize: 36, fontWeight: 500, color: '#ffffff', letterSpacing: '-0.05em', marginBottom: 12 }}>Where are you headed?</h2>
-        <p style={{ fontSize: 14, fontWeight: 400, color: '#969696', marginBottom: 32 }}>
-          Enter a pickup location and dates to find available vehicles.
+        <p style={{ fontSize: 11, fontWeight: 600, color: '#666666', textTransform: 'uppercase', letterSpacing: '1.1px', marginBottom: 16 }}>
+          {hasLocation ? pickupLocationId : 'Ready to drive?'}
         </p>
-        <a href="/" style={{
-          display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-          height: 48, padding: '0 32px', background: RED, color: '#ffffff',
-          fontSize: 14, fontWeight: 700, letterSpacing: '1.4px', textTransform: 'uppercase',
-          textDecoration: 'none',
-        }}>Back to Search</a>
+        <h2 style={{ fontSize: 36, fontWeight: 500, color: '#ffffff', letterSpacing: '-0.05em', marginBottom: 12 }}>
+          {hasLocation ? 'Select your dates' : 'Where are you headed?'}
+        </h2>
+        <p style={{ fontSize: 14, fontWeight: 400, color: '#969696', marginBottom: 32 }}>
+          {hasLocation
+            ? 'Choose a pickup and return date above to see available vehicles.'
+            : 'Enter a pickup location and dates above to find available vehicles.'}
+        </p>
+        {!hasLocation && (
+          <a href="/" style={{
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+            height: 48, padding: '0 32px', background: RED, color: '#ffffff',
+            fontSize: 14, fontWeight: 700, letterSpacing: '1.4px', textTransform: 'uppercase',
+            textDecoration: 'none',
+          }}>Back to Home</a>
+        )}
       </div>
     )
   }

@@ -386,7 +386,7 @@ class FleetService:
                 filters=[
                     Vehicle.home_location_id == query.location_id,
                     Vehicle.vehicle_class_id == query.vehicle_class_id,
-                    cast(Vehicle.status, Text) == VehicleStatus.AVAILABLE.value,
+                    cast(Vehicle.status, Text).in_([VehicleStatus.AVAILABLE.value, "ON_RENT", "RETURNING"]),
                 ]
             )
             response.vehicles = [VehicleResponse.model_validate(v) for v in vehicles]

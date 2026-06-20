@@ -183,17 +183,21 @@ class ReservationService:
         lock_key = _advisory_lock_key(data.location_id, data.vehicle_class_id)
         await self._repo.acquire_advisory_lock(lock_key)
 
-        # ── Re-check availability under lock ──────────────────────────────
-        available_count = await self._repo.check_availability_db(
+        # ── Step 4b: Pick a specific vehicle under lock (SKIP LOCKED) ─────
+        # This is the authoritative vehicle selection. By using FOR UPDATE SKIP LOCKED
+        # within the advisory-locked transaction, concurrent bookings for the same
+        # class/location/period will each pick a different row and block it, making
+        # double-booking impossible.
+        vehicle_id = await self._repo.pick_available_vehicle(
             location_id=data.location_id,
             vehicle_class_id=data.vehicle_class_id,
             pickup_dt=data.pickup_dt,
             dropoff_dt=data.dropoff_dt,
         )
-        if available_count == 0:
+        if vehicle_id is None:
             raise ConflictError(
-                "Vehicle class is no longer available (race condition). "
-                "Please try again.",
+                "No vehicles of the requested class are available at this location "
+                "for the requested dates."
             )
 
         # ── Step 5: Generate confirmation number (retry on collision) ──────
@@ -212,6 +216,7 @@ class ReservationService:
             pickup_datetime=data.pickup_dt,
             return_datetime=data.dropoff_dt,
             vehicle_class_id=str(data.vehicle_class_id),
+            assigned_vehicle_id=vehicle_id,
             channel=data.source.value,
             special_instructions=data.notes,
             flight_number=data.flight_number,
@@ -230,28 +235,41 @@ class ReservationService:
             version=1,
         )
 
-        # ── Step 7: Create VehicleBlock via fleet service ──────────────────
-        if self._fleet_service is not None:
-            try:
-                await self._fleet_service.create_block(
-                    vehicle_id=None,  # class-level block until vehicle assigned
-                    block_type="RESERVATION",
-                    start_time=data.pickup_dt,
-                    end_time=data.dropoff_dt,
-                    reservation_id=reservation.reservation_id,
-                    created_by=str(actor_id) if actor_id else "GUEST",
-                )
-            except Exception as exc:
-                # Exclusion constraint violation → VehicleNotAvailableError
+        # ── Step 7: Create vehicle_block for the chosen vehicle ────────────
+        # Resolve a valid staff_user_id for created_by (FK to staff_users).
+        # Use the actor if available, otherwise fall back to the system admin.
+        from sqlalchemy import text as _sqlt
+        _su_row = await self._repo.session.execute(
+            _sqlt("SELECT user_id FROM staff_users WHERE tenant_id = :tid ORDER BY created_at LIMIT 1"),
+            {"tid": str(self._tenant_id)},
+        )
+        _su = _su_row.fetchone()
+        _created_by = str(_su[0]) if _su else str(actor_id or self._tenant_id)
+
+        try:
+            await self._repo.create_vehicle_block(
+                vehicle_id=vehicle_id,
+                pickup_dt=data.pickup_dt,
+                dropoff_dt=data.dropoff_dt,
+                reservation_id=reservation.reservation_id,
+                staff_user_id=_created_by,
+            )
+        except Exception as exc:
+            # Exclusion constraint (23P01) — another request claimed this vehicle
+            # between our FOR UPDATE and the INSERT (extremely rare but possible
+            # if the session is autocommit). Roll back and surface a clean error.
+            cause = getattr(exc, "__cause__", None) or exc
+            pgcode = getattr(cause, "pgcode", "") or ""
+            if pgcode == "23P01" or "exclusion" in str(exc).lower():
                 log.warning(
-                    "VehicleBlock creation failed: %s — reservation %s rolled back",
-                    exc,
-                    reservation.reservation_id,
+                    "vehicle_block exclusion violation vehicle=%s reservation=%s",
+                    vehicle_id, reservation.reservation_id,
                 )
                 raise ConflictError(
-                    "Vehicle is no longer available (block conflict). "
-                    "Please try another vehicle or time."
+                    "This vehicle was just reserved by another booking. "
+                    "Please try again — another vehicle will be selected."
                 ) from exc
+            raise
 
         # ── Step 9: Update status → CONFIRMED ────────────────────────────
         await self._repo.update_status(
@@ -262,11 +280,49 @@ class ReservationService:
 
         # ── Step 11: Async tasks (stub — real implementation uses Celery) ──
         log.info(
-            "reservation_created",
-            reservation_id=reservation.reservation_id,
-            confirmation_number=reservation.confirmation_number,
-            tenant_id=str(self._tenant_id),
+            "reservation_created reservation_id=%s confirmation_number=%s tenant_id=%s",
+            reservation.reservation_id,
+            reservation.confirmation_number,
+            str(self._tenant_id),
         )
+
+        try:
+            from app.domains.tasks.service import TaskService as _TaskService
+            from app.core.database import AsyncSessionLocal
+            async with AsyncSessionLocal() as _ts:
+                await _TaskService(_ts, self._tenant_id).auto_create_from_event(
+                    "RESERVATION_CONFIRMED",
+                    reservation_id=UUID(reservation.reservation_id),
+                    vehicle_id=getattr(reservation, 'vehicle_id', None),
+                    created_by=actor_id,
+                )
+                await _ts.commit()
+        except Exception as _e:
+            log.warning("task_auto_create_failed reservation_id=%s error=%s", str(reservation.reservation_id), str(_e))
+
+        try:
+            from app.worker.tasks.notifications import dispatch_notification
+            customer_id = reservation.customer_id
+            if customer_id:
+                dispatch_notification.delay(
+                    tenant_id=str(self._tenant_id),
+                    event_code="RESERVATION_CONFIRMED",
+                    recipient_id=str(customer_id),
+                    context={"confirmation_number": reservation.confirmation_number},
+                )
+        except Exception as _ne:
+            log.warning("dispatch_notification_failed reservation_id=%s error=%s", str(reservation.reservation_id), str(_ne))
+
+        if getattr(data, 'promo_code', None):
+            try:
+                from sqlalchemy import text as _sql_text
+                await self._repo.session.execute(
+                    _sql_text("UPDATE promotion_codes SET used_count = used_count + 1 WHERE tenant_id = :tid AND code = :code AND is_active = true"),
+                    {"tid": str(self._tenant_id), "code": data.promo_code.upper().strip()},
+                )
+                await self._repo.session.commit()
+            except Exception as _pe:
+                log.warning("promo_increment_failed error=%s", str(_pe))
 
         return reservation
 
@@ -324,9 +380,9 @@ class ReservationService:
         modified = await self._repo.update_reservation(reservation_id, **updates)
 
         log.info(
-            "reservation_modified",
-            reservation_id=str(reservation_id),
-            actor_id=str(actor_id),
+            "reservation_modified reservation_id=%s actor_id=%s",
+            str(reservation_id),
+            str(actor_id),
         )
 
         return modified  # type: ignore[return-value]
@@ -391,12 +447,12 @@ class ReservationService:
         )
 
         log.info(
-            "reservation_cancelled",
-            reservation_id=str(reservation_id),
-            policy_tier=policy_tier,
-            refund_amount=str(refund_amount),
-            fee=str(cancellation_fee),
-            actor_id=str(actor_id),
+            "reservation_cancelled reservation_id=%s policy_tier=%s refund=%s fee=%s actor=%s",
+            str(reservation_id),
+            policy_tier,
+            str(refund_amount),
+            str(cancellation_fee),
+            str(actor_id),
         )
 
         return CancellationResult(
@@ -475,8 +531,8 @@ class ReservationService:
         if row is None:
             # Already processed by another worker or status changed — idempotent exit
             log.info(
-                "no_show_already_processed_or_not_eligible",
-                reservation_id=str(reservation_id),
+                "no_show_already_processed_or_not_eligible reservation_id=%s",
+                str(reservation_id),
             )
             return
 
@@ -489,9 +545,9 @@ class ReservationService:
         )
 
         log.info(
-            "reservation_no_show",
-            reservation_id=str(reservation_id),
-            tenant_id=str(self._tenant_id),
+            "reservation_no_show reservation_id=%s tenant_id=%s",
+            str(reservation_id),
+            str(self._tenant_id),
         )
 
     # ── Read operations ───────────────────────────────────────────────────────
@@ -549,9 +605,9 @@ class ReservationService:
             if existing is None:
                 return candidate
             log.warning(
-                "confirmation_number_collision",
-                candidate=candidate,
-                attempt=attempt + 1,
+                "confirmation_number_collision candidate=%s attempt=%s",
+                candidate,
+                attempt + 1,
             )
         # Final attempt — let the DB UNIQUE constraint handle it
         return _generate_confirmation_number()

@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { SearchSkeleton } from './SearchSkeleton'
 
-const TENANT = '00000000-0000-0000-0000-000000000001'
+const TENANT  = '00000000-0000-0000-0000-000000000001'
 const RED     = '#da291c'
 const RED_ACT = '#b01e0a'
 
@@ -14,6 +14,7 @@ interface VehicleClass {
   className: string
   description: string
   features: string[]
+  imageUrl: string | null
   availableCount: number
   baseDailyRate: number
   currencyCode: string
@@ -29,18 +30,53 @@ interface SearchResultsProps {
 }
 
 const SORT_OPTS = [
-  { value: 'price_asc',    label: 'Price: Low to High' },
-  { value: 'price_desc',   label: 'Price: High to Low' },
-  { value: 'availability', label: 'Most Available' },
+  { value: 'price_asc',    label: 'Lowest Price',   short: 'Lowest' },
+  { value: 'price_desc',   label: 'Highest Price',  short: 'Highest' },
+  { value: 'availability', label: 'Most Available', short: 'Available' },
 ]
 
 const CLASS_TAGLINES: Record<string, string> = {
+  MINI: 'City-ready, park anywhere',
   ECON: 'Smart miles, smart spend',
   COMP: 'Right-sized for any road',
-  MIDZ: 'The sweet spot in comfort',
+  IXXX: 'The sweet spot in comfort',
   FULL: 'Command every journey',
   SUVR: 'Ready for the wild',
   PREM: 'Elevated by design',
+  LUXR: 'Where comfort meets craft',
+  WXXX: 'Space for every adventure',
+  XXXX: 'The extraordinary awaits',
+}
+
+// Subtle left-panel tints per class family
+const CLASS_TINT: Record<string, string> = {
+  MINI: '#1a1f1f', ECON: '#1a1f1f', COMP: '#1a1c1f',
+  IXXX: '#1c1c22', FULL: '#1e1c1c',
+  SUVR: '#1c1e1a', PREM: '#1f1d17', LUXR: '#1f1d17',
+  WXXX: '#1a1e1f', XXXX: '#200a0a',
+}
+
+const FEATURE_SHORT: Record<string, string> = {
+  'Air Conditioning': 'A/C',
+  'Automatic Transmission': 'Automatic',
+  'Manual Transmission': 'Manual',
+  'Bluetooth': 'Bluetooth',
+  'Backup Camera': 'Backup Cam',
+  'USB Charging': 'USB',
+  'Fuel Efficient': 'Eco',
+  'GPS Navigation': 'GPS',
+  'Child Seat Compatible': 'Child Seat',
+  'All-Wheel Drive': 'AWD',
+  'Four-Wheel Drive': '4WD',
+  'Heated Seats': 'Heated Seats',
+  'Sunroof': 'Sunroof',
+  'Apple CarPlay': 'CarPlay',
+  'Android Auto': 'Android Auto',
+  'Third Row': '3rd Row',
+}
+
+function shortFeature(f: string) {
+  return FEATURE_SHORT[f] ?? f
 }
 
 function daysBetween(a: string, b: string) {
@@ -52,10 +88,10 @@ export function SearchResults({
   sort: initialSort = 'price_asc', classFilter: initialFilter = [],
 }: SearchResultsProps) {
   const router = useRouter()
-  const [classes, setClasses]     = useState<VehicleClass[]>([])
-  const [loading, setLoading]     = useState(false)
-  const [error, setError]         = useState<string | null>(null)
-  const [sort, setSort]           = useState(initialSort)
+  const [classes, setClasses]      = useState<VehicleClass[]>([])
+  const [loading, setLoading]      = useState(false)
+  const [error, setError]          = useState<string | null>(null)
+  const [sort, setSort]            = useState(initialSort)
   const [activeClasses, setActive] = useState<string[]>(initialFilter)
 
   const enabled = !!(pickupLocationId && pickupDate && dropoffDate)
@@ -87,8 +123,6 @@ export function SearchResults({
   }, [enabled, pickupLocationId, dropoffLocationId, pickupDate, dropoffDate])
 
   useEffect(() => { void fetchAvailability() }, [fetchAvailability])
-
-  // sync sort/filter when URL params change (e.g. after Modify Search)
   useEffect(() => { setSort(initialSort) }, [initialSort])
   useEffect(() => { setActive(initialFilter) }, [initialFilter])
 
@@ -96,13 +130,13 @@ export function SearchResults({
     const hasLocation = !!pickupLocationId
     return (
       <div style={{ padding: '80px 0', textAlign: 'center' }}>
-        <p style={{ fontSize: 11, fontWeight: 600, color: '#666666', textTransform: 'uppercase', letterSpacing: '1.1px', marginBottom: 16 }}>
-          {hasLocation ? pickupLocationId : 'Ready to drive?'}
+        <p style={{ fontSize: 11, fontWeight: 600, color: '#555', textTransform: 'uppercase', letterSpacing: '1.4px', marginBottom: 16 }}>
+          {hasLocation ? 'Almost there' : 'Ready to drive?'}
         </p>
-        <h2 style={{ fontSize: 36, fontWeight: 500, color: '#ffffff', letterSpacing: '-0.05em', marginBottom: 12 }}>
+        <h2 style={{ fontSize: 40, fontWeight: 500, color: '#ffffff', letterSpacing: '-0.04em', margin: '0 0 12px' }}>
           {hasLocation ? 'Select your dates' : 'Where are you headed?'}
         </h2>
-        <p style={{ fontSize: 14, fontWeight: 400, color: '#969696', marginBottom: 32 }}>
+        <p style={{ fontSize: 15, fontWeight: 400, color: '#666', margin: '0 0 36px', lineHeight: 1.6 }}>
           {hasLocation
             ? 'Choose a pickup and return date above to see available vehicles.'
             : 'Enter a pickup location and dates above to find available vehicles.'}
@@ -111,7 +145,7 @@ export function SearchResults({
           <a href="/" style={{
             display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
             height: 48, padding: '0 32px', background: RED, color: '#ffffff',
-            fontSize: 14, fontWeight: 700, letterSpacing: '1.4px', textTransform: 'uppercase',
+            fontSize: 12, fontWeight: 700, letterSpacing: '1.4px', textTransform: 'uppercase',
             textDecoration: 'none',
           }}>Back to Home</a>
         )}
@@ -123,28 +157,29 @@ export function SearchResults({
 
   if (error) {
     return (
-      <div role="alert" style={{ background: 'rgba(241,58,44,0.08)', border: '1px solid rgba(241,58,44,0.25)', padding: 24 }}>
-        <p style={{ color: '#f13a2c', fontWeight: 400, fontSize: 14, marginBottom: 16 }}>{error}</p>
+      <div role="alert" style={{ background: 'rgba(218,41,28,0.06)', border: '1px solid rgba(218,41,28,0.2)', padding: '28px 32px' }}>
+        <p style={{ color: '#f13a2c', fontWeight: 400, fontSize: 14, marginBottom: 20, lineHeight: 1.5 }}>
+          Unable to load vehicles — {error}
+        </p>
         <button
           onClick={() => void fetchAvailability()}
           style={{
-            padding: '10px 20px', background: 'transparent', border: '1px solid rgba(241,58,44,0.4)',
-            color: '#f13a2c', fontSize: 13, fontWeight: 700, cursor: 'pointer',
-            letterSpacing: '0.65px', textTransform: 'uppercase', fontFamily: 'inherit',
+            padding: '10px 24px', background: 'transparent',
+            border: '1px solid rgba(218,41,28,0.4)',
+            color: '#da291c', fontSize: 11, fontWeight: 700, cursor: 'pointer',
+            letterSpacing: '1px', textTransform: 'uppercase', fontFamily: 'inherit',
           }}
         >Try Again</button>
       </div>
     )
   }
 
-  // Derive unique class names for chip filter
-  const allClassNames = Array.from(new Set(classes.map(c => c.className)))
+  const allClassNames = Array.from(new Set(classes.filter(c => c.availableCount > 0).map(c => c.className)))
 
   function toggleClass(name: string) {
     setActive(prev => prev.includes(name) ? prev.filter(n => n !== name) : [...prev, name])
   }
 
-  // Filter + sort
   let filtered = activeClasses.length > 0
     ? classes.filter(c => activeClasses.includes(c.className))
     : classes
@@ -155,106 +190,121 @@ export function SearchResults({
     return a.baseDailyRate - b.baseDailyRate
   }
 
-  const available = [...filtered.filter(c => c.availableCount > 0)].sort(sortFn)
-  const soldOut   = filtered.filter(c => c.availableCount === 0)
-  const sorted    = [...available, ...soldOut]
+  const sorted = filtered.filter(c => c.availableCount > 0).sort(sortFn)
   const days      = daysBetween(pickupDate, dropoffDate)
 
   return (
     <div>
-      {/* Sort + Class chips row */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20, flexWrap: 'wrap' }}>
-        {/* Sort selector */}
-        <select
-          value={sort}
-          onChange={e => setSort(e.target.value)}
-          style={{
-            background: '#303030', border: '1px solid #303030', color: '#ffffff',
-            fontSize: 13, fontWeight: 400, padding: '6px 32px 6px 12px', cursor: 'pointer',
-            appearance: 'none', WebkitAppearance: 'none', fontFamily: 'inherit',
-            backgroundImage: `url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23666666' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")`,
-            backgroundRepeat: 'no-repeat', backgroundPosition: 'right 12px center',
-            outline: 'none',
-          }}
-          aria-label="Sort vehicles"
-        >
-          {SORT_OPTS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-        </select>
+      {/* ── Controls row ──────────────────────────────────────────── */}
+      <div style={{ marginBottom: 24 }}>
+        {/* Sort pills */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 16, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 10, fontWeight: 700, color: '#555', textTransform: 'uppercase', letterSpacing: '1.2px', flexShrink: 0 }}>
+            Sort
+          </span>
+          <div style={{ display: 'flex', gap: 2 }}>
+            {SORT_OPTS.map(o => {
+              const active = sort === o.value
+              return (
+                <button
+                  key={o.value}
+                  onClick={() => setSort(o.value)}
+                  style={{
+                    padding: '6px 18px', fontSize: 11, fontWeight: active ? 700 : 400,
+                    background: active ? '#ffffff' : 'transparent',
+                    color: active ? '#181818' : '#666666',
+                    border: '1px solid',
+                    borderColor: active ? '#ffffff' : '#303030',
+                    cursor: 'pointer', fontFamily: 'inherit',
+                    letterSpacing: '0.5px', textTransform: 'uppercase',
+                    transition: 'all 0.12s',
+                  }}
+                >{o.short}</button>
+              )
+            })}
+          </div>
 
-        {/* Vertical divider */}
-        <div style={{ width: 1, height: 20, background: '#303030', flexShrink: 0 }} />
+          {/* Divider */}
+          <div style={{ width: 1, height: 20, background: '#303030', flexShrink: 0 }} />
 
-        {/* Class chips */}
-        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-          {allClassNames.map(name => {
-            const isActive = activeClasses.includes(name)
-            const cls = classes.find(c => c.className === name)
-            const unavail = cls?.availableCount === 0
-            return (
-              <button
-                key={name}
-                onClick={() => toggleClass(name)}
-                style={{
-                  padding: '5px 14px', fontSize: 12, fontWeight: isActive ? 700 : 400,
-                  border: '1px solid',
-                  borderColor: isActive ? '#ffffff' : '#303030',
-                  background: isActive ? '#ffffff' : 'transparent',
-                  color: isActive ? '#181818' : unavail ? '#444444' : '#969696',
-                  cursor: 'pointer', fontFamily: 'inherit', transition: 'all 0.15s',
-                  letterSpacing: '0.3px',
-                  opacity: unavail && !isActive ? 0.5 : 1,
-                }}
-              >
-                {name}
-              </button>
-            )
-          })}
-          {activeClasses.length > 0 && (
-            <button
-              onClick={() => setActive([])}
-              style={{
-                padding: '5px 12px', fontSize: 12, fontWeight: 400,
-                border: '1px solid rgba(218,41,28,0.3)',
-                background: 'transparent', color: '#da291c',
-                cursor: 'pointer', fontFamily: 'inherit',
-              }}
-            >
-              Clear
-            </button>
-          )}
+          {/* Result count */}
+          <p style={{ fontSize: 13, color: '#666', margin: 0 }} aria-live="polite">
+            <span style={{ color: sorted.length > 0 ? '#4a9a5a' : '#666', fontWeight: 600 }}>{sorted.length}</span>
+            {' available · '}
+            <span style={{ color: '#ffffff', fontWeight: 600 }}>{days}</span>
+            {' day'}{days !== 1 ? 's' : ''}
+          </p>
         </div>
 
-        {/* Count */}
-        <p style={{ fontSize: 13, fontWeight: 400, color: '#666666', marginLeft: 'auto', flexShrink: 0 }} aria-live="polite">
-          <span style={{ color: '#ffffff', fontWeight: 600 }}>{available.length}</span>
-          {' '}available{' · '}
-          <span style={{ color: '#ffffff', fontWeight: 600 }}>{days}</span>
-          {' '}day{days !== 1 ? 's' : ''}
-        </p>
+        {/* Class filter chips */}
+        {allClassNames.length > 0 && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 10, fontWeight: 700, color: '#555', textTransform: 'uppercase', letterSpacing: '1.2px', flexShrink: 0 }}>
+              Filter
+            </span>
+            {allClassNames.map(name => {
+              const isActive = activeClasses.includes(name)
+              return (
+                <button
+                  key={name}
+                  onClick={() => toggleClass(name)}
+                  style={{
+                    padding: '5px 14px', fontSize: 11, fontWeight: isActive ? 700 : 400,
+                    border: '1px solid',
+                    borderColor: isActive ? '#ffffff' : '#303030',
+                    background: isActive ? '#ffffff' : 'transparent',
+                    color: isActive ? '#181818' : '#888',
+                    cursor: 'pointer', fontFamily: 'inherit',
+                    letterSpacing: '0.3px', transition: 'all 0.12s',
+                  }}
+                >{name}</button>
+              )
+            })}
+            {activeClasses.length > 0 && (
+              <button
+                onClick={() => setActive([])}
+                style={{
+                  padding: '5px 12px', fontSize: 11, fontWeight: 400,
+                  border: '1px solid rgba(218,41,28,0.35)',
+                  background: 'transparent', color: '#da291c',
+                  cursor: 'pointer', fontFamily: 'inherit', letterSpacing: '0.3px',
+                }}
+              >Clear</button>
+            )}
+          </div>
+        )}
       </div>
 
+      {/* ── Divider ───────────────────────────────────────────────── */}
+      <div style={{ height: 1, background: '#282828', marginBottom: 16 }} />
+
+      {/* ── Results ───────────────────────────────────────────────── */}
       {sorted.length === 0 ? (
-        <div style={{ padding: '60px 0', textAlign: 'center' }}>
-          <h2 style={{ fontSize: 28, fontWeight: 500, color: '#ffffff', letterSpacing: '-0.04em', marginBottom: 12 }}>No vehicles match</h2>
-          <p style={{ fontSize: 14, fontWeight: 400, color: '#969696', marginBottom: 20 }}>
-            {activeClasses.length > 0 ? 'Try removing some filters.' : 'Try adjusting your dates or location.'}
+        <div style={{ padding: '80px 0', textAlign: 'center' }}>
+          <p style={{ fontSize: 11, fontWeight: 700, color: '#555', textTransform: 'uppercase', letterSpacing: '1.4px', marginBottom: 16 }}>No Availability</p>
+          <h2 style={{ fontSize: 32, fontWeight: 500, color: '#ffffff', letterSpacing: '-0.04em', margin: '0 0 12px' }}>
+            {activeClasses.length > 0 ? 'No vehicles match' : 'No vehicles available'}
+          </h2>
+          <p style={{ fontSize: 14, color: '#666', margin: '0 0 24px' }}>
+            {activeClasses.length > 0
+              ? 'Try removing some class filters.'
+              : 'All vehicles are booked for these dates. Try different dates or another location.'}
           </p>
           {activeClasses.length > 0 && (
             <button
               onClick={() => setActive([])}
-              style={{ fontSize: 13, fontWeight: 700, color: RED, background: 'none', border: 'none', cursor: 'pointer', letterSpacing: '0.5px', textTransform: 'uppercase' }}
-            >
-              Clear Filters
-            </button>
+              style={{ fontSize: 11, fontWeight: 700, color: RED, background: 'none', border: 'none', cursor: 'pointer', letterSpacing: '1px', textTransform: 'uppercase' }}
+            >Clear Filters</button>
           )}
         </div>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }} aria-label="Available vehicle classes">
-          {sorted.map(cls => (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }} aria-label="Available vehicle classes">
+          {sorted.map((cls, idx) => (
             <VehicleClassCard
               key={cls.classId}
               vehicleClass={cls}
               days={days}
+              index={idx}
               onSelect={() => router.push(
                 `/booking/${cls.classId}?pickup=${pickupLocationId}&dropoff=${dropoffLocationId}&from=${pickupDate}&to=${dropoffDate}`
               )}
@@ -266,126 +316,179 @@ export function SearchResults({
   )
 }
 
-interface VehicleClassCardProps { vehicleClass: VehicleClass; days: number; onSelect: () => void }
+interface VehicleClassCardProps {
+  vehicleClass: VehicleClass
+  days: number
+  index: number
+  onSelect: () => void
+}
 
 function VehicleClassCard({ vehicleClass: cls, days, onSelect }: VehicleClassCardProps) {
   const [hovered, setHovered] = useState(false)
   const [btnHov, setBtnHov]   = useState(false)
-  const isUnavailable = cls.availableCount === 0
-  const isLow         = !isUnavailable && cls.availableCount <= 3
+
+  const isLow = cls.availableCount <= 3
   const total         = cls.baseDailyRate * days
   const tagline       = CLASS_TAGLINES[cls.classCode] ?? cls.description
-  const fmt           = (n: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: cls.currencyCode || 'USD' }).format(n)
+  const tint          = CLASS_TINT[cls.classCode] ?? '#1c1c1c'
+  const fmt           = (n: number) =>
+    new Intl.NumberFormat('en-US', { style: 'currency', currency: cls.currencyCode || 'USD', minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(n)
+  const fmtDec        = (n: number) =>
+    new Intl.NumberFormat('en-US', { style: 'currency', currency: cls.currencyCode || 'USD' }).format(n)
+
+  const displayFeatures = cls.features.slice(0, 6).map(shortFeature)
 
   return (
     <div
-      onMouseEnter={() => { if (!isUnavailable) setHovered(true) }}
+      onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       style={{
-        background: '#303030',
-        border: `1px solid ${hovered ? 'rgba(218,41,28,0.5)' : 'rgba(255,255,255,0.06)'}`,
-        borderRadius: 0, overflow: 'hidden',
-        display: 'flex', alignItems: 'stretch',
-        opacity: isUnavailable ? 0.45 : 1,
-        transition: 'border-color 0.2s, opacity 0.2s',
+        background: '#242424',
+        border: `1px solid ${hovered ? 'rgba(218,41,28,0.4)' : 'rgba(255,255,255,0.07)'}`,
+        overflow: 'hidden',
+        display: 'flex',
+        alignItems: 'stretch',
+        transition: 'border-color 0.2s, box-shadow 0.2s',
+        boxShadow: hovered ? '0 0 0 1px rgba(218,41,28,0.15), 0 8px 32px rgba(0,0,0,0.4)' : '0 2px 8px rgba(0,0,0,0.25)',
+        position: 'relative',
       }}
     >
-      {/* Left — class code + name */}
+      {/* Top accent line (visible on hover) */}
       <div style={{
-        width: 196, flexShrink: 0, padding: '28px 24px',
-        display: 'flex', flexDirection: 'column', justifyContent: 'center',
-        borderRight: '1px solid rgba(255,255,255,0.06)',
+        position: 'absolute', top: 0, left: 0, right: 0, height: 2,
+        background: RED,
+        opacity: hovered ? 1 : 0,
+        transition: 'opacity 0.2s',
+        zIndex: 1,
+      }} />
+
+      {/* ── LEFT: class identity panel ──────────────────────────── */}
+      <div style={{
+        width: 200, flexShrink: 0,
+        padding: '28px 24px',
+        background: `linear-gradient(135deg, ${tint} 0%, #1e1e1e 100%)`,
+        display: 'flex', flexDirection: 'column', justifyContent: 'space-between',
+        borderRight: '1px solid rgba(255,255,255,0.05)',
         position: 'relative', overflow: 'hidden',
       }}>
+        {/* Watermark code */}
         <div aria-hidden="true" style={{
-          position: 'absolute', top: '50%', left: '50%',
-          transform: 'translate(-50%,-50%)',
-          fontSize: 68, fontWeight: 700, letterSpacing: '-0.04em',
-          color: hovered ? 'rgba(218,41,28,0.12)' : 'rgba(255,255,255,0.04)',
-          userSelect: 'none', pointerEvents: 'none', whiteSpace: 'nowrap',
-          transition: 'color 0.2s',
+          position: 'absolute',
+          right: -12, bottom: -8,
+          fontSize: 72, fontWeight: 800, letterSpacing: '-0.06em',
+          color: hovered ? 'rgba(218,41,28,0.10)' : 'rgba(255,255,255,0.035)',
+          userSelect: 'none', pointerEvents: 'none',
+          lineHeight: 1, fontFamily: 'inherit',
+          transition: 'color 0.25s',
         }}>{cls.classCode}</div>
+
+        {/* Class info */}
         <div style={{ position: 'relative' }}>
-          <div style={{ fontSize: 11, fontWeight: 600, color: hovered ? RED : '#666666', textTransform: 'uppercase', letterSpacing: '1.1px', marginBottom: 8, transition: 'color 0.2s' }}>
-            {cls.classCode}
-          </div>
-          <div style={{ fontSize: 18, fontWeight: 500, color: '#ffffff', letterSpacing: '-0.02em', lineHeight: 1.2, marginBottom: 6 }}>
-            {cls.className}
-          </div>
-          <div style={{ fontSize: 12, fontWeight: 400, color: '#969696', lineHeight: 1.4 }}>{tagline}</div>
+          <div style={{
+            fontSize: 10, fontWeight: 700,
+            color: hovered ? RED : '#555',
+            textTransform: 'uppercase', letterSpacing: '1.4px',
+            marginBottom: 10, transition: 'color 0.2s',
+          }}>{cls.classCode}</div>
+          <div style={{
+            fontSize: 20, fontWeight: 500,
+            color: '#ffffff', letterSpacing: '-0.03em',
+            lineHeight: 1.15, marginBottom: 8,
+          }}>{cls.className}</div>
+          <div style={{
+            fontSize: 12, fontWeight: 400,
+            color: '#666', lineHeight: 1.4,
+          }}>{tagline}</div>
         </div>
-      </div>
 
-      {/* Center — features */}
-      <div style={{ flex: 1, padding: '24px 28px', display: 'flex', flexDirection: 'column', justifyContent: 'center', minWidth: 0 }}>
-        {cls.description && cls.description !== tagline && (
-          <p style={{ fontSize: 13, fontWeight: 400, color: '#969696', marginBottom: 14, lineHeight: 1.5 }}>{cls.description}</p>
-        )}
-        <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexWrap: 'wrap', gap: '8px 20px' }}>
-          {cls.features.slice(0, 5).map(f => (
-            <li key={f} style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 13, fontWeight: 400, color: '#969696' }}>
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={hovered ? RED : '#666666'} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ flexShrink: 0, transition: 'stroke 0.2s' }}>
-                <polyline points="20 6 9 17 4 12"/>
-              </svg>
-              {f}
-            </li>
-          ))}
-        </ul>
-        <div style={{ display: 'flex', gap: 8, marginTop: 16, flexWrap: 'wrap' }}>
-          {isUnavailable && (
-            <span style={{ padding: '3px 10px', fontSize: 11, fontWeight: 600, background: 'rgba(241,58,44,0.1)', color: '#f13a2c', border: '1px solid rgba(241,58,44,0.2)', letterSpacing: '0.5px', textTransform: 'uppercase' }}>
-              Sold Out
-            </span>
-          )}
-          {isLow && (
-            <span style={{ padding: '3px 10px', fontSize: 11, fontWeight: 600, background: 'rgba(255,255,255,0.06)', color: '#969696', border: '1px solid rgba(255,255,255,0.1)', letterSpacing: '0.5px', textTransform: 'uppercase' }}>
-              Only {cls.availableCount} left
-            </span>
+        {/* Availability count */}
+        <div style={{ position: 'relative', marginTop: 20 }}>
+          {isLow ? (
+            <span style={{
+              fontSize: 11, fontWeight: 700,
+              color: '#e05a00',
+              textTransform: 'uppercase', letterSpacing: '0.8px',
+            }}>Only {cls.availableCount} left</span>
+          ) : (
+            <span style={{
+              fontSize: 11, fontWeight: 500,
+              color: '#4a9a5a',
+              letterSpacing: '0.3px',
+            }}>✓ {cls.availableCount} available</span>
           )}
         </div>
       </div>
 
-      {/* Right — price + CTA */}
+      {/* ── CENTER: features ────────────────────────────────────── */}
       <div style={{
-        width: 196, flexShrink: 0, padding: '24px 20px',
-        display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'flex-end', gap: 14,
-        borderLeft: '1px solid rgba(255,255,255,0.06)',
+        flex: 1, padding: '28px 28px',
+        display: 'flex', flexDirection: 'column', justifyContent: 'center',
+        minWidth: 0,
       }}>
+        {/* Feature chips */}
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 8px', marginBottom: 0 }}>
+          {displayFeatures.map(f => (
+            <span
+              key={f}
+              style={{
+                display: 'inline-flex', alignItems: 'center',
+                padding: '4px 10px',
+                fontSize: 11, fontWeight: 500,
+                color: hovered ? '#ccc' : '#888',
+                background: hovered ? 'rgba(218,41,28,0.06)' : 'rgba(255,255,255,0.04)',
+                border: `1px solid ${hovered ? 'rgba(218,41,28,0.15)' : 'rgba(255,255,255,0.07)'}`,
+                transition: 'all 0.2s',
+                letterSpacing: '0.2px',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {f}
+            </span>
+          ))}
+        </div>
+
+      </div>
+
+      {/* ── RIGHT: price + CTA ──────────────────────────────────── */}
+      <div style={{
+        width: 196, flexShrink: 0,
+        padding: '28px 24px',
+        display: 'flex', flexDirection: 'column',
+        justifyContent: 'center', alignItems: 'flex-end', gap: 20,
+        borderLeft: '1px solid rgba(255,255,255,0.05)',
+      }}>
+        {/* Pricing */}
         <div style={{ textAlign: 'right' }}>
-          <div style={{ fontSize: 30, fontWeight: 500, color: '#ffffff', letterSpacing: '-0.04em', lineHeight: 1 }}>
-            {fmt(cls.baseDailyRate)}
+          <div style={{
+            fontSize: 34, fontWeight: 500,
+            color: '#ffffff',
+            letterSpacing: '-0.05em', lineHeight: 1,
+            marginBottom: 4,
+          }}>{fmt(cls.baseDailyRate)}</div>
+          <div style={{ fontSize: 11, fontWeight: 400, color: '#555', letterSpacing: '0.2px', marginBottom: 6 }}>
+            per day
           </div>
-          <div style={{ fontSize: 11, fontWeight: 400, color: '#666666', marginTop: 4 }}>
-            per day · {fmt(total)} total
+          <div style={{ width: '100%', height: 1, background: 'rgba(255,255,255,0.07)', margin: '8px 0' }} />
+          <div style={{ fontSize: 12, fontWeight: 400, color: '#666' }}>
+            {fmtDec(total)} total · {days} day{days !== 1 ? 's' : ''}
           </div>
         </div>
-        {isUnavailable ? (
-          <button
-            disabled
-            style={{
-              padding: '12px 16px', width: '100%',
-              background: 'transparent', color: '#444444',
-              border: '1px solid rgba(255,255,255,0.08)',
-              fontSize: 12, fontWeight: 600, cursor: 'not-allowed',
-              letterSpacing: '0.65px', textTransform: 'uppercase', fontFamily: 'inherit',
-            }}
-          >Sold Out</button>
-        ) : (
-          <button
-            onClick={onSelect}
-            onMouseEnter={() => setBtnHov(true)}
-            onMouseLeave={() => setBtnHov(false)}
-            aria-label={`Reserve ${cls.className}`}
-            style={{
-              padding: '12px 16px', width: '100%',
-              background: btnHov ? RED_ACT : RED,
-              color: '#ffffff', border: 'none',
-              fontSize: 13, fontWeight: 700, cursor: 'pointer',
-              letterSpacing: '1.1px', textTransform: 'uppercase',
-              transition: 'background 0.2s', fontFamily: 'inherit',
-            }}
-          >Reserve</button>
-        )}
+
+        {/* CTA */}
+        <button
+          onClick={onSelect}
+          onMouseEnter={() => setBtnHov(true)}
+          onMouseLeave={() => setBtnHov(false)}
+          aria-label={`Reserve ${cls.className} — ${fmtDec(cls.baseDailyRate)} per day`}
+          style={{
+            padding: '13px 0', width: '100%',
+            background: btnHov ? RED_ACT : RED,
+            color: '#ffffff', border: 'none',
+            fontSize: 12, fontWeight: 700, cursor: 'pointer',
+            letterSpacing: '1.4px', textTransform: 'uppercase',
+            transition: 'background 0.15s', fontFamily: 'inherit',
+          }}
+        >Reserve →</button>
       </div>
     </div>
   )

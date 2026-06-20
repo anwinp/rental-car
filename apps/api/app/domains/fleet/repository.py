@@ -80,13 +80,23 @@ class FleetRepository(BaseRepository[Vehicle]):
         period_end: datetime,
     ) -> int:
         """
-        Count AVAILABLE vehicles of the given class at the location that have
+        Count bookable vehicles of the given class at the location that have
         no active overlapping blocks in the requested period.
+
+        "Bookable" includes AVAILABLE, ON_RENT, and RETURNING vehicles — their
+        vehicle_blocks track when they're occupied, so the conflict check below
+        correctly excludes them for dates they're already reserved.
 
         Uses a GiST half-open interval overlap [) check, matching the exclusion
         constraint: tstzrange(start_time, end_time, '[)') && tstzrange(:start, :end, '[)').
         """
         from sqlalchemy import func as sqlfunc
+
+        BOOKABLE_STATUSES = (
+            VehicleStatus.AVAILABLE.value,
+            VehicleStatus.ON_RENT.value,
+            "RETURNING",
+        )
 
         stmt = (
             select(func.count(Vehicle.vehicle_id))
@@ -94,7 +104,7 @@ class FleetRepository(BaseRepository[Vehicle]):
                 Vehicle.tenant_id == str(self.tenant_id),
                 Vehicle.home_location_id == location_id,
                 Vehicle.vehicle_class_id == class_id,
-                cast(Vehicle.status, Text) == VehicleStatus.AVAILABLE.value,
+                cast(Vehicle.status, Text).in_(BOOKABLE_STATUSES),
                 Vehicle.deleted_at.is_(None),
                 not_(
                     exists(

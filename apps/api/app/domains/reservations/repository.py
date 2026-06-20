@@ -249,9 +249,9 @@ class ReservationRepository(BaseRepository[Reservation]):
                 SELECT COUNT(v.vehicle_id)
                 FROM vehicles v
                 WHERE v.tenant_id = :tenant_id
-                  AND v.current_location_id = :location_id
+                  AND v.home_location_id = :location_id
                   AND v.vehicle_class_id = :class_id
-                  AND v.status = 'AVAILABLE'
+                  AND v.status IN ('AVAILABLE', 'ON_RENT', 'RETURNING')
                   AND v.deleted_at IS NULL
                   AND NOT EXISTS (
                     SELECT 1 FROM vehicle_blocks vb
@@ -272,6 +272,94 @@ class ReservationRepository(BaseRepository[Reservation]):
         )
         row = result.fetchone()
         return int(row[0]) if row else 0
+
+    async def pick_available_vehicle(
+        self,
+        location_id: uuid.UUID,
+        vehicle_class_id: uuid.UUID,
+        pickup_dt: datetime,
+        dropoff_dt: datetime,
+    ) -> Optional[str]:
+        """
+        Select one specific vehicle for this class/location/period and lock it.
+
+        Uses FOR UPDATE SKIP LOCKED so concurrent requests pick different rows
+        rather than waiting or racing on the same vehicle.
+
+        Prefers AVAILABLE vehicles over ON_RENT/RETURNING ones.
+        Returns the vehicle_id string, or None if nothing is free.
+        """
+        result = await self.session.execute(
+            text("""
+                SELECT v.vehicle_id::text
+                FROM vehicles v
+                WHERE v.tenant_id = :tenant_id
+                  AND v.home_location_id = :location_id
+                  AND v.vehicle_class_id = :class_id
+                  AND v.status IN ('AVAILABLE', 'ON_RENT', 'RETURNING')
+                  AND v.deleted_at IS NULL
+                  AND NOT EXISTS (
+                    SELECT 1 FROM vehicle_blocks vb
+                    WHERE vb.vehicle_id = v.vehicle_id
+                      AND vb.deleted_at IS NULL
+                      AND tstzrange(vb.start_time, vb.end_time, '[)') &&
+                          tstzrange(:pickup, :dropoff, '[)')
+                  )
+                ORDER BY
+                  CASE v.status WHEN 'AVAILABLE' THEN 0 ELSE 1 END,
+                  v.vehicle_id
+                LIMIT 1
+                FOR UPDATE SKIP LOCKED
+            """),
+            {
+                "tenant_id": str(self.tenant_id),
+                "location_id": str(location_id),
+                "class_id": str(vehicle_class_id),
+                "pickup": pickup_dt,
+                "dropoff": dropoff_dt,
+            },
+        )
+        row = result.fetchone()
+        return str(row[0]) if row else None
+
+    async def create_vehicle_block(
+        self,
+        vehicle_id: str,
+        pickup_dt: datetime,
+        dropoff_dt: datetime,
+        reservation_id: str,
+        staff_user_id: str,
+    ) -> None:
+        """
+        Insert a RESERVATION vehicle_block for a specific vehicle.
+
+        The exclusion constraint `no_overlapping_vehicle_blocks` on
+        tstzrange(start_time, end_time, '[)') is the final race guard — a
+        duplicate will raise 23P01 which bubbles up as a ConflictError.
+        """
+        await self.session.execute(
+            text("""
+                INSERT INTO vehicle_blocks (
+                    block_id, tenant_id, vehicle_id, block_type,
+                    start_time, end_time, reservation_id,
+                    is_hard_block, created_by
+                )
+                VALUES (
+                    gen_random_uuid(), :tenant_id, :vehicle_id, 'RESERVATION',
+                    :start_time, :end_time, :reservation_id,
+                    false, :created_by
+                )
+            """),
+            {
+                "tenant_id": str(self.tenant_id),
+                "vehicle_id": vehicle_id,
+                "start_time": pickup_dt,
+                "end_time": dropoff_dt,
+                "reservation_id": reservation_id,
+                "created_by": staff_user_id,
+            },
+        )
+        await self.session.flush()
 
     # ── Version History ───────────────────────────────────────────────────────
 

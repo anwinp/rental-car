@@ -113,7 +113,7 @@ export function SearchBar({ pickup, from, to, sort, classFilter }: SearchBarProp
             transition: 'all 0.15s',
           }}
         >
-          {expanded ? 'Cancel' : 'Modify Search'}
+          {expanded ? 'Close' : 'Modify Search'}
         </button>
       </div>
 

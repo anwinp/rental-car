@@ -1,7 +1,9 @@
 import { type ReactNode, useState, useRef, useEffect } from 'react'
 import { useAdminStore } from '../store/adminStore'
 import { Sidebar } from './Sidebar'
+import { AdminIntelligencePanel } from './AdminIntelligencePanel'
 import { useAuth } from '@rcm/ui/auth'
+import { useQuery } from '@tanstack/react-query'
 
 interface AdminLayoutProps { children: ReactNode }
 
@@ -11,6 +13,8 @@ const ROLE_LABELS: Record<string, string> = {
   FLEET_MANAGER: 'Fleet Mgr', COUNTER_AGENT: 'Counter Agent',
   MAINTENANCE_TECH: 'Maintenance', CLAIMS_COORDINATOR: 'Claims',
   FINANCE_ANALYST: 'Finance', READONLY_AUDITOR: 'Auditor',
+  EXECUTIVE:          'Executive',
+  SENIOR_AGENT:       'Senior Agent',
 }
 
 const NOTIFS = [
@@ -19,8 +23,108 @@ const NOTIFS = [
   { id: '3', color: '#fbbf24', title: 'Fleet utilization alert',   body: 'Airport location crossed 85% utilization',       time: '1h ago',  unread: false },
 ]
 
+const ALERT_TENANT = '00000000-0000-0000-0000-000000000001'
+const ALERT_HEADERS = { 'X-Tenant-ID': ALERT_TENANT }
+
+function RoleAlertStrip() {
+  const { user } = useAuth()
+  const role = user?.role ?? ''
+
+  const { data: overdueData } = useQuery<unknown[]>({
+    queryKey: ['alert-overdue'],
+    queryFn: async () => {
+      const res = await fetch('/api/v1/reservations?status=OVERDUE', { credentials: 'include', headers: ALERT_HEADERS })
+      if (!res.ok) throw new Error('failed')
+      const d = await res.json()
+      return Array.isArray(d) ? d : (d.reservations ?? d.items ?? [])
+    },
+    enabled: role !== 'EXECUTIVE',
+    staleTime: 60_000,
+  })
+
+  const { data: vehicleData } = useQuery<{ status?: string }[]>({
+    queryKey: ['alert-vehicles'],
+    queryFn: async () => {
+      const res = await fetch('/api/v1/fleet/vehicles', { credentials: 'include', headers: ALERT_HEADERS })
+      if (!res.ok) throw new Error('failed')
+      const d = await res.json()
+      return Array.isArray(d) ? d : (d.vehicles ?? d.items ?? [])
+    },
+    enabled: role === 'SYSTEM_ADMIN' || role === 'SUPER_ADMIN' || role === 'BRANCH_MANAGER' || role === 'REGIONAL_MANAGER' || role === 'FLEET_MANAGER',
+    staleTime: 60_000,
+  })
+
+  if (role === 'EXECUTIVE') return null
+
+  const overdueCount = overdueData?.length ?? 0
+  const totalVehicles = vehicleData?.length ?? 0
+  const maintenanceCount = vehicleData?.filter(v => v.status === 'MAINTENANCE').length ?? 0
+  const maintenanceAlert = totalVehicles > 0 && maintenanceCount / totalVehicles > 0.15
+
+  const isManager = role === 'SYSTEM_ADMIN' || role === 'SUPER_ADMIN' || role === 'BRANCH_MANAGER' || role === 'REGIONAL_MANAGER'
+  const isAgent = role === 'COUNTER_AGENT' || role === 'SENIOR_AGENT'
+  const isFleetManager = role === 'FLEET_MANAGER'
+
+  const items: ReactNode[] = []
+
+  if (isManager) {
+    if (overdueCount > 0) {
+      items.push(
+        <span key="overdue" style={{ fontSize: 12, fontWeight: 600, color: '#da291c' }}>
+          {overdueCount} overdue rental{overdueCount !== 1 ? 's' : ''}
+        </span>
+      )
+    }
+    if (maintenanceAlert) {
+      if (items.length > 0) {
+        items.push(
+          <span key="sep-m" style={{ width: 1, height: 14, background: 'rgba(218,41,28,0.3)', display: 'inline-block' }} />
+        )
+      }
+      items.push(
+        <span key="maint" style={{ fontSize: 12, fontWeight: 600, color: '#da291c' }}>
+          Fleet: {maintenanceCount} in maintenance
+        </span>
+      )
+    }
+  } else if (isAgent) {
+    if (overdueCount > 0) {
+      items.push(
+        <span key="overdue" style={{ fontSize: 12, fontWeight: 600, color: '#da291c' }}>
+          {overdueCount} overdue
+        </span>
+      )
+    }
+  } else if (isFleetManager) {
+    if (maintenanceCount > 0) {
+      items.push(
+        <span key="maint" style={{ fontSize: 12, fontWeight: 600, color: '#da291c' }}>
+          {maintenanceCount} vehicles in maintenance
+        </span>
+      )
+    }
+  }
+
+  if (items.length === 0) return null
+
+  return (
+    <div style={{
+      background: 'rgba(218,41,28,0.07)',
+      borderBottom: '1px solid rgba(218,41,28,0.18)',
+      height: 36,
+      padding: '0 20px',
+      display: 'flex',
+      alignItems: 'center',
+      gap: 16,
+      flexShrink: 0,
+    }}>
+      {items}
+    </div>
+  )
+}
+
 export function AdminLayout({ children }: AdminLayoutProps) {
-  useAdminStore()
+  const { intelligencePanelOpen, toggleIntelligencePanel, toggleCommandPalette } = useAdminStore()
   const { user, logout } = useAuth()
   const [notifOpen, setNotifOpen] = useState(false)
   const [userOpen, setUserOpen] = useState(false)
@@ -35,6 +139,17 @@ export function AdminLayout({ children }: AdminLayoutProps) {
     document.addEventListener('mousedown', onClickOutside)
     return () => document.removeEventListener('mousedown', onClickOutside)
   }, [])
+
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault()
+        toggleCommandPalette()
+      }
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+  }, [toggleCommandPalette])
 
   const initials = user ? `${user.first_name[0]}${user.last_name[0]}`.toUpperCase() : '?'
   const unread = NOTIFS.filter(n => n.unread).length
@@ -75,6 +190,22 @@ export function AdminLayout({ children }: AdminLayoutProps) {
           </div>
 
           <div className="ml-auto flex items-center gap-1.5">
+            {/* Intelligence panel toggle */}
+            <button
+              onClick={toggleIntelligencePanel}
+              className="flex h-8 w-8 items-center justify-center rounded-lg transition-colors"
+              style={{
+                color: intelligencePanelOpen ? 'var(--sb-accent)' : 'var(--text-3)',
+                background: intelligencePanelOpen ? 'var(--agent-chip-bg)' : 'transparent',
+              }}
+              aria-label="Toggle intelligence panel"
+              title="Intelligence panel"
+            >
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 3l1.912 5.813a2 2 0 001.272 1.272L21 12l-5.816 1.912a2 2 0 00-1.272 1.272L12 21l-1.912-5.816a2 2 0 00-1.272-1.272L3 12l5.816-1.912a2 2 0 001.272-1.272z"/>
+              </svg>
+            </button>
+
             {/* Notifications */}
             <div className="relative" ref={notifRef}>
               <button
@@ -175,11 +306,19 @@ export function AdminLayout({ children }: AdminLayoutProps) {
           </div>
         </header>
 
+        <RoleAlertStrip />
+
         {/* Page content */}
-        <main id="main-content" className="flex-1 overflow-auto p-6 lg:p-7">
+        <main
+          id="main-content"
+          className="flex-1 overflow-auto p-6 lg:p-7"
+          data-compact={intelligencePanelOpen ? 'true' : undefined}
+        >
           {children}
         </main>
       </div>
+
+      <AdminIntelligencePanel />
     </div>
   )
 }

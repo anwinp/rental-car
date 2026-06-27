@@ -1,6 +1,195 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useAuth } from '@rcm/ui/auth'
 import type { ReactNode } from 'react'
+
+const TENANT_ID = '00000000-0000-0000-0000-000000000001'
+
+function LLMSettingsSection() {
+  const [provider, setProvider] = useState('anthropic')
+  const [apiKey, setApiKey] = useState('')
+  const [keyPreview, setKeyPreview] = useState<string | null>(null)
+  const [keyConfigured, setKeyConfigured] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [testing, setTesting] = useState(false)
+  const [status, setStatus] = useState<{ type: 'success' | 'error'; msg: string } | null>(null)
+  const [testResult, setTestResult] = useState<{ type: 'success' | 'error'; msg: string } | null>(null)
+
+  useEffect(() => {
+    fetch(`/api/v1/tenants/${TENANT_ID}/llm-settings`, {
+      credentials: 'include',
+      headers: { 'X-Tenant-ID': TENANT_ID },
+    })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        if (d) {
+          setProvider(d.provider || 'anthropic')
+          setKeyConfigured(d.key_configured)
+          setKeyPreview(d.key_preview)
+        }
+      })
+      .catch(() => {})
+  }, [])
+
+  async function handleSave() {
+    if (!apiKey.trim()) { setStatus({ type: 'error', msg: 'Enter an API key before saving.' }); return }
+    setSaving(true)
+    setStatus(null)
+    try {
+      const res = await fetch(`/api/v1/tenants/${TENANT_ID}/llm-settings`, {
+        method: 'PUT',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json', 'X-Tenant-ID': TENANT_ID },
+        body: JSON.stringify({ provider, api_key: apiKey }),
+      })
+      if (res.ok) {
+        const d = await res.json()
+        setKeyConfigured(d.key_configured)
+        setKeyPreview(d.key_preview)
+        setApiKey('')
+        setStatus({ type: 'success', msg: 'API key saved successfully.' })
+      } else {
+        const err = await res.json().catch(() => ({}))
+        setStatus({ type: 'error', msg: (err as { detail?: string }).detail || 'Failed to save key.' })
+      }
+    } catch {
+      setStatus({ type: 'error', msg: 'Network error — please try again.' })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function handleTest() {
+    setTesting(true)
+    setTestResult(null)
+    try {
+      const res = await fetch('/api/v1/agents/health', {
+        credentials: 'include',
+        headers: { 'X-Tenant-ID': TENANT_ID },
+      })
+      if (res.ok) {
+        const d = await res.json()
+        const claude = d.claude_api === 'configured'
+          ? 'Claude API: configured ✓'
+          : 'Claude API: not configured (system key missing)'
+        setTestResult({ type: d.status === 'ok' ? 'success' : 'error', msg: `${d.status === 'ok' ? 'Connected' : 'Degraded'} — Redis: ${d.redis}, ${claude}` })
+      } else {
+        setTestResult({ type: 'error', msg: 'Agent service unreachable.' })
+      }
+    } catch {
+      setTestResult({ type: 'error', msg: 'Connection failed.' })
+    } finally {
+      setTesting(false)
+    }
+  }
+
+  const inputStyle: React.CSSProperties = {
+    display: 'block', width: '100%', height: 36,
+    padding: '0 12px', fontSize: 13,
+    background: 'var(--elevated)',
+    border: '1px solid var(--border)',
+    borderRadius: 6,
+    color: 'var(--text-1)',
+    outline: 'none',
+  }
+
+  return (
+    <div className="px-6 py-5 space-y-5">
+      {/* Provider */}
+      <div className="grid grid-cols-3 gap-6 items-start py-4" style={{ borderBottom: '1px solid var(--border-sub)' }}>
+        <div>
+          <p className="text-[13px] font-medium" style={{ color: 'var(--text-2)' }}>LLM Provider</p>
+          <p className="text-[11.5px] mt-0.5" style={{ color: 'var(--text-3)' }}>Which AI provider powers the agent chat</p>
+        </div>
+        <div className="col-span-2">
+          <select
+            value={provider}
+            onChange={e => setProvider(e.target.value)}
+            style={{ ...inputStyle, height: 36 }}
+          >
+            <option value="anthropic">Anthropic (Claude)</option>
+          </select>
+        </div>
+      </div>
+
+      {/* Current key status */}
+      <div className="grid grid-cols-3 gap-6 items-start py-4" style={{ borderBottom: '1px solid var(--border-sub)' }}>
+        <div>
+          <p className="text-[13px] font-medium" style={{ color: 'var(--text-2)' }}>Current Key</p>
+          <p className="text-[11.5px] mt-0.5" style={{ color: 'var(--text-3)' }}>Your saved Anthropic API key</p>
+        </div>
+        <div className="col-span-2">
+          {keyConfigured ? (
+            <div className="flex items-center gap-3">
+              <span className="rounded-full px-2.5 py-0.5 text-[11.5px] font-semibold"
+                    style={{ background: 'var(--success-bg)', color: 'var(--success)', border: '1px solid rgba(52,211,153,0.25)' }}>
+                Configured
+              </span>
+              <span className="text-[13px] font-mono" style={{ color: 'var(--text-3)' }}>{keyPreview ?? '—'}</span>
+            </div>
+          ) : (
+            <span className="rounded-full px-2.5 py-0.5 text-[11.5px] font-semibold"
+                  style={{ background: 'var(--warn-bg)', color: 'var(--warn)', border: '1px solid rgba(251,191,36,0.25)' }}>
+              Not configured
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* Key input */}
+      <div className="grid grid-cols-3 gap-6 items-start py-4" style={{ borderBottom: '1px solid var(--border-sub)' }}>
+        <div>
+          <p className="text-[13px] font-medium" style={{ color: 'var(--text-2)' }}>API Key</p>
+          <p className="text-[11.5px] mt-0.5 leading-relaxed" style={{ color: 'var(--text-3)' }}>
+            Starts with <code className="rounded px-1" style={{ background: 'var(--card-bg)', fontSize: 11 }}>sk-ant-</code>.
+            Stored per-tenant, never logged.
+          </p>
+        </div>
+        <div className="col-span-2 space-y-2">
+          <input
+            type="password"
+            value={apiKey}
+            onChange={e => setApiKey(e.target.value)}
+            placeholder="sk-ant-api03-..."
+            style={inputStyle}
+            autoComplete="off"
+          />
+          {status && (
+            <p className="text-[12px]" style={{ color: status.type === 'success' ? 'var(--success)' : 'var(--danger)' }}>
+              {status.msg}
+            </p>
+          )}
+        </div>
+      </div>
+
+      {/* Test + Save */}
+      <div className="pt-2 flex items-center gap-3 justify-between">
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => void handleTest()}
+            disabled={testing}
+            className="btn-secondary text-[13px]"
+            style={{ opacity: testing ? 0.6 : 1 }}
+          >
+            {testing ? 'Testing…' : 'Test Connection'}
+          </button>
+          {testResult && (
+            <span className="text-[12px]" style={{ color: testResult.type === 'success' ? 'var(--success)' : 'var(--danger)' }}>
+              {testResult.msg}
+            </span>
+          )}
+        </div>
+        <button
+          onClick={() => void handleSave()}
+          disabled={saving || !apiKey.trim()}
+          className="btn-primary"
+          style={{ opacity: saving || !apiKey.trim() ? 0.5 : 1 }}
+        >
+          {saving ? 'Saving…' : 'Save Key'}
+        </button>
+      </div>
+    </div>
+  )
+}
 
 function SectionCard({ title, description, children }: { title: string; description?: string; children: ReactNode }) {
   return (
@@ -141,6 +330,22 @@ export function SettingsPage() {
           </div>
         </div>
       </SectionCard>
+
+      {/* AI / LLM */}
+      <div className="panel overflow-hidden">
+        <div className="px-6 py-4" style={{ borderBottom: '1px solid var(--border)' }}>
+          <div className="flex items-center gap-2">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--sb-accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 2a10 10 0 1 1 0 20 10 10 0 0 1 0-20z"/><path d="M12 8v4l3 3"/>
+            </svg>
+            <h2 className="text-[14px] font-semibold" style={{ color: 'var(--text-1)' }}>AI / LLM Configuration</h2>
+          </div>
+          <p className="text-[12px] mt-0.5" style={{ color: 'var(--text-3)' }}>
+            Bring your own API key (BYOK) — your key is used for agent chat, intent classification, and damage analysis. Falls back to the system key if not set.
+          </p>
+        </div>
+        <LLMSettingsSection />
+      </div>
 
       {/* Security */}
       <SectionCard title="Security" description="Authentication and session settings">

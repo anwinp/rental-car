@@ -4,18 +4,22 @@ import type { ReactNode } from 'react'
 import { QueryProvider } from '@rcm/ui/query'
 import { AuthProvider } from '@rcm/ui/auth'
 import { Toaster } from '@rcm/ui'
+import { AgentProvider } from './components/agent/AgentProvider'
 
 /**
  * Client-side providers wrapper for Next.js App Router.
- * Wraps the server layout's children in client-required context providers.
+ * AgentProvider wraps AuthProvider so the agent context is available to
+ * unauthenticated guests browsing before they log in.
  */
 export function Providers({ children }: { children: ReactNode }) {
   return (
     <QueryProvider>
-      <AuthProvider>
-        {children}
-        <Toaster />
-      </AuthProvider>
+      <AgentProvider>
+        <AuthProvider>
+          {children}
+          <Toaster />
+        </AuthProvider>
+      </AgentProvider>
     </QueryProvider>
   )
 }

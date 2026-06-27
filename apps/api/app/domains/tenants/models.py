@@ -65,6 +65,8 @@ class Tenant(Base):
     stripe_test_charge_succeeded: Mapped[Optional[bool]] = mapped_column(
         Boolean, nullable=True, server_default="false"
     )
+    # Payment gateway selection (STRIPE or TYRO)
+    payment_gateway: Mapped[str] = mapped_column(Text, nullable=False, server_default="STRIPE")
     # Notification credentials (readiness gate check #9)
     smtp_host: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     sendgrid_api_key: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -72,6 +74,9 @@ class Tenant(Base):
     ra_template_id: Mapped[Optional[str]] = mapped_column(
         UUID(as_uuid=False), nullable=True
     )
+    # Per-tenant LLM settings (BYOK — bring your own key)
+    llm_provider: Mapped[Optional[str]] = mapped_column(Text, nullable=True, server_default="anthropic")
+    anthropic_api_key: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

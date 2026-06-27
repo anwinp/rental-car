@@ -44,11 +44,14 @@ def document_expiry_alerts(self: Any) -> dict:  # type: ignore[type-arg]
 
 
 @celery_app.task(
+    bind=True,
     name="app.worker.tasks.notifications.dispatch_notification",
     queue="notifications",
-    bind=True,
-    max_retries=5,
-    default_retry_delay=30,
+    max_retries=3,
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+    retry_backoff_max=300,
+    retry_jitter=True,
 )
 def dispatch_notification(
     self: Any,  # type: ignore[type-arg]
@@ -56,29 +59,72 @@ def dispatch_notification(
     event_code: str,
     recipient_id: str,
     context: dict,
-    channels: list | None = None,
+    channel: str | None = None,
 ) -> dict:
-    """
-    Dispatch a single notification to a recipient.
-
-    Args:
-        tenant_id:    Tenant UUID string.
-        event_code:   e.g. RESERVATION_CONFIRMED, PAYMENT_AUTHORIZED
-        recipient_id: Customer UUID string.
-        context:      Merge variables dict for the template.
-        channels:     Optional list of channels; defaults to template defaults.
-
-    Implementation deferred to Wave G (full notification pipeline).
-    """
-    log.info(
-        "dispatch_notification_stub",
-        tenant_id=tenant_id,
-        event_code=event_code,
-        recipient_id=recipient_id,
+    """Send a notification via the appropriate channel."""
+    import asyncio
+    return asyncio.get_event_loop().run_until_complete(
+        _async_dispatch(tenant_id, event_code, recipient_id, context, channel)
     )
-    return {
-        "status": "stub",
-        "tenant_id": tenant_id,
-        "event_code": event_code,
-        "recipient_id": recipient_id,
-    }
+
+
+async def _async_dispatch(
+    tenant_id: str,
+    event_code: str,
+    recipient_id: str,
+    context: dict,
+    channel: str | None,
+) -> dict:
+    from app.core.database import AsyncSessionLocal
+    from app.domains.notifications.service import NotificationService
+    async with AsyncSessionLocal() as session:
+        svc = NotificationService(session)
+        await svc.send_notification(event_code, recipient_id, context, channel, tenant_id)
+    return {"status": "sent", "event_code": event_code, "recipient_id": recipient_id}
+
+
+@celery_app.task(
+    name="app.worker.tasks.notifications.task_due_reminder_scan",
+    queue="notifications",
+)
+def task_due_reminder_scan() -> dict:
+    """Scan for tasks due in the next 2 hours and send reminders."""
+    import asyncio
+    return asyncio.get_event_loop().run_until_complete(_async_task_reminder_scan())
+
+
+async def _async_task_reminder_scan() -> dict:
+    from app.core.database import AsyncSessionLocal
+    from sqlalchemy import text
+    reminded = 0
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            text("""
+                SELECT task_id, assignee_id, tenant_id, title, due_datetime
+                FROM tasks
+                WHERE deleted_at IS NULL
+                  AND status NOT IN ('DONE', 'BLOCKED')
+                  AND due_datetime BETWEEN NOW() AND NOW() + INTERVAL '2 hours'
+                  AND assignee_id IS NOT NULL
+                  AND reminded_at IS NULL
+                LIMIT 100
+            """),
+        )
+        tasks = result.mappings().all()
+        for task in tasks:
+            try:
+                dispatch_notification.delay(
+                    tenant_id=str(task["tenant_id"]),
+                    event_code="TASK_DUE_REMINDER",
+                    recipient_id=str(task["assignee_id"]),
+                    context={"task_title": task["title"], "due_datetime": str(task["due_datetime"])},
+                )
+                await session.execute(
+                    text("UPDATE tasks SET reminded_at = NOW() WHERE task_id = :tid"),
+                    {"tid": str(task["task_id"])},
+                )
+                reminded += 1
+            except Exception:
+                pass
+        await session.commit()
+    return {"reminded": reminded}

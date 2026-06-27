@@ -101,6 +101,24 @@
     --rcm-danger-bg:  var(--p-danger-bg);
     --rcm-info:       var(--p-cyan);
     --rcm-info-bg:    rgba(150,150,150,0.10);
+
+    /* ── Agent UI tokens ──────────────────────────────────────────── */
+    --agent-panel-width:        400px;
+    --agent-panel-bg:           #161616;
+    --agent-msg-user-bg:        rgba(218,41,28,0.12);
+    --agent-msg-user-border:    rgba(218,41,28,0.20);
+    --agent-chip-bg:            rgba(255,255,255,0.04);
+    --agent-chip-border:        rgba(255,255,255,0.10);
+    --agent-chip-bg-hover:      rgba(218,41,28,0.10);
+    --agent-chip-border-hover:  rgba(218,41,28,0.35);
+    --agent-input-bg:           #1e1e1e;
+    --agent-input-border:       rgba(255,255,255,0.10);
+    --agent-input-border-focus: rgba(218,41,28,0.35);
+    --agent-input-placeholder:  rgba(255,255,255,0.55);
+    --agent-progress-bar:       var(--p-brand);
+    --agent-sheet-height:       82vh;
+    --agent-sheet-handle:       rgba(255,255,255,0.15);
+    --agent-handoff-border:     rgba(255,255,255,0.14);
   }
 }
 
@@ -191,5 +209,12 @@ option { background: #303030; color: #ffffff; }
   *, *::before, *::after {
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
+  }
+}
+
+/* ── Mobile agent bar clearance — keeps footer above the fixed chat bar ─── */
+@media (max-width: 1199px) {
+  footer {
+    padding-bottom: calc(64px + env(safe-area-inset-bottom, 0px)) !important;
   }
 }

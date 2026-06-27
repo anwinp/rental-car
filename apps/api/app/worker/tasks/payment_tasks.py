@@ -169,6 +169,90 @@ async def _async_process_notification_stream(tenant_id: str) -> dict:
     return {"processed": processed, "dlq": dlq_count}
 
 
+# ── Bond Release ──────────────────────────────────────────────────────────────
+
+@celery_app.task(
+    bind=True,
+    name="app.worker.tasks.payment_tasks.process_bond_release",
+    queue="batch",
+    max_retries=3,
+    default_retry_delay=60,
+)
+def process_bond_release(
+    self,
+    reservation_id: str,
+    tenant_id: str,
+    return_condition: str,
+    damage_charge_amount: str,
+    agent_id: str,
+) -> dict:
+    """Bond release: NO_DAMAGE->void, DAMAGE_FOUND->capture, PENDING->skip."""
+    return asyncio.get_event_loop().run_until_complete(
+        _async_process_bond_release(reservation_id, tenant_id, return_condition, damage_charge_amount, agent_id)
+    )
+
+
+async def _async_process_bond_release(
+    reservation_id, tenant_id, return_condition, damage_charge_amount, agent_id
+) -> dict:
+    from app.core.database import AsyncSessionLocal
+    from sqlalchemy import text
+    from decimal import Decimal
+
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            text("""
+                SELECT p.payment_id, p.gateway_payment_id, p.gateway, p.amount
+                FROM payments p
+                WHERE p.reservation_id = CAST(:rid AS uuid)
+                  AND CAST(p.payment_type AS text) = 'PRE_AUTH'
+                  AND CAST(p.status AS text) = 'AUTHORIZED'
+                ORDER BY p.created_at DESC LIMIT 1
+            """),
+            {"rid": reservation_id},
+        )
+        payment = result.mappings().first()
+        if not payment:
+            return {"status": "NO_PREAUTH_FOUND"}
+
+        if return_condition == "NO_DAMAGE":
+            await session.execute(
+                text("UPDATE payments SET status = 'VOIDED', updated_at = NOW() WHERE payment_id = :pid"),
+                {"pid": str(payment["payment_id"])},
+            )
+            await session.commit()
+            try:
+                from app.domains.payments.gateway_factory import get_gateway_for_tenant
+                gw = await get_gateway_for_tenant(tenant_id, session)
+                await gw.void(preauth_id=str(payment["gateway_payment_id"]))
+            except NotImplementedError:
+                pass  # Tyro not yet configured
+            return {"status": "VOIDED"}
+
+        elif return_condition == "DAMAGE_FOUND":
+            charge = Decimal(damage_charge_amount)
+            capture_amount = min(charge, Decimal(str(payment["amount"])))
+            try:
+                from app.domains.payments.gateway_factory import get_gateway_for_tenant
+                import uuid as _uuid
+                gw = await get_gateway_for_tenant(tenant_id, session)
+                await gw.capture(
+                    preauth_id=str(payment["gateway_payment_id"]),
+                    amount=capture_amount,
+                    idempotency_key=str(_uuid.uuid4()),
+                )
+                await session.execute(
+                    text("UPDATE payments SET status = 'CAPTURED', updated_at = NOW() WHERE payment_id = :pid"),
+                    {"pid": str(payment["payment_id"])},
+                )
+                await session.commit()
+            except NotImplementedError:
+                pass
+            return {"status": "CAPTURED", "amount": str(capture_amount)}
+
+        return {"status": "PENDING_INSPECTION"}
+
+
 async def _deliver_notification(
     fields: dict,
     tenant_id: str,

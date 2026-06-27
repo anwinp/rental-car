@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import { useAuth } from '@rcm/ui/auth'
+import imageCompression from 'browser-image-compression'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -392,6 +393,30 @@ export function InspectionsPage() {
   const [fuelLevel, setFuelLevel] = useState(8)
   const [submitError, setSubmitError] = useState('')
   const [result, setResult] = useState<InspectionResponse | null>(null)
+  const [zonePhotoKeys, setZonePhotoKeys] = useState<Record<string, string[]>>({})
+
+  async function handlePhotoCapture(e: React.ChangeEvent<HTMLInputElement>, zoneId: string) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    try {
+      const compressed = await imageCompression(file, {
+        maxSizeMB: 0.5, maxWidthOrHeight: 800, useWebWorker: true,
+        fileType: 'image/jpeg', initialQuality: 0.8,
+      })
+      const currentRaId = ra?.ra_id ?? ''
+      const uploadRes = await fetch('/api/v1/damage/photo-upload-url', {
+        method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/json', 'X-Tenant-ID': TENANT },
+        body: JSON.stringify({ zone_id: zoneId, ra_id: currentRaId || undefined }),
+      })
+      const { upload_url, s3_key } = await uploadRes.json()
+      await fetch(upload_url, { method: 'PUT', body: compressed, headers: { 'Content-Type': 'image/jpeg' } })
+      setZonePhotoKeys(prev => ({ ...prev, [zoneId]: [...(prev[zoneId] ?? []), s3_key] }))
+    } catch (err) {
+      console.error('Photo capture failed:', err)
+    }
+    e.target.value = ''
+  }
 
   const { data: raResults, isLoading: raLoading, error: raError } = useQuery<RentalAgreement[]>({
     queryKey: ['ra-search', submittedSearch],
@@ -506,6 +531,7 @@ export function InspectionsPage() {
     setFuelLevel(8)
     setSubmitError('')
     setResult(null)
+    setZonePhotoKeys({})
   }
 
   return (
@@ -667,12 +693,24 @@ export function InspectionsPage() {
 
               <div className="space-y-3">
                 {selectedZone ? (
-                  <ZoneDetailPanel
-                    zoneId={selectedZone}
-                    detail={zoneDetails.get(selectedZone) ?? { condition: 'GOOD', severity: 1, description: '', preExisting: false }}
-                    onChange={d => handleZoneDetailChange(selectedZone, d)}
-                    onClose={() => setSelectedZone(null)}
-                  />
+                  <>
+                    <ZoneDetailPanel
+                      zoneId={selectedZone}
+                      detail={zoneDetails.get(selectedZone) ?? { condition: 'GOOD', severity: 1, description: '', preExisting: false }}
+                      onChange={d => handleZoneDetailChange(selectedZone, d)}
+                      onClose={() => setSelectedZone(null)}
+                    />
+                    <div className="flex flex-wrap items-center gap-2 mt-2">
+                      <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer', height: 36, padding: '0 12px', fontSize: 12, background: 'var(--card-bg)', color: 'var(--text-2)', border: '1px solid var(--border)', borderRadius: 0 }}>
+                        <input type="file" accept="image/*" capture="environment"
+                          style={{ display: 'none' }} onChange={e => handlePhotoCapture(e, selectedZone)} />
+                        Take Photo
+                      </label>
+                      {(zonePhotoKeys[selectedZone] ?? []).map((key, i) => (
+                        <span key={key} style={{ fontSize: 11, color: 'var(--text-3)' }}>Photo {i + 1} saved</span>
+                      ))}
+                    </div>
+                  </>
                 ) : (
                   <div className="rounded-lg p-4 text-center" style={{ border: '1px dashed var(--border)' }}>
                     <p className="text-[12px]" style={{ color: 'var(--text-3)' }}>

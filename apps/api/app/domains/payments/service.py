@@ -37,7 +37,7 @@ from app.domains.payments.schemas import (
     VoidRequest,
     WebhookEvent,
 )
-from app.integrations.stripe_client import StripeClient
+from app.domains.payments.gateway import PaymentGateway
 
 log = structlog.get_logger()
 
@@ -55,7 +55,14 @@ class PaymentService:
 
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
-        self._stripe = StripeClient()
+        self._gateway: PaymentGateway | None = None
+        self._tenant_id: str = ""
+
+    async def _get_gateway(self) -> PaymentGateway:
+        if self._gateway is None:
+            from app.domains.payments.gateway_factory import get_gateway_for_tenant
+            self._gateway = await get_gateway_for_tenant(self._tenant_id, self._session)
+        return self._gateway
 
     def _get_repo(self, tenant_id: str) -> PaymentRepository:
         return PaymentRepository(self._session, tenant_id)
@@ -69,23 +76,29 @@ class PaymentService:
         Create a Stripe PaymentIntent with capture_method='manual' (hold only).
         Store Payment row with status=AUTHORIZED.
         """
+        self._tenant_id = tenant_id
         repo = self._get_repo(tenant_id)
 
-        # Convert to cents — Stripe requires integer cents
-        amount_cents = int(data.deposit_amount * 100)
-
-        intent = await self._stripe.create_payment_intent(
-            amount_cents=amount_cents,
-            currency=data.currency.lower(),
-            capture_method="manual",
-            payment_method_id=data.payment_method_id,
+        import uuid as _uuid
+        gw = await self._get_gateway()
+        preauth_result = await gw.create_preauth(
+            amount=data.deposit_amount,
+            currency=data.currency,
+            customer_ref=str(data.customer_id),
+            payment_method_token=data.payment_method_id,
+            idempotency_key=str(_uuid.uuid4()),
             metadata={
                 "reservation_id": str(data.reservation_id),
                 "tenant_id": tenant_id,
                 "customer_id": str(data.customer_id),
             },
-            confirm=True,
         )
+        # Build a minimal intent-like dict for downstream compatibility
+        intent = {
+            "id": preauth_result.gateway_payment_id,
+            "client_secret": None,
+            "payment_method_details": {},
+        }
 
         auth_expiry_at = datetime.now(timezone.utc) + timedelta(days=_PRE_AUTH_EXPIRY_DAYS)
 
@@ -139,6 +152,7 @@ class PaymentService:
         Calculate final total, capture against Stripe, update Payment record,
         post GL entries, queue receipt notification.
         """
+        self._tenant_id = tenant_id
         repo = self._get_repo(tenant_id)
         payment = await repo.get_by_id(str(data.payment_id))
         if payment is None:
@@ -166,26 +180,29 @@ class PaymentService:
         amount_cents = int(capture_amount * 100)
         authorized_cents = int(payment.amount * 100)
 
+        import uuid as _uuid
+        gw = await self._get_gateway()
+
         # If capture exceeds authorized amount, perform incremental auth first
         if amount_cents > authorized_cents:
-            incr = await self._stripe.create_incremental_auth(
-                payment_intent_id=payment.gateway_payment_id,
-                new_amount_cents=amount_cents,
+            incr_result = await gw.incremental_auth(
+                preauth_id=payment.gateway_payment_id,
+                new_total_amount=capture_amount,
+                idempotency_key=str(_uuid.uuid4()),
             )
             await repo.update(
                 payment.payment_id,
-                network_txn_id=incr.get("network_transaction_id"),
+                network_txn_id=incr_result.gateway_auth_code,
                 amount=capture_amount,
             )
 
-        result = await self._stripe.capture_payment_intent(
-            payment_intent_id=payment.gateway_payment_id,
-            amount_to_capture_cents=amount_cents,
+        capture_result = await gw.capture(
+            preauth_id=payment.gateway_payment_id,
+            amount=capture_amount,
+            idempotency_key=str(_uuid.uuid4()),
         )
 
-        stripe_charge_id = ""
-        if result.get("charges", {}).get("data"):
-            stripe_charge_id = result["charges"]["data"][0].get("id", "")
+        stripe_charge_id = capture_result.gateway_charge_id
 
         captured_at = datetime.now(timezone.utc)
         await repo.update(
@@ -231,6 +248,7 @@ class PaymentService:
         Called by the Celery task for pre-auths expiring within 24 hours.
         Uses Redis SETNX lock to prevent concurrent renewal of the same payment.
         """
+        self._tenant_id = tenant_id
         repo = self._get_repo(tenant_id)
         payment = await repo.get_by_id(payment_id)
         if payment is None or payment.status != "AUTHORIZED":
@@ -247,15 +265,17 @@ class PaymentService:
             return
 
         try:
-            amount_cents = int(payment.amount * 100)
-            result = await self._stripe.create_incremental_auth(
-                payment_intent_id=payment.gateway_payment_id,
-                new_amount_cents=amount_cents,
+            import uuid as _uuid
+            gw = await self._get_gateway()
+            incr_result = await gw.incremental_auth(
+                preauth_id=payment.gateway_payment_id,
+                new_total_amount=payment.amount,
+                idempotency_key=str(_uuid.uuid4()),
             )
             new_expiry = datetime.now(timezone.utc) + timedelta(days=_PRE_AUTH_EXPIRY_DAYS)
             await repo.update(
                 payment_id,
-                network_txn_id=result.get("network_transaction_id"),
+                network_txn_id=incr_result.gateway_auth_code,
                 auth_expiry_at=new_expiry,
             )
             await self._session.commit()
@@ -267,6 +287,7 @@ class PaymentService:
 
     async def void_payment(self, data: VoidRequest, tenant_id: str) -> None:
         """Cancel an AUTHORIZED payment intent."""
+        self._tenant_id = tenant_id
         repo = self._get_repo(tenant_id)
         payment = await repo.get_by_id(str(data.payment_id))
         if payment is None:
@@ -276,9 +297,8 @@ class PaymentService:
                 f"Payment {data.payment_id} in status '{payment.status}' cannot be voided."
             )
 
-        await self._stripe.cancel_payment_intent(
-            payment_intent_id=payment.gateway_payment_id
-        )
+        gw = await self._get_gateway()
+        await gw.void(preauth_id=payment.gateway_payment_id)
         await repo.update(payment.payment_id, status="VOIDED")
 
         # Post GL reversal
@@ -303,9 +323,10 @@ class PaymentService:
         """
         Route refunds:
           - AUTHORIZED → void instead
-          - CAPTURED → Stripe refund
+          - CAPTURED → gateway refund
           - amount > $500 → requires_approval=True (return Pending status)
         """
+        self._tenant_id = tenant_id
         repo = self._get_repo(tenant_id)
         payment = await repo.get_by_id(str(data.payment_id))
         if payment is None:
@@ -330,6 +351,45 @@ class PaymentService:
 
         refund_cents = int(data.amount * 100)
 
+        # ── Goodwill path: agent-issued, bypasses manager approval if within cap ──
+        if data.is_goodwill and data.goodwill_under is not None:
+            if data.amount > data.goodwill_under:
+                raise ValidationError(
+                    f"Goodwill refund {data.amount} exceeds agent authority {data.goodwill_under}."
+                )
+            if data.goodwill_customer_id:
+                window_total = await self._get_goodwill_total(
+                    tenant_id, str(data.goodwill_customer_id)
+                )
+                from app.core.config import settings
+                cap = Decimal(str(settings.agent_goodwill_cap_usd))
+                if window_total + data.amount > cap:
+                    raise ValidationError(
+                        f"Goodwill cap exceeded: {window_total} already issued this window."
+                    )
+            import uuid as _uuid
+            gw = await self._get_gateway()
+            await gw.refund(
+                charge_id=payment.gateway_auth_code or "",
+                amount=data.amount,
+                reason=data.reason[:255] if data.reason else "",
+                idempotency_key=str(_uuid.uuid4()),
+            )
+            new_refunded = (payment.refunded_amount or Decimal("0")) + data.amount
+            new_status = "REFUNDED" if new_refunded >= payment.amount else "PARTIALLY_REFUNDED"
+            await repo.update(payment.payment_id, refunded_amount=new_refunded, status=new_status)
+            await self._session.commit()
+            if data.goodwill_customer_id and data.goodwill_ra_id:
+                await self._record_goodwill(
+                    tenant_id=tenant_id,
+                    customer_id=str(data.goodwill_customer_id),
+                    ra_id=str(data.goodwill_ra_id),
+                    amount=data.amount,
+                    session_id=data.goodwill_session_id or "",
+                    agent_name="ReturnAdvisor",
+                )
+            return await repo.get_by_id(payment.payment_id)  # type: ignore[return-value]
+
         # Large refunds require approval
         if refund_cents > _REFUND_APPROVAL_THRESHOLD_CENTS:
             await repo.update(
@@ -341,10 +401,13 @@ class PaymentService:
             refreshed = await repo.get_by_id(payment.payment_id)
             return refreshed  # type: ignore[return-value]
 
-        await self._stripe.create_refund(
+        import uuid as _uuid
+        gw = await self._get_gateway()
+        await gw.refund(
             charge_id=payment.gateway_auth_code or "",
-            amount_cents=refund_cents,
+            amount=data.amount,
             reason=data.reason[:255] if data.reason else "",
+            idempotency_key=str(_uuid.uuid4()),
         )
 
         new_refunded = already_refunded + data.amount
@@ -498,3 +561,48 @@ class PaymentService:
             amount=str(entry.amount),
             reference_id=entry.reference_id,
         )
+
+    # ── Goodwill Ledger Helpers ────────────────────────────────────────────────
+
+    async def _get_goodwill_total(self, tenant_id: str, customer_id: str) -> Decimal:
+        """Sum goodwill refunds issued to this customer in the rolling cap window."""
+        from sqlalchemy import text as sqlt
+        from app.core.config import settings
+        result = await self._session.execute(
+            sqlt("""
+                SELECT COALESCE(SUM(amount), 0) FROM public.customer_goodwill_ledger
+                WHERE tenant_id = :tid AND customer_id = :cid
+                  AND issued_at >= NOW() - INTERVAL ':days days'
+            """.replace(":days", str(settings.agent_goodwill_window_days))),
+            {"tid": tenant_id, "cid": customer_id},
+        )
+        row = result.scalar_one()
+        return Decimal(str(row or 0))
+
+    async def _record_goodwill(
+        self,
+        tenant_id: str,
+        customer_id: str,
+        ra_id: str,
+        amount: Decimal,
+        session_id: str,
+        agent_name: str,
+    ) -> None:
+        """Write a goodwill ledger entry (no FK — anonymization-safe)."""
+        from sqlalchemy import text as sqlt
+        await self._session.execute(
+            sqlt("""
+                INSERT INTO public.customer_goodwill_ledger
+                    (tenant_id, customer_id, rental_agreement_id, amount, session_id, issued_by_agent)
+                VALUES (:tid, :cid, :ra, :amt, :sid, :agent)
+            """),
+            {
+                "tid": tenant_id,
+                "cid": customer_id,
+                "ra": ra_id,
+                "amt": str(amount),
+                "sid": session_id,
+                "agent": agent_name,
+            },
+        )
+        await self._session.commit()

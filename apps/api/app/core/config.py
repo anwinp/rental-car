@@ -54,6 +54,8 @@ class Settings(BaseSettings):
     twilio_account_sid: str
     twilio_auth_token: SecretStr
     twilio_from_number: str
+    twilio_verify_service_sid: str = ""
+    twilio_whatsapp_from: str = ""
 
     # ── SendGrid ───────────────────────────────────────────────────────────────
     sendgrid_api_key: SecretStr
@@ -81,6 +83,22 @@ class Settings(BaseSettings):
     google_oauth_redirect_uri: str = "http://localhost:3400/api/auth/google/callback"
     # Base URL of the customer-facing frontend
     frontend_url: str = "http://localhost:3400"
+
+    # ── AI Agents ──────────────────────────────────────────────────────────────
+    anthropic_api_key: SecretStr = SecretStr("")
+    # OpenAI-compatible LLM (NVIDIA NIM / OpenAI / local). When llm_api_key is set
+    # the agent orchestrator drives conversations with this model via tool-calling.
+    llm_api_key: SecretStr = SecretStr("")
+    llm_base_url: str = "https://integrate.api.nvidia.com/v1"
+    llm_model: str = "nvidia/nemotron-3-ultra-550b-a55b"
+    # Base URL the agents use to call back into this API (tool calls). Uses an
+    # explicit IPv4 loopback so it never resolves to an IPv6 listener (e.g. a
+    # Docker-forwarded port) ahead of the local Uvicorn process.
+    agent_internal_api_url: str = "http://127.0.0.1:8000"
+    agent_session_ttl_seconds: int = 86400        # 24 hours
+    agent_token_ttl_seconds: int = 7776000        # 90 days
+    agent_goodwill_cap_usd: float = 75.0          # max goodwill per customer per window
+    agent_goodwill_window_days: int = 90          # rolling window for cap enforcement
 
     # ── Application ────────────────────────────────────────────────────────────
     sentry_dsn: str = ""

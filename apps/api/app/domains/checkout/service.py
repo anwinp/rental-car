@@ -215,6 +215,32 @@ class CheckoutService:
 
         await self._session.flush()
 
+        try:
+            from app.domains.tasks.service import TaskService as _TaskService
+            from app.core.database import AsyncSessionLocal
+            async with AsyncSessionLocal() as _ts:
+                await _TaskService(_ts, tenant_id).auto_create_from_event(
+                    "RENTAL_RETURNED",
+                    reservation_id=uuid.UUID(ra.reservation_id) if ra.reservation_id else None,
+                    vehicle_id=uuid.UUID(ra.vehicle_id) if ra.vehicle_id else None,
+                )
+                await _ts.commit()
+        except Exception:
+            pass
+
+        if getattr(ra, 'reservation_id', None):
+            try:
+                from app.worker.tasks.payment_tasks import process_bond_release
+                process_bond_release.delay(
+                    reservation_id=str(ra.reservation_id),
+                    tenant_id=str(tenant_id),
+                    return_condition=getattr(data, 'return_condition', 'NO_DAMAGE'),
+                    damage_charge_amount=str(getattr(data, 'damage_charge_amount', '0.00')),
+                    agent_id=str(agent_id),
+                )
+            except Exception:
+                pass
+
         final_total = (
             time_extension_charge + fuel_charge + mileage_charge
         ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
@@ -405,18 +431,34 @@ class CheckoutService:
         return await self._get_rental_agreement(ra_id, tenant_id)
 
     async def list_overdue_rentals(self, tenant_id: uuid.UUID) -> list[RentalAgreement]:
-        """Return all ACTIVE RAs where actual_return_datetime is past due."""
-        now = datetime.now(timezone.utc)
-        # Without full reservation data, use created_at + 24h as proxy for overdue
+        """Return ACTIVE/EXTENDED RAs whose reservation return_datetime is in the past."""
+        from sqlalchemy import text as sqlt
         result = await self._session.execute(
+            sqlt("""
+                SELECT ra.*
+                FROM rental_agreements ra
+                JOIN reservations r ON r.reservation_id = ra.reservation_id
+                WHERE ra.tenant_id = :tid
+                  AND ra.status IN ('ACTIVE', 'EXTENDED')
+                  AND r.return_datetime < NOW() AT TIME ZONE 'UTC'
+                ORDER BY r.return_datetime ASC
+            """),
+            {"tid": str(tenant_id)},
+        )
+        rows = result.mappings().all()
+        # Re-load as ORM objects so callers get full RentalAgreement instances
+        ids = [str(row["ra_id"]) for row in rows]
+        if not ids:
+            return []
+        orm_result = await self._session.execute(
             select(RentalAgreement).where(
                 and_(
                     RentalAgreement.tenant_id == str(tenant_id),
-                    RentalAgreement.status.in_(["ACTIVE", "EXTENDED"]),
+                    RentalAgreement.ra_id.in_(ids),
                 )
             )
         )
-        return list(result.scalars().all())
+        return list(orm_result.scalars().all())
 
     # ── Private helpers ───────────────────────────────────────────────────────
 

@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.database import get_session
-from app.core.redis import get_session_redis
+from app.core.redis import get_session_redis, SESSION_KEY
 from app.core.security import UserClaims, get_current_user
 from app.domains.auth.schemas import (
     LoginRequest,
@@ -65,6 +65,9 @@ async def login(
     client_ip = request.headers.get("X-Forwarded-For", request.client.host or "").split(",")[0].strip()
     # tenant_id resolved from header or request.state (set by middleware)
     tenant_id = request.headers.get("X-Tenant-ID") or getattr(request.state, "tenant_id", "")
+    if not tenant_id:
+        from app.core.exceptions import AuthenticationError
+        raise AuthenticationError("X-Tenant-ID header is required.")
 
     access_token, _ = await service.login(
         email=payload.email,
@@ -268,6 +271,209 @@ async def mfa_verify(
     """Verify a TOTP code to complete enrollment or validate a second factor."""
     valid = await service.verify_mfa(str(claims.user_id), payload.totp_code)
     return {"verified": valid}
+
+
+# ── OTP Authentication ────────────────────────────────────────────────────────
+
+class OTPSendRequest(BaseModel):
+    phone_number: str
+    tenant_id: str
+
+
+class OTPVerifyRequest(BaseModel):
+    phone_number: str
+    code: str
+    tenant_id: str
+
+
+@router.post("/otp/send", status_code=202)
+async def send_otp(
+    body: OTPSendRequest,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Send OTP to phone number. Phone must be registered on a staff account."""
+    from sqlalchemy import text
+    from fastapi import HTTPException
+    result = await session.execute(
+        text("SELECT user_id FROM staff_users WHERE phone_number = :phone AND tenant_id = CAST(:tid AS uuid) AND deleted_at IS NULL LIMIT 1"),
+        {"phone": body.phone_number, "tid": body.tenant_id},
+    )
+    row = result.mappings().first()
+    if not row:
+        raise HTTPException(status_code=400, detail="PHONE_NOT_REGISTERED")
+
+    redis = get_session_redis()
+    rate_key = f"otp_rate:{body.phone_number.replace('+', '')}"
+    if await redis.get(rate_key):
+        raise HTTPException(status_code=429, detail="RATE_LIMITED")
+    await redis.setex(rate_key, 60, "1")
+
+    if settings.twilio_account_sid and settings.twilio_verify_service_sid:
+        try:
+            from twilio.rest import Client as TwilioClient
+            client = TwilioClient(settings.twilio_account_sid, settings.twilio_auth_token.get_secret_value())
+            client.verify.v2.services(settings.twilio_verify_service_sid).verifications.create(
+                to=body.phone_number, channel="sms"
+            )
+        except Exception as e:
+            import structlog
+            structlog.get_logger().warning("otp_send_failed", error=str(e))
+    else:
+        import structlog
+        structlog.get_logger().info("otp_send_dev_mode", phone=body.phone_number)
+
+    return {"expires_in": 600}
+
+
+@router.post("/otp/verify")
+async def verify_otp(
+    body: OTPVerifyRequest,
+    response: Response,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Verify OTP code and issue auth cookies if valid."""
+    from sqlalchemy import text
+    from fastapi import HTTPException
+    import uuid as _uuid
+    user_result = await session.execute(
+        text("""
+            SELECT u.user_id, u.email, u.first_name, u.last_name, u.role, u.tenant_id,
+                   ARRAY_AGG(DISTINCT ul.location_id::text) FILTER (WHERE ul.location_id IS NOT NULL) AS location_ids
+            FROM staff_users u
+            LEFT JOIN user_locations ul ON ul.user_id = u.user_id
+            WHERE u.phone_number = :phone AND u.tenant_id = CAST(:tid AS uuid)
+              AND u.deleted_at IS NULL
+            GROUP BY u.user_id, u.email, u.first_name, u.last_name, u.role, u.tenant_id
+            LIMIT 1
+        """),
+        {"phone": body.phone_number, "tid": body.tenant_id},
+    )
+    user_row = user_result.mappings().first()
+    if not user_row:
+        raise HTTPException(status_code=401, detail="INVALID_CODE")
+
+    verified = False
+    if settings.twilio_account_sid and settings.twilio_verify_service_sid:
+        try:
+            from twilio.rest import Client as TwilioClient
+            client = TwilioClient(settings.twilio_account_sid, settings.twilio_auth_token.get_secret_value())
+            check = client.verify.v2.services(settings.twilio_verify_service_sid).verification_checks.create(
+                to=body.phone_number, code=body.code
+            )
+            verified = check.status == "approved"
+        except Exception:
+            verified = False
+    else:
+        verified = len(body.code) == 6 and body.code.isdigit()
+
+    if not verified:
+        raise HTTPException(status_code=401, detail="INVALID_CODE")
+
+    from app.core.security import (
+        create_access_token,
+        create_refresh_token,
+        set_auth_cookies,
+    )
+    from app.core.redis import (
+        SESSION_KEY,
+        REFRESH_TOKEN_KEY,
+        get_session_redis as _get_redis,
+    )
+
+    user_id = str(user_row["user_id"])
+    tenant_id = str(user_row["tenant_id"])
+    role = str(user_row["role"])
+    location_ids_raw = list(user_row["location_ids"] or [])
+
+    access_jti = str(_uuid.uuid4())
+    refresh_jti = str(_uuid.uuid4())
+    location_uuids = [_uuid.UUID(lid) for lid in location_ids_raw]
+
+    access_token = create_access_token(
+        user_id=_uuid.UUID(user_id),
+        tenant_id=_uuid.UUID(tenant_id),
+        roles=[role],
+        primary_role=role,
+        location_ids=location_uuids,
+        jti=access_jti,
+        app_context="web",
+    )
+    refresh_token = create_refresh_token(
+        user_id=user_id,
+        jti=refresh_jti,
+        access_jti=access_jti,
+        tenant_id=tenant_id,
+    )
+
+    redis = _get_redis()
+    await redis.setex(SESSION_KEY.format(jti=access_jti), settings.jwt_access_token_ttl_web_seconds, user_id)
+    await redis.setex(REFRESH_TOKEN_KEY.format(jti=refresh_jti), settings.jwt_refresh_token_ttl_seconds, user_id)
+
+    set_auth_cookies(response, access_token, refresh_token, "web")
+
+    first_name = str(user_row["first_name"] or "")
+    last_name = str(user_row["last_name"] or "")
+    return {
+        "user_id": user_id,
+        "email": str(user_row["email"] or ""),
+        "first_name": first_name,
+        "last_name": last_name,
+        "display_name": f"{first_name} {last_name}".strip(),
+        "role": role,
+        "tenant_id": tenant_id,
+        "location_ids": location_ids_raw,
+    }
+
+
+# ── Agent Service Token ───────────────────────────────────────────────────────
+
+class AgentTokenRequest(BaseModel):
+    agent_name: str
+    tenant_id: str
+
+
+class AgentTokenResponse(BaseModel):
+    access_token: str
+    agent_name: str
+    expires_in: int
+
+
+@router.post("/agent-token", response_model=AgentTokenResponse)
+async def issue_agent_token(
+    payload: AgentTokenRequest,
+    claims: UserClaims = Depends(get_current_user),
+) -> AgentTokenResponse:
+    """
+    Issues a long-lived Bearer token for an AI agent service account.
+    Restricted to SUPER_ADMIN role.
+    """
+    if "SUPER_ADMIN" not in claims.roles:
+        raise HTTPException(status_code=403, detail="SUPER_ADMIN required")
+
+    import uuid as _uuid
+    from app.core.security import create_access_token
+
+    agent_user_id = _uuid.uuid5(_uuid.UUID(payload.tenant_id), f"agent:{payload.agent_name}")
+    jti = str(_uuid.uuid4())
+
+    token = create_access_token(
+        user_id=agent_user_id,
+        tenant_id=_uuid.UUID(payload.tenant_id),
+        roles=["AGENT_SERVICE"],
+        primary_role="AGENT_SERVICE",
+        location_ids=[],
+        jti=jti,
+        app_context=payload.agent_name,
+    )
+    # Register in session store so revocation checks work
+    redis = get_session_redis()
+    await redis.setex(SESSION_KEY.format(jti=jti), settings.agent_token_ttl_seconds, str(agent_user_id))
+
+    return AgentTokenResponse(
+        access_token=token,
+        agent_name=payload.agent_name,
+        expires_in=settings.agent_token_ttl_seconds,
+    )
 
 
 # ── Session Management ────────────────────────────────────────────────────────

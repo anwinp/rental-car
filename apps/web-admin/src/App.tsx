@@ -1,6 +1,9 @@
 import { BrowserRouter, Routes, Route, Navigate, useNavigate } from 'react-router-dom'
 import { useState, type FormEvent } from 'react'
 import { QueryProvider } from '@rcm/ui/query'
+
+const _TENANT = '00000000-0000-0000-0000-000000000001'
+const _TENANT_HEADERS = { 'Content-Type': 'application/json', 'X-Tenant-ID': _TENANT }
 import { AuthProvider, RouteGuard, useAuth } from '@rcm/ui/auth'
 import { Toaster } from '@rcm/ui'
 import { UserRole } from '@rcm/shared-types'
@@ -17,6 +20,7 @@ import { ManagerDashboardPage } from './pages/ManagerDashboardPage'
 import { StaffDashboardPage } from './pages/StaffDashboardPage'
 import { BackOfficeDashboardPage } from './pages/BackOfficeDashboardPage'
 import { TaskBoardPage } from './pages/TaskBoardPage'
+import StaffDailyTaskListPage from './pages/StaffDailyTaskListPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { ReturnProcessingPage } from './pages/ReturnProcessingPage'
 import { CounterCheckoutPage } from './pages/CounterCheckoutPage'
@@ -27,6 +31,9 @@ import { ShiftPage } from './pages/ShiftPage'
 import { OverduePage } from './pages/OverduePage'
 import { MaintenancePage } from './pages/MaintenancePage'
 import { CorporatePage } from './pages/CorporatePage'
+import { ExecutiveDashboardPage } from './pages/ExecutiveDashboardPage'
+import { RegionalDashboardPage } from './pages/RegionalDashboardPage'
+import OTALeadsPage from './pages/OTALeadsPage'
 
 const ADMIN_ROLES = [
   UserRole.COUNTER_AGENT,
@@ -39,6 +46,8 @@ const ADMIN_ROLES = [
   UserRole.SYSTEM_ADMIN,
   UserRole.SUPER_ADMIN,
   UserRole.MAINTENANCE_TECH,
+  UserRole.EXECUTIVE,
+  UserRole.SENIOR_AGENT,
 ]
 
 
@@ -65,6 +74,52 @@ function LoginPage() {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
+  const [loginMethod, setLoginMethod] = useState<'email' | 'phone'>('email')
+  const [phone, setPhone] = useState('')
+  const [otpCode, setOtpCode] = useState('')
+  const [otpSent, setOtpSent] = useState(false)
+  const [otpError, setOtpError] = useState('')
+
+  async function handleSendOTP() {
+    setOtpError('')
+    const res = await fetch('/api/v1/auth/otp/send', {
+      method: 'POST', credentials: 'include', headers: _TENANT_HEADERS,
+      body: JSON.stringify({ phone_number: phone, tenant_id: _TENANT }),
+    })
+    if (res.ok) {
+      setOtpSent(true)
+    } else {
+      const d = await res.json().catch(() => ({}))
+      setOtpError((d as any).detail || 'Failed to send code')
+    }
+  }
+
+  async function handleVerifyOTP() {
+    setOtpError('')
+    const res = await fetch('/api/v1/auth/otp/verify', {
+      method: 'POST', credentials: 'include', headers: _TENANT_HEADERS,
+      body: JSON.stringify({ phone_number: phone, code: otpCode, tenant_id: _TENANT }),
+    })
+    if (res.ok) {
+      const data = await res.json()
+      setUser(data)
+      switch (data.role) {
+        case 'EXECUTIVE':          navigate('/executive', { replace: true }); break
+        case 'REGIONAL_MANAGER':   navigate('/regional', { replace: true }); break
+        case 'COUNTER_AGENT':      navigate('/checkout', { replace: true }); break
+        case 'SENIOR_AGENT':       navigate('/staff', { replace: true }); break
+        case 'FLEET_MANAGER':      navigate('/back-office', { replace: true }); break
+        case 'MAINTENANCE_TECH':   navigate('/maintenance', { replace: true }); break
+        case 'FINANCE_ANALYST':    navigate('/reports', { replace: true }); break
+        case 'CLAIMS_COORDINATOR': navigate('/damage', { replace: true }); break
+        default:                   navigate('/dashboard', { replace: true }); break
+      }
+    } else {
+      const d = await res.json().catch(() => ({}))
+      setOtpError((d as any).detail || 'Invalid code')
+    }
+  }
+
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
     setError('')
@@ -78,11 +133,17 @@ function LoginPage() {
         return
       }
       setUser(data)
-      if (data.role === 'COUNTER_AGENT') {
-        navigate('/checkout', { replace: true })
-        return
+      switch (data.role) {
+        case 'EXECUTIVE':          navigate('/executive', { replace: true }); break
+        case 'REGIONAL_MANAGER':   navigate('/regional', { replace: true }); break
+        case 'COUNTER_AGENT':      navigate('/checkout', { replace: true }); break
+        case 'SENIOR_AGENT':       navigate('/staff', { replace: true }); break
+        case 'FLEET_MANAGER':      navigate('/back-office', { replace: true }); break
+        case 'MAINTENANCE_TECH':   navigate('/maintenance', { replace: true }); break
+        case 'FINANCE_ANALYST':    navigate('/reports', { replace: true }); break
+        case 'CLAIMS_COORDINATOR': navigate('/damage', { replace: true }); break
+        default:                   navigate('/dashboard', { replace: true }); break
       }
-      navigate('/dashboard', { replace: true })
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Login failed. Please try again.'
       setError(msg)
@@ -163,7 +224,53 @@ function LoginPage() {
             <p className="mt-1 text-sm" style={{ color: 'var(--text-3)' }}>Sign in to your administrator account</p>
           </div>
 
-          <form onSubmit={handleSubmit} className="space-y-5">
+          {/* Login method toggle */}
+          <div style={{ display: 'flex', gap: 0, marginBottom: 20 }}>
+            {(['email', 'phone'] as const).map(m => (
+              <button key={m} type="button" onClick={() => { setLoginMethod(m); setOtpSent(false); setOtpError('') }}
+                style={{ flex: 1, height: 36, fontSize: 12, fontWeight: 600, borderRadius: 0,
+                  background: loginMethod === m ? 'var(--text-1)' : 'var(--card-bg)',
+                  color: loginMethod === m ? 'var(--canvas)' : 'var(--text-2)',
+                  border: '1px solid var(--border)', cursor: 'pointer' }}>
+                {m === 'email' ? 'Email & Password' : 'Phone (OTP)'}
+              </button>
+            ))}
+          </div>
+
+          {loginMethod === 'phone' && (
+            <div className="space-y-3">
+              {!otpSent ? (
+                <>
+                  <input type="tel" placeholder="+1 XXX XXX XXXX" value={phone} onChange={e => setPhone(e.target.value)}
+                    style={{ width: '100%', height: 44, padding: '0 12px', fontSize: 14, background: 'var(--card-bg)',
+                      color: 'var(--text-1)', border: '1px solid var(--border)', borderRadius: 4, boxSizing: 'border-box' }} />
+                  <button type="button" onClick={handleSendOTP} style={{ width: '100%', height: 48, fontWeight: 700, fontSize: 14,
+                    background: '#da291c', color: '#fff', border: 'none', borderRadius: 0, cursor: 'pointer',
+                    textTransform: 'uppercase', letterSpacing: '1.4px' }}>
+                    Send Code
+                  </button>
+                </>
+              ) : (
+                <>
+                  <p style={{ fontSize: 13, color: 'var(--text-3)', marginBottom: 12 }}>Code sent to {phone}</p>
+                  <input type="text" inputMode="numeric" maxLength={6} placeholder="000000" value={otpCode} onChange={e => setOtpCode(e.target.value)}
+                    style={{ width: '100%', height: 44, padding: '0 12px', fontSize: 24, textAlign: 'center', letterSpacing: '8px',
+                      background: 'var(--card-bg)', color: 'var(--text-1)', border: '1px solid var(--border)', borderRadius: 4, boxSizing: 'border-box' }} />
+                  <button type="button" onClick={handleVerifyOTP} style={{ width: '100%', height: 48, fontWeight: 700, fontSize: 14,
+                    background: '#da291c', color: '#fff', border: 'none', borderRadius: 0, cursor: 'pointer',
+                    textTransform: 'uppercase', letterSpacing: '1.4px', marginTop: 12 }}>
+                    Verify Code
+                  </button>
+                  <button type="button" onClick={() => setOtpSent(false)} style={{ background: 'none', border: 'none', color: 'var(--text-3)', fontSize: 12, cursor: 'pointer', marginTop: 8, display: 'block' }}>
+                    Use different number
+                  </button>
+                </>
+              )}
+              {otpError && <p style={{ color: '#da291c', fontSize: 12, marginTop: 8 }}>{otpError}</p>}
+            </div>
+          )}
+
+          <form onSubmit={handleSubmit} className="space-y-5" style={{ display: loginMethod === 'phone' ? 'none' : undefined }}>
             <div className="space-y-1.5">
               <label htmlFor="email" className="text-sm font-medium" style={{ color: 'var(--text-2)' }}>
                 Email address
@@ -264,6 +371,14 @@ function UnauthorizedPage() {
 }
 
 export default function App() {
+  const EXEC_ROLES   = [UserRole.EXECUTIVE, UserRole.SYSTEM_ADMIN, UserRole.SUPER_ADMIN]
+  const MANAGE_ROLES = [UserRole.BRANCH_MANAGER, UserRole.REGIONAL_MANAGER, UserRole.SYSTEM_ADMIN, UserRole.SUPER_ADMIN, UserRole.CLAIMS_COORDINATOR, UserRole.READONLY_AUDITOR]
+  const FLEET_ROLES  = [...MANAGE_ROLES, UserRole.FLEET_MANAGER, UserRole.MAINTENANCE_TECH]
+  const STAFF_ROLES  = [...FLEET_ROLES, UserRole.COUNTER_AGENT, UserRole.SENIOR_AGENT]
+  const RETURN_ROLES = [UserRole.BRANCH_MANAGER, UserRole.REGIONAL_MANAGER, UserRole.SYSTEM_ADMIN, UserRole.SUPER_ADMIN, UserRole.SENIOR_AGENT]
+  const REPORT_ROLES = [...MANAGE_ROLES, UserRole.EXECUTIVE, UserRole.FINANCE_ANALYST]
+  const REGIONAL_ROLES = [UserRole.REGIONAL_MANAGER, UserRole.SYSTEM_ADMIN, UserRole.SUPER_ADMIN]
+
   return (
     <QueryProvider>
       <AuthProvider>
@@ -283,24 +398,116 @@ export default function App() {
                   <AdminLayout>
                     <Routes>
                       <Route path="/" element={<Navigate to="/dashboard" replace />} />
-                      <Route path="/dashboard" element={<ManagerDashboardPage />} />
-                      <Route path="/staff" element={<StaffDashboardPage />} />
-                      <Route path="/back-office" element={<BackOfficeDashboardPage />} />
-                      <Route path="/tasks" element={<TaskBoardPage />} />
-                      <Route path="/fleet" element={<FleetPage />} />
-                      <Route path="/fleet-calendar" element={<FleetCalendarPage />} />
-                      <Route path="/locations" element={<LocationsPage />} />
-                      <Route path="/reservations" element={<ReservationsPage />} />
-                      <Route path="/customers" element={<CustomersPage />} />
-                      <Route path="/checkout" element={<CounterCheckoutPage />} />
-                      <Route path="/returns" element={<ReturnProcessingPage />} />
-                      <Route path="/inspections" element={<InspectionsPage />} />
-                      <Route path="/payments" element={<PaymentsPage />} />
-                      <Route path="/damage" element={<DamagePage />} />
-                      <Route path="/shift" element={<ShiftPage />} />
-                      <Route path="/overdue" element={<OverduePage />} />
-                      <Route path="/maintenance" element={<MaintenancePage />} />
-                      <Route path="/corporate" element={<CorporatePage />} />
+                      <Route path="/dashboard" element={
+                        <RouteGuard roles={MANAGE_ROLES} redirectTo="/unauthorized">
+                          <ManagerDashboardPage />
+                        </RouteGuard>
+                      } />
+                      <Route path="/staff" element={
+                        <RouteGuard roles={STAFF_ROLES} redirectTo="/unauthorized">
+                          <StaffDashboardPage />
+                        </RouteGuard>
+                      } />
+                      <Route path="/back-office" element={
+                        <RouteGuard roles={FLEET_ROLES} redirectTo="/unauthorized">
+                          <BackOfficeDashboardPage />
+                        </RouteGuard>
+                      } />
+                      <Route path="/tasks" element={
+                        <RouteGuard roles={STAFF_ROLES} redirectTo="/unauthorized">
+                          <StaffDailyTaskListPage />
+                        </RouteGuard>
+                      } />
+                      <Route path="/task-board" element={
+                        <RouteGuard roles={MANAGE_ROLES} redirectTo="/unauthorized">
+                          <TaskBoardPage />
+                        </RouteGuard>
+                      } />
+                      <Route path="/fleet" element={
+                        <RouteGuard roles={FLEET_ROLES} redirectTo="/unauthorized">
+                          <FleetPage />
+                        </RouteGuard>
+                      } />
+                      <Route path="/fleet-calendar" element={
+                        <RouteGuard roles={FLEET_ROLES} redirectTo="/unauthorized">
+                          <FleetCalendarPage />
+                        </RouteGuard>
+                      } />
+                      <Route path="/locations" element={
+                        <RouteGuard roles={[...FLEET_ROLES, UserRole.EXECUTIVE]} redirectTo="/unauthorized">
+                          <LocationsPage />
+                        </RouteGuard>
+                      } />
+                      <Route path="/reservations" element={
+                        <RouteGuard roles={MANAGE_ROLES} redirectTo="/unauthorized">
+                          <ReservationsPage />
+                        </RouteGuard>
+                      } />
+                      <Route path="/customers" element={
+                        <RouteGuard roles={MANAGE_ROLES} redirectTo="/unauthorized">
+                          <CustomersPage />
+                        </RouteGuard>
+                      } />
+                      <Route path="/checkout" element={
+                        <RouteGuard roles={STAFF_ROLES} redirectTo="/unauthorized">
+                          <CounterCheckoutPage />
+                        </RouteGuard>
+                      } />
+                      <Route path="/returns" element={
+                        <RouteGuard roles={RETURN_ROLES} redirectTo="/unauthorized">
+                          <ReturnProcessingPage />
+                        </RouteGuard>
+                      } />
+                      <Route path="/inspections" element={
+                        <RouteGuard roles={RETURN_ROLES} redirectTo="/unauthorized">
+                          <InspectionsPage />
+                        </RouteGuard>
+                      } />
+                      <Route path="/payments" element={
+                        <RouteGuard roles={MANAGE_ROLES} redirectTo="/unauthorized">
+                          <PaymentsPage />
+                        </RouteGuard>
+                      } />
+                      <Route path="/damage" element={
+                        <RouteGuard roles={RETURN_ROLES} redirectTo="/unauthorized">
+                          <DamagePage />
+                        </RouteGuard>
+                      } />
+                      <Route path="/shift" element={
+                        <RouteGuard roles={STAFF_ROLES} redirectTo="/unauthorized">
+                          <ShiftPage />
+                        </RouteGuard>
+                      } />
+                      <Route path="/overdue" element={
+                        <RouteGuard roles={STAFF_ROLES} redirectTo="/unauthorized">
+                          <OverduePage />
+                        </RouteGuard>
+                      } />
+                      <Route path="/maintenance" element={
+                        <RouteGuard roles={FLEET_ROLES} redirectTo="/unauthorized">
+                          <MaintenancePage />
+                        </RouteGuard>
+                      } />
+                      <Route path="/corporate" element={
+                        <RouteGuard roles={[...MANAGE_ROLES, UserRole.EXECUTIVE]} redirectTo="/unauthorized">
+                          <CorporatePage />
+                        </RouteGuard>
+                      } />
+                      <Route path="/executive" element={
+                        <RouteGuard roles={EXEC_ROLES} redirectTo="/unauthorized">
+                          <ExecutiveDashboardPage />
+                        </RouteGuard>
+                      } />
+                      <Route path="/regional" element={
+                        <RouteGuard roles={REGIONAL_ROLES} redirectTo="/unauthorized">
+                          <RegionalDashboardPage />
+                        </RouteGuard>
+                      } />
+                      <Route path="/ota-leads" element={
+                        <RouteGuard roles={REGIONAL_ROLES} redirectTo="/unauthorized">
+                          <OTALeadsPage />
+                        </RouteGuard>
+                      } />
                       <Route
                         path="/pricing"
                         element={
@@ -309,7 +516,11 @@ export default function App() {
                           </RouteGuard>
                         }
                       />
-                      <Route path="/reports" element={<ReportsPage />} />
+                      <Route path="/reports" element={
+                        <RouteGuard roles={REPORT_ROLES} redirectTo="/unauthorized">
+                          <ReportsPage />
+                        </RouteGuard>
+                      } />
                       <Route
                         path="/settings"
                         element={

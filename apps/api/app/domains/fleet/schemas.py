@@ -1,6 +1,7 @@
 """Pydantic v2 schemas for the Fleet domain."""
 from __future__ import annotations
 
+import uuid
 from datetime import datetime
 from decimal import Decimal
 from enum import Enum
@@ -317,3 +318,11 @@ class BulkImportResult(BaseModel):
     created: int
     skipped: int
     errors: list[dict]  # Each: {"row": int, "vin": str, "reason": str}
+
+
+# ── Reallocation ──────────────────────────────────────────────────────────────
+
+
+class ReallocateBlockRequest(BaseModel):
+    target_vehicle_id: uuid.UUID
+    notify_customer: bool = True

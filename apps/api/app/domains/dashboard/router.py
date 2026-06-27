@@ -45,6 +45,7 @@ class ForecastDay(BaseModel):
     date:    str
     pickups: int
     returns: int
+    revenue: float = 0.0
 
 class PickupRow(BaseModel):
     confirmation_number:  str
@@ -63,11 +64,21 @@ class ReturnRow(BaseModel):
     is_overdue:          bool
     days_overdue:        int
 
+class OverdueRow(BaseModel):
+    confirmation_number: str
+    customer_name:       str
+    vehicle:             Optional[str] = None
+    return_time:         Optional[str] = None
+    days_overdue:        int
+
 class ManagerDashboard(BaseModel):
-    kpi:      ManagerKPI
-    forecast: list[ForecastDay]
-    pickups:  list[PickupRow]
-    returns:  list[ReturnRow]
+    kpi:           ManagerKPI
+    forecast:      list[ForecastDay]
+    pickups:       list[PickupRow]
+    returns:       list[ReturnRow]
+    overdue:       list[OverdueRow] = []
+    location_name: Optional[str] = None
+    location_code: Optional[str] = None
 
 
 class StaffPickup(BaseModel):
@@ -203,48 +214,79 @@ async def get_manager_dashboard(
     week_end    = now + timedelta(days=7)
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
-    kpi_row = await session.execute(sqlt("""
+    # Location scoping — BRANCH_MANAGER users have location_ids in their JWT
+    loc_id = str(claims.location_ids[0]) if claims.location_ids else None
+    res_loc  = "AND pickup_location_id = CAST(:loc_id AS uuid)" if loc_id else ""
+    veh_loc  = "AND home_location_id = CAST(:loc_id AS uuid)" if loc_id else ""
+    res_loc_r = "AND r.pickup_location_id = CAST(:loc_id AS uuid)" if loc_id else ""
+    lp = {"loc_id": loc_id} if loc_id else {}
+
+    # Look up the assigned location's display info
+    location_name: Optional[str] = None
+    location_code: Optional[str] = None
+    if loc_id:
+        loc_row = await session.execute(
+            sqlt("SELECT name, short_code FROM locations WHERE location_id = CAST(:lid AS uuid) AND tenant_id = CAST(:tid AS uuid)"),
+            {"lid": loc_id, "tid": tid},
+        )
+        loc_info = loc_row.mappings().first()
+        if loc_info:
+            location_name = loc_info["name"]
+            location_code = loc_info["short_code"]
+
+    kpi_row = await session.execute(sqlt(f"""
         SELECT
           (SELECT COUNT(*) FROM reservations WHERE tenant_id=CAST(:tid AS uuid)
-           AND deleted_at IS NULL AND CAST(status AS text)='CHECKED_OUT') AS active_rentals,
+           AND deleted_at IS NULL AND CAST(status AS text)='CHECKED_OUT'
+           {res_loc}) AS active_rentals,
 
           (SELECT COUNT(*) FROM reservations WHERE tenant_id=CAST(:tid AS uuid)
            AND deleted_at IS NULL AND CAST(status AS text) IN ('CONFIRMED','MODIFIED')
-           AND pickup_datetime BETWEEN :ts AND :te) AS pickups_today,
+           AND pickup_datetime BETWEEN :ts AND :te
+           {res_loc}) AS pickups_today,
 
           (SELECT COUNT(*) FROM reservations WHERE tenant_id=CAST(:tid AS uuid)
            AND deleted_at IS NULL AND CAST(status AS text)='CHECKED_OUT'
-           AND return_datetime BETWEEN :ts AND :te) AS returns_today,
+           AND return_datetime BETWEEN :ts AND :te
+           {res_loc}) AS returns_today,
 
           (SELECT COUNT(*) FROM reservations WHERE tenant_id=CAST(:tid AS uuid)
            AND deleted_at IS NULL AND CAST(status AS text)='CHECKED_OUT'
-           AND return_datetime < :now) AS overdue_returns,
+           AND return_datetime < :now
+           {res_loc}) AS overdue_returns,
 
           (SELECT COUNT(*) FROM reservations WHERE tenant_id=CAST(:tid AS uuid)
            AND deleted_at IS NULL AND CAST(status AS text) IN ('CONFIRMED','MODIFIED')
-           AND pickup_datetime BETWEEN :now AND :we) AS confirmed_this_week,
+           AND pickup_datetime BETWEEN :now AND :we
+           {res_loc}) AS confirmed_this_week,
 
           (SELECT COUNT(*) FROM vehicles WHERE tenant_id=CAST(:tid AS uuid)
-           AND deleted_at IS NULL AND CAST(status AS text)!='RETIRED') AS fleet_total,
+           AND deleted_at IS NULL AND CAST(status AS text)!='RETIRED'
+           {veh_loc}) AS fleet_total,
 
           (SELECT COUNT(*) FROM vehicles WHERE tenant_id=CAST(:tid AS uuid)
-           AND deleted_at IS NULL AND CAST(status AS text)='AVAILABLE') AS fleet_available,
+           AND deleted_at IS NULL AND CAST(status AS text)='AVAILABLE'
+           {veh_loc}) AS fleet_available,
 
           (SELECT COUNT(*) FROM vehicles WHERE tenant_id=CAST(:tid AS uuid)
-           AND deleted_at IS NULL AND CAST(status AS text)='ON_RENT') AS fleet_on_rent,
+           AND deleted_at IS NULL AND CAST(status AS text)='ON_RENT'
+           {veh_loc}) AS fleet_on_rent,
 
           (SELECT COUNT(*) FROM vehicles WHERE tenant_id=CAST(:tid AS uuid)
-           AND deleted_at IS NULL AND CAST(status AS text) IN ('MAINTENANCE','IN_SERVICE')) AS fleet_in_maint,
+           AND deleted_at IS NULL AND CAST(status AS text) IN ('MAINTENANCE','IN_SERVICE')
+           {veh_loc}) AS fleet_in_maint,
 
           COALESCE((SELECT SUM(grand_total) FROM reservations WHERE tenant_id=CAST(:tid AS uuid)
            AND deleted_at IS NULL
-           AND pickup_datetime BETWEEN :ts AND :te), 0) AS revenue_today,
+           AND pickup_datetime BETWEEN :ts AND :te
+           {res_loc}), 0) AS revenue_today,
 
           COALESCE((SELECT SUM(grand_total) FROM reservations WHERE tenant_id=CAST(:tid AS uuid)
            AND deleted_at IS NULL AND CAST(status AS text) NOT IN ('CANCELLED','QUOTE')
-           AND pickup_datetime >= :ms), 0) AS revenue_this_month
+           AND pickup_datetime >= :ms
+           {res_loc}), 0) AS revenue_this_month
     """), {"tid": tid, "ts": today_s, "te": today_e, "now": now,
-           "we": week_end, "ms": month_start})
+           "we": week_end, "ms": month_start, **lp})
 
     r = kpi_row.mappings().one()
     kpi = ManagerKPI(
@@ -262,28 +304,51 @@ async def get_manager_dashboard(
     )
 
     # 7-day forecast
+    forecast_result = await session.execute(sqlt(f"""
+        SELECT
+          DATE(pickup_datetime AT TIME ZONE 'UTC') AS day,
+          COUNT(*) FILTER (WHERE CAST(status AS text) NOT IN ('CANCELLED','NO_SHOW','QUOTE')) AS pickups,
+          COALESCE(SUM(grand_total) FILTER (WHERE CAST(status AS text) NOT IN ('CANCELLED','NO_SHOW','QUOTE')), 0) AS revenue
+        FROM reservations
+        WHERE tenant_id = CAST(:tid AS uuid)
+          AND deleted_at IS NULL
+          AND CAST(status AS text) NOT IN ('CANCELLED','NO_SHOW','QUOTE')
+          AND pickup_datetime BETWEEN NOW() AND NOW() + INTERVAL '7 days'
+          {res_loc}
+        GROUP BY 1
+        ORDER BY 1
+    """), {"tid": tid, **lp})
+    forecast_rows = {str(r["day"]): dict(r) for r in forecast_result.mappings().all()}
+
+    returns_forecast_result = await session.execute(sqlt(f"""
+        SELECT
+          DATE(return_datetime AT TIME ZONE 'UTC') AS day,
+          COUNT(*) AS returns
+        FROM reservations
+        WHERE tenant_id = CAST(:tid AS uuid)
+          AND deleted_at IS NULL
+          AND CAST(status AS text) IN ('CHECKED_OUT','RETURNED')
+          AND return_datetime BETWEEN NOW() AND NOW() + INTERVAL '7 days'
+          {res_loc}
+        GROUP BY 1
+        ORDER BY 1
+    """), {"tid": tid, **lp})
+    returns_forecast_rows = {str(r["day"]): int(r["returns"]) for r in returns_forecast_result.mappings().all()}
+
+    from datetime import date as _date
     forecast: list[ForecastDay] = []
     for i in range(7):
-        day = now + timedelta(days=i)
-        ds, de = _day_bounds(day)
-        frow = await session.execute(sqlt("""
-            SELECT
-              (SELECT COUNT(*) FROM reservations WHERE tenant_id=CAST(:tid AS uuid)
-               AND deleted_at IS NULL AND CAST(status AS text) IN ('CONFIRMED','MODIFIED','CHECKED_OUT')
-               AND pickup_datetime BETWEEN :ds AND :de) AS pickups,
-              (SELECT COUNT(*) FROM reservations WHERE tenant_id=CAST(:tid AS uuid)
-               AND deleted_at IS NULL AND CAST(status AS text) IN ('CHECKED_OUT','RETURNED')
-               AND return_datetime BETWEEN :ds AND :de) AS returns
-        """), {"tid": tid, "ds": ds, "de": de})
-        fr = frow.mappings().one()
+        d = (_date.today() + timedelta(days=i)).isoformat()
+        row = forecast_rows.get(d, {})
         forecast.append(ForecastDay(
-            date    = day.strftime("%Y-%m-%d"),
-            pickups = int(fr["pickups"]),
-            returns = int(fr["returns"]),
+            date    = d,
+            pickups = int(row.get("pickups", 0)),
+            returns = returns_forecast_rows.get(d, 0),
+            revenue = float(row.get("revenue", 0)),
         ))
 
     # Today's pickups
-    pick_rows = await session.execute(sqlt("""
+    pick_rows = await session.execute(sqlt(f"""
         SELECT r.confirmation_number,
                COALESCE(c.first_name||' '||c.last_name,'Guest') AS customer_name,
                COALESCE(vc.name,'Unknown') AS vehicle_class,
@@ -300,8 +365,9 @@ async def get_manager_dashboard(
         WHERE r.tenant_id=CAST(:tid AS uuid) AND r.deleted_at IS NULL
           AND CAST(r.status AS text) IN ('CONFIRMED','MODIFIED')
           AND r.pickup_datetime BETWEEN :ts AND :te
+          {res_loc_r}
         ORDER BY r.pickup_datetime
-    """), {"tid": tid, "ts": today_s, "te": today_e})
+    """), {"tid": tid, "ts": today_s, "te": today_e, **lp})
     pickups = [
         PickupRow(
             confirmation_number = row.confirmation_number,
@@ -316,7 +382,7 @@ async def get_manager_dashboard(
     ]
 
     # Today's returns + overdue
-    ret_rows = await session.execute(sqlt("""
+    ret_rows = await session.execute(sqlt(f"""
         SELECT r.confirmation_number,
                COALESCE(c.first_name||' '||c.last_name,'Guest') AS customer_name,
                CASE WHEN v.vehicle_id IS NOT NULL THEN v.make||' '||v.model ELSE NULL END AS vehicle,
@@ -328,8 +394,9 @@ async def get_manager_dashboard(
         WHERE r.tenant_id=CAST(:tid AS uuid) AND r.deleted_at IS NULL
           AND CAST(r.status AS text)='CHECKED_OUT'
           AND (r.return_datetime BETWEEN :ts AND :te OR r.return_datetime < :now)
+          {res_loc_r}
         ORDER BY r.return_datetime
-    """), {"tid": tid, "ts": today_s, "te": today_e, "now": now})
+    """), {"tid": tid, "ts": today_s, "te": today_e, "now": now, **lp})
 
     returns = []
     for row in ret_rows.all():
@@ -349,7 +416,45 @@ async def get_manager_dashboard(
             days_overdue        = days_over,
         ))
 
-    return ManagerDashboard(kpi=kpi, forecast=forecast, pickups=pickups, returns=returns)
+    # Top-10 overdue rentals
+    overdue_result = await session.execute(sqlt(f"""
+        SELECT r.confirmation_number,
+          COALESCE(c.first_name || ' ' || c.last_name, 'Unknown') AS customer_name,
+          COALESCE(v.make || ' ' || v.model, '') AS vehicle,
+          r.return_datetime,
+          EXTRACT(EPOCH FROM (NOW() - r.return_datetime)) / 86400 AS days_overdue
+        FROM reservations r
+        LEFT JOIN customers c ON r.customer_id = c.customer_id
+        LEFT JOIN rental_agreements ra ON ra.reservation_id = r.reservation_id AND CAST(ra.status AS text) IN ('ACTIVE','EXTENDED')
+        LEFT JOIN vehicles v ON ra.vehicle_id = v.vehicle_id
+        WHERE r.tenant_id = CAST(:tid AS uuid)
+          AND CAST(r.status AS text) = 'CHECKED_OUT'
+          AND r.return_datetime < NOW()
+          AND r.deleted_at IS NULL
+          {res_loc_r}
+        ORDER BY r.return_datetime ASC
+        LIMIT 10
+    """), {"tid": tid, **lp})
+    overdue_list = [
+        OverdueRow(
+            confirmation_number = row["confirmation_number"],
+            customer_name       = row["customer_name"],
+            vehicle             = row["vehicle"] or None,
+            return_time         = row["return_datetime"].isoformat() if row["return_datetime"] else None,
+            days_overdue        = max(0, int(row["days_overdue"] or 0)),
+        )
+        for row in overdue_result.mappings().all()
+    ]
+
+    return ManagerDashboard(
+        kpi           = kpi,
+        forecast      = forecast,
+        pickups       = pickups,
+        returns       = returns,
+        overdue       = overdue_list,
+        location_name = location_name,
+        location_code = location_code,
+    )
 
 
 # ── Staff dashboard ───────────────────────────────────────────────────────────

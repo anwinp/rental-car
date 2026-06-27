@@ -113,6 +113,42 @@ export function BackOfficeDashboardPage() {
 
   return (
     <div className="space-y-5 max-w-[1400px]">
+      {data && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 12 }}>
+          {[
+            {
+              label: 'ACTIVE MAINTENANCE',
+              value: data.maintenance.filter(m => m.status === 'active').length,
+              sub: 'vehicles in service',
+              danger: false,
+            },
+            {
+              label: 'OVERDUE SERVICE',
+              value: data.maintenance.filter(m => m.status === 'overdue').length,
+              sub: 'past scheduled date',
+              danger: data.maintenance.filter(m => m.status === 'overdue').length > 0,
+            },
+            {
+              label: 'BLOCKED VEHICLES',
+              value: data.blocked_vehicles.length,
+              sub: 'off-road',
+              danger: false,
+            },
+            {
+              label: 'DAMAGE CLAIMS',
+              value: data.damage_claims.length,
+              sub: 'open claims',
+              danger: false,
+            },
+          ].map(card => (
+            <div key={card.label} style={{ background: 'var(--card-bg)', padding: '16px 20px', borderRadius: 0, border: '1px solid var(--border)' }}>
+              <p style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-3)', marginBottom: 8 }}>{card.label}</p>
+              <p style={{ fontSize: 32, fontWeight: 700, color: card.danger ? 'var(--danger)' : 'var(--text-1)', lineHeight: 1 }}>{card.value}</p>
+              <p style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 6 }}>{card.sub}</p>
+            </div>
+          ))}
+        </div>
+      )}
       <div>
         <h1 className="text-[22px] font-bold tracking-tight" style={{ color: 'var(--text-1)' }}>
           Back Office

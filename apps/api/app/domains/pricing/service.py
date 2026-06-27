@@ -304,23 +304,58 @@ class PricingService:
         self,
         code: str,
         customer_id: Optional[UUID] = None,
+        vehicle_class_id: Optional[str] = None,
+        rental_days: int = 1,
     ) -> PromoCodeValidation:
         """
-        Validate a promotional code.
-
-        Note: Full concurrency-safe validation (SELECT FOR UPDATE) happens
-        at reservation creation time. This method is a lightweight check
-        for the quote stage — it does NOT increment uses_count.
+        Validate a promotional code for the quote stage.
+        Does NOT increment used_count (that happens at reservation creation).
         """
-        # The promo_codes table is managed by a separate domain.
-        # For the quote stage we simply return a placeholder result.
-        # Real validation with SELECT FOR UPDATE is in the reservation service.
-        # TODO: Inject PromoRepository dependency when promo domain is implemented.
-        log.debug("validate_promo_code called for code=%s", code)
+        from sqlalchemy import text as _text
+
+        try:
+            # Use a nested transaction (SAVEPOINT) so that a missing-table error
+            # does not abort the outer transaction.
+            async with self._repo.session.begin_nested():
+                result = await self._repo.session.execute(
+                    _text("""
+                        SELECT * FROM promotion_codes
+                        WHERE tenant_id = :tid AND code = :code AND is_active = true
+                          AND NOW() BETWEEN valid_from AND valid_to
+                        LIMIT 1
+                    """),
+                    {"tid": str(self._tenant_id), "code": code.upper().strip()},
+                )
+                row = result.mappings().first()
+        except Exception as e:
+            log.warning("validate_promo_code_db_error error=%s", str(e))
+            return PromoCodeValidation(
+                code=code,
+                is_valid=False,
+                error_reason="PROMO_VALIDATION_NOT_AVAILABLE",
+            )
+
+        if not row:
+            return PromoCodeValidation(code=code, is_valid=False, error_reason="INVALID_OR_EXPIRED")
+
+        if row["usage_limit"] is not None and row["used_count"] >= row["usage_limit"]:
+            return PromoCodeValidation(code=code, is_valid=False, error_reason="FULLY_REDEEMED")
+
+        if rental_days < row["min_days"]:
+            return PromoCodeValidation(
+                code=code, is_valid=False,
+                error_reason=f"MINIMUM_{row['min_days']}_DAYS_REQUIRED",
+            )
+
+        class_ids = row["applicable_class_ids"] or []
+        if class_ids and vehicle_class_id and vehicle_class_id not in [str(c) for c in class_ids]:
+            return PromoCodeValidation(code=code, is_valid=False, error_reason="CLASS_NOT_ELIGIBLE")
+
         return PromoCodeValidation(
-            code=code,
-            is_valid=False,
-            error_reason="PROMO_VALIDATION_NOT_AVAILABLE",
+            code=row["code"],
+            is_valid=True,
+            discount_type=row["discount_type"],
+            discount_value=Decimal(str(row["discount_value"])),
         )
 
     # ── CDP Code Validation ───────────────────────────────────────────────────

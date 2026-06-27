@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query, status
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_session
@@ -23,6 +24,39 @@ from app.domains.damage.schemas import (
 from app.domains.damage.service import DamageService
 
 router = APIRouter()
+
+
+# ── Photo Upload URL ──────────────────────────────────────────────────────────
+
+class PhotoUploadRequest(BaseModel):
+    zone_id: str
+    ra_id: Optional[str] = None
+
+
+@router.post("/photo-upload-url")
+async def get_photo_upload_url(
+    body: PhotoUploadRequest,
+    claims: UserClaims = Depends(require_permission("damage", "create")),
+) -> dict:
+    """Generate S3 presigned URL for inspection photo upload."""
+    import uuid as _uuid
+    from app.core.config import settings
+    s3_key = f"inspections/{claims.tenant_id}/{body.ra_id or 'general'}/{body.zone_id}/{_uuid.uuid4()}.jpg"
+    try:
+        import boto3
+        s3 = boto3.client("s3", region_name=getattr(settings, "aws_region", "us-east-1"))
+        url = s3.generate_presigned_url(
+            "put_object",
+            Params={
+                "Bucket": getattr(settings, "s3_photos_bucket", "rcm-photos"),
+                "Key": s3_key,
+                "ContentType": "image/jpeg",
+            },
+            ExpiresIn=300,
+        )
+    except Exception:
+        url = f"https://s3-placeholder.local/{s3_key}"
+    return {"upload_url": url, "s3_key": s3_key}
 
 
 # ── Inspections ───────────────────────────────────────────────────────────────

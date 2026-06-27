@@ -1,6 +1,7 @@
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useAuth } from '@rcm/ui/auth'
+import SignaturePad from 'signature_pad'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -89,6 +90,111 @@ async function postJSON(path: string, body: unknown) {
     throw new Error(data?.detail ?? `HTTP ${res.status}`)
   }
   return res.json()
+}
+
+// ── ShiftSummaryBar ───────────────────────────────────────────────────────────
+
+function ShiftSummaryBar() {
+  const { data: confirmedRes } = useQuery<any[]>({
+    queryKey: ['shift-confirmed'],
+    queryFn: async () => {
+      const res = await fetch('/api/v1/reservations?status=CONFIRMED', {
+        credentials: 'include',
+        headers: { 'X-Tenant-ID': TENANT },
+      })
+      if (!res.ok) return []
+      const d = await res.json()
+      return Array.isArray(d) ? d : (d.items ?? [])
+    },
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+  })
+
+  const { data: checkedOutRes } = useQuery<any[]>({
+    queryKey: ['shift-checkedout'],
+    queryFn: async () => {
+      const res = await fetch('/api/v1/reservations?status=CHECKED_OUT', {
+        credentials: 'include',
+        headers: { 'X-Tenant-ID': TENANT },
+      })
+      if (!res.ok) return []
+      const d = await res.json()
+      return Array.isArray(d) ? d : (d.items ?? [])
+    },
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+  })
+
+  const now = new Date()
+  const todayStr = now.toISOString().slice(0, 10)
+
+  const todayQueue = (confirmedRes ?? []).filter(r => {
+    const pDate = r.pickup_datetime ?? r.pickup_date ?? ''
+    return pDate.startsWith(todayStr)
+  })
+
+  const todayCheckouts = (checkedOutRes ?? []).filter(r => {
+    const coDate = r.checked_out_at ?? r.pickup_datetime ?? r.pickup_date ?? ''
+    return coDate.startsWith(todayStr)
+  })
+
+  const futurePickups = todayQueue
+    .filter(r => new Date(r.pickup_datetime ?? r.pickup_date ?? 0) > now)
+    .sort((a, b) => new Date(a.pickup_datetime ?? a.pickup_date ?? 0).getTime() - new Date(b.pickup_datetime ?? b.pickup_date ?? 0).getTime())
+
+  const nextPickup = futurePickups[0]
+  const nextPickupTime = nextPickup
+    ? new Date(nextPickup.pickup_datetime ?? nextPickup.pickup_date ?? 0).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+    : null
+
+  const shiftDate = now.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })
+
+  return (
+    <div style={{
+      background: 'var(--card-bg)',
+      border: '1px solid var(--border)',
+      borderRadius: 0,
+      padding: '0 20px',
+      height: 48,
+      display: 'flex',
+      alignItems: 'center',
+      gap: 24,
+      marginBottom: 20,
+      flexShrink: 0,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-3)' }}>SHIFT</span>
+        <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-1)' }}>{shiftDate}</span>
+      </div>
+
+      <div style={{ width: 1, height: 20, background: 'var(--border)' }} />
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-3)' }}>QUEUE TODAY</span>
+        <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)' }}>{todayQueue.length}</span>
+      </div>
+
+      <div style={{ width: 1, height: 20, background: 'var(--border)' }} />
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-3)' }}>DONE TODAY</span>
+        <span style={{ fontSize: 13, fontWeight: 700, color: '#10b981' }}>{todayCheckouts.length}</span>
+      </div>
+
+      {nextPickupTime && (
+        <>
+          <div style={{ width: 1, height: 20, background: 'var(--border)' }} />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-3)' }}>NEXT PICKUP</span>
+            <span style={{ fontSize: 13, fontWeight: 700, color: '#da291c' }}>{nextPickupTime}</span>
+            {nextPickup.confirmation_number && (
+              <span style={{ fontSize: 11, color: 'var(--text-3)', fontFamily: 'monospace' }}>{nextPickup.confirmation_number}</span>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  )
 }
 
 // ── Sub-components ────────────────────────────────────────────────────────────
@@ -202,6 +308,58 @@ export function CounterCheckoutPage() {
   const [paymentCardLast4, setPaymentCardLast4] = useState('')
   const [paymentCardType, setPaymentCardType] = useState('VISA')
   const [depositAmount, setDepositAmount] = useState('250.00')
+
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const sigPadRef = useRef<SignaturePad | null>(null)
+  const [sigSaved, setSigSaved] = useState(false)
+  const [sigError, setSigError] = useState('')
+
+  useEffect(() => {
+    if (step === 5 && canvasRef.current && !sigPadRef.current) {
+      sigPadRef.current = new SignaturePad(canvasRef.current, {
+        backgroundColor: '#ffffff',
+        penColor: '#000000',
+      })
+    }
+    if (step !== 5) {
+      sigPadRef.current = null
+    }
+  }, [step])
+
+  async function handleSaveSignature() {
+    if (!sigPadRef.current || sigPadRef.current.isEmpty()) {
+      setSigError('Please sign before saving.')
+      return
+    }
+    setSigError('')
+    const dataUrl = sigPadRef.current.toDataURL('image/png')
+    const raId = checkoutResult?.rental_agreement_id
+    if (!raId) return
+
+    try {
+      const urlRes = await fetch('/api/v1/checkout/signature-upload-url', {
+        method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/json', 'X-Tenant-ID': TENANT },
+        body: JSON.stringify({ ra_id: raId }),
+      })
+      const { upload_url, s3_key } = await urlRes.json()
+
+      const blob = await (await fetch(dataUrl)).blob()
+      await fetch(upload_url, { method: 'PUT', body: blob, headers: { 'Content-Type': 'image/png' } })
+
+      const hashBuf = await crypto.subtle.digest('SHA-256', await blob.arrayBuffer())
+      const hashHex = Array.from(new Uint8Array(hashBuf)).map(b => b.toString(16).padStart(2, '0')).join('')
+
+      await fetch(`/api/v1/checkout/agreements/${raId}/signature`, {
+        method: 'PATCH', credentials: 'include',
+        headers: { 'Content-Type': 'application/json', 'X-Tenant-ID': TENANT },
+        body: JSON.stringify({ s3_key, signature_hash: hashHex }),
+      })
+      setSigSaved(true)
+    } catch {
+      setSigError('Failed to save signature. Please try again.')
+    }
+  }
 
   // ── Derive active location from user profile ──────────────────────────────
 
@@ -333,6 +491,9 @@ export function CounterCheckoutPage() {
     setPaymentCardLast4('')
     setPaymentCardType('VISA')
     setDepositAmount('250.00')
+    setSigSaved(false)
+    setSigError('')
+    sigPadRef.current = null
   }
 
   // ── Completed — Rental Contract ───────────────────────────────────────────
@@ -535,17 +696,32 @@ ${agentNotes ? `<h2>Agent Notes</h2><p style="font-size:11px;color:#444;margin-t
             </Section>
 
             {/* Signatures */}
-            <div className="grid grid-cols-2 gap-8 pt-4" style={{ borderTop: '1px solid var(--border)' }}>
-              <div>
-                <div className="h-10 mb-2" style={{ borderBottom: '1.5px solid var(--text-1)' }} />
-                <p className="text-[10.5px]" style={{ color: 'var(--text-3)' }}>Customer Signature &amp; Date</p>
-              </div>
-              <div>
-                <div className="h-10 mb-2" style={{ borderBottom: '1.5px solid var(--text-1)' }} />
-                <p className="text-[10.5px]" style={{ color: 'var(--text-3)' }}>
-                  Agent: {user?.first_name} {user?.last_name} &amp; Date
-                </p>
-              </div>
+            <div style={{ marginTop: 24, borderTop: '1px solid var(--border)', paddingTop: 16 }}>
+              <p style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 8 }}>Customer Signature</p>
+              {!sigSaved ? (
+                <>
+                  <canvas ref={canvasRef} width={400} height={120}
+                    style={{ border: '1.5px solid var(--text-1)', display: 'block', background: '#fff', touchAction: 'none' }} />
+                  <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                    <button type="button" onClick={() => sigPadRef.current?.clear()}
+                      style={{ height: 36, padding: '0 16px', fontSize: 12, background: 'var(--card-bg)', color: 'var(--text-2)', border: '1px solid var(--border)', borderRadius: 0, cursor: 'pointer' }}>
+                      Clear
+                    </button>
+                    <button type="button" onClick={handleSaveSignature}
+                      style={{ height: 36, padding: '0 16px', fontSize: 12, fontWeight: 700, background: '#da291c', color: '#fff', border: 'none', borderRadius: 0, cursor: 'pointer', textTransform: 'uppercase', letterSpacing: '1.4px' }}>
+                      Save Signature
+                    </button>
+                  </div>
+                  {sigError && <p style={{ fontSize: 12, color: '#da291c', marginTop: 4 }}>{sigError}</p>}
+                </>
+              ) : (
+                <p style={{ fontSize: 13, color: '#10b981', fontWeight: 600 }}>Signature saved</p>
+              )}
+            </div>
+            <div className="grid grid-cols-1 pt-2">
+              <p className="text-[10.5px]" style={{ color: 'var(--text-3)' }}>
+                Agent: {user?.first_name} {user?.last_name}
+              </p>
             </div>
 
             <p className="text-[10px] text-center pt-2" style={{ color: 'var(--text-3)', borderTop: '1px solid var(--border)' }}>
@@ -1174,6 +1350,7 @@ ${agentNotes ? `<h2>Agent Notes</h2><p style="font-size:11px;color:#444;margin-t
 
   return (
     <div className="page-root">
+      <ShiftSummaryBar />
       <div style={{ padding: '0 2rem' }}>
         <div className="mb-6 flex items-start justify-between gap-4">
           <div>

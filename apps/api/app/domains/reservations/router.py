@@ -16,7 +16,8 @@ from app.core.database import AsyncSessionLocal, get_session
 from app.core.redis import get_avail_redis
 
 log = logging.getLogger(__name__)
-from app.core.security import UserClaims, get_current_user
+from app.core.rbac import require_permission
+from app.core.security import UserClaims, get_current_user, get_current_user_or_bearer
 from app.domains.pricing.repository import PricingRepository
 from app.domains.pricing.schemas import ExtraQuoteRequest, RateQuoteRequest
 from app.domains.pricing.service import PricingService
@@ -43,7 +44,7 @@ router = APIRouter()
 def _get_service(
     request: Request,
     session: AsyncSession = Depends(get_session),
-    claims: UserClaims = Depends(get_current_user),
+    claims: UserClaims = Depends(get_current_user_or_bearer),
 ) -> ReservationService:
     repo = ReservationRepository(session=session, tenant_id=claims.tenant_id)
     redis = get_avail_redis()
@@ -51,7 +52,7 @@ def _get_service(
 
 
 def _get_claims(
-    claims: UserClaims = Depends(get_current_user),
+    claims: UserClaims = Depends(get_current_user_or_bearer),
 ) -> UserClaims:
     return claims
 
@@ -62,6 +63,8 @@ def _get_claims(
 class GuestBookingRequest(BaseModel):
     """Public booking — no auth required."""
     pickup_location: str  # city name, airport code, short code, or UUID
+    # Optional one-way drop-off location. Defaults to pickup_location (round-trip).
+    dropoff_location: Optional[str] = None
     vehicle_class_id: UUID
     pickup_date: str   # YYYY-MM-DD
     dropoff_date: str  # YYYY-MM-DD
@@ -140,31 +143,39 @@ async def create_guest_reservation(
     except ValueError:
         tenant_id = UUID("00000000-0000-0000-0000-000000000000")
 
-    # ── 1. Resolve location string → UUID ─────────────────────────────────
-    try:
-        location_uuid = UUID(payload.pickup_location)
-    except ValueError:
-        loc_result = await session.execute(
-            sqlt("""
-                SELECT location_id FROM locations
-                WHERE tenant_id = :tid AND deleted_at IS NULL
-                  AND (
-                    LOWER(short_code) = LOWER(:q)
-                    OR LOWER(city) = LOWER(:q)
-                    OR LOWER(airport_code) = LOWER(:q)
-                    OR LOWER(name) ILIKE '%' || LOWER(:q) || '%'
-                  )
-                LIMIT 1
-            """),
-            {"tid": str(tenant_id), "q": payload.pickup_location},
-        )
-        loc_row = loc_result.first()
-        if not loc_row:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=f"Location not found: {payload.pickup_location}",
+    # ── 1. Resolve location string(s) → UUID ──────────────────────────────
+    async def _resolve_location(value: str) -> UUID:
+        try:
+            return UUID(value)
+        except ValueError:
+            loc_result = await session.execute(
+                sqlt("""
+                    SELECT location_id FROM locations
+                    WHERE tenant_id = :tid AND deleted_at IS NULL
+                      AND (
+                        LOWER(short_code) = LOWER(:q)
+                        OR LOWER(city) = LOWER(:q)
+                        OR LOWER(airport_code) = LOWER(:q)
+                        OR LOWER(name) ILIKE '%' || LOWER(:q) || '%'
+                      )
+                    LIMIT 1
+                """),
+                {"tid": str(tenant_id), "q": value},
             )
-        location_uuid = UUID(str(loc_row[0]))
+            loc_row = loc_result.first()
+            if not loc_row:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=f"Location not found: {value}",
+                )
+            return UUID(str(loc_row[0]))
+
+    location_uuid = await _resolve_location(payload.pickup_location)
+    dropoff_location_uuid = (
+        await _resolve_location(payload.dropoff_location)
+        if payload.dropoff_location and payload.dropoff_location != payload.pickup_location
+        else location_uuid
+    )
 
     # ── 2. Parse dates → UTC datetimes at 10:00 ───────────────────────────
     try:
@@ -261,6 +272,7 @@ async def create_guest_reservation(
         data=ReservationCreate(
             customer_id=customer_id,
             location_id=location_uuid,
+            dropoff_location_id=dropoff_location_uuid,
             vehicle_class_id=payload.vehicle_class_id,
             pickup_dt=pickup_dt,
             dropoff_dt=dropoff_dt,
@@ -318,7 +330,7 @@ async def create_reservation(
     background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_session),
     svc: ReservationService = Depends(_get_service),
-    claims: UserClaims = Depends(_get_claims),
+    claims: UserClaims = Depends(require_permission("reservations", "create")),
 ) -> ReservationResponse:
     reservation = await svc.create_reservation(
         data=payload,
@@ -581,7 +593,7 @@ async def modify_reservation(
     reservation_id: UUID,
     payload: ReservationModify,
     svc: ReservationService = Depends(_get_service),
-    claims: UserClaims = Depends(_get_claims),
+    claims: UserClaims = Depends(require_permission("reservations", "update", accept_bearer=True)),
 ) -> ReservationResponse:
     reservation = await svc.modify_reservation(
         reservation_id=reservation_id,
@@ -601,7 +613,7 @@ async def cancel_reservation(
     reservation_id: UUID,
     payload: CancellationRequest,
     svc: ReservationService = Depends(_get_service),
-    claims: UserClaims = Depends(_get_claims),
+    claims: UserClaims = Depends(require_permission("reservations", "update", accept_bearer=True)),
 ) -> CancellationResult:
     return await svc.cancel_reservation(
         reservation_id=reservation_id,

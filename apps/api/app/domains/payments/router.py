@@ -163,3 +163,14 @@ async def stripe_webhook(
     await service.handle_stripe_webhook(event_id, event_type, payload_dict, tenant_id)
 
     return {"received": True}
+
+
+@router.post("/tyro-webhook", status_code=200, include_in_schema=False)
+async def tyro_webhook(request: Request, session: AsyncSession = Depends(get_session)):
+    """Receive Tyro iClient transaction_complete webhook."""
+    payload = await request.json()
+    import structlog
+    structlog.get_logger().info("tyro_webhook_received", payload=payload)
+    # TODO: verify HMAC signature, update Payment row status
+    # Wired but not implemented until Tyro credentials arrive
+    return {"received": True}

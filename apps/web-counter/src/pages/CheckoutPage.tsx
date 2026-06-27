@@ -21,6 +21,7 @@ import {
 import { Input } from '@rcm/ui'
 import { useCounterStore } from '../store/counterStore'
 import { AvailabilityGrid } from '../components/AvailabilityGrid'
+import { AgentSuggestionPanel } from '../components/AgentSuggestionPanel'
 
 const EXTRAS = [
   { code: 'CDW', name: 'Collision Damage Waiver', dailyRate: 19.99 },
@@ -176,9 +177,15 @@ export function CheckoutPage() {
     return sum + (extra?.dailyRate ?? 0)
   }, 0)
 
+  const checkoutSessionId = selectedCustomer
+    ? `checkout-${selectedCustomer.customer_id}-step-${activeStep}`
+    : null
+
   return (
-    <div className="p-4">
-      <h1 className="mb-6 text-2xl font-bold">Counter Checkout</h1>
+    <div style={{ paddingRight: 296 }}>
+      <p style={{ margin: '0 0 8px', fontSize: 11, fontWeight: 600, letterSpacing: '1.4px', textTransform: 'uppercase', color: '#969696' }}>Counter Operations</p>
+      <div style={{ width: 32, height: 1, background: '#303030', marginBottom: 12 }} />
+      <h1 style={{ margin: '0 0 32px', fontSize: 26, fontWeight: 500, letterSpacing: '0.195px', color: '#ffffff', lineHeight: 1.2 }}>Counter Checkout</h1>
 
       <StepperRoot
         activeStep={activeStep}
@@ -506,6 +513,9 @@ export function CheckoutPage() {
           </Card>
         </StepperContent>
       </StepperRoot>
+
+      {/* AI suggestion panel — fixed overlay on right edge */}
+      <AgentSuggestionPanel checkoutSessionId={checkoutSessionId} />
     </div>
   )
 }

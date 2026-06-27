@@ -212,7 +212,7 @@ class ReservationService:
             status="PENDING",
             customer_id=str(data.customer_id) if data.customer_id else (str(actor_id) if actor_id else None),
             pickup_location_id=str(data.location_id),
-            dropoff_location_id=str(data.location_id),
+            dropoff_location_id=str(data.dropoff_location_id or data.location_id),
             pickup_datetime=data.pickup_dt,
             return_datetime=data.dropoff_dt,
             vehicle_class_id=str(data.vehicle_class_id),

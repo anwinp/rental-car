@@ -32,6 +32,10 @@ FLEET_CHANNEL = "fleet:{tenant_id}:{location_id}"
 # Streams (session cluster)
 NOTIFICATION_STREAM = "notifications:{tenant_id}"
 
+# Agent sessions (session cluster, volatile-lru — sessions have TTL so they evict correctly)
+AGENT_SESSION_KEY = "agent_session:{session_id}"  # TTL = settings.agent_session_ttl_seconds
+AGENT_CIRCUIT_KEY = "agent_circuit:{tenant_id}"   # circuit breaker state, TTL 60s
+
 
 # ── Connection pool factory ──────────────────────────────────────────────────
 

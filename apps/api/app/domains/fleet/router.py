@@ -14,6 +14,7 @@ from fastapi import (
     APIRouter,
     Depends,
     File,
+    HTTPException,
     Query,
     Request,
     UploadFile,
@@ -31,6 +32,7 @@ from app.domains.fleet.schemas import (
     AvailabilityQuery,
     AvailabilityResponse,
     BulkImportResult,
+    ReallocateBlockRequest,
     VehicleBlockCreate,
     VehicleBlockResponse,
     VehicleBlockUpdate,
@@ -428,7 +430,7 @@ async def search_fleet(
             "currencyCode":   "USD",
         })
 
-    return {"classes": results}
+    return {"classes": results, "resolved_location_id": resolved_location_id}
 
 
 # ── Availability ──────────────────────────────────────────────────────────────
@@ -553,6 +555,92 @@ async def delete_block(
     )
 
 
+@router.post("/blocks/{block_id}/reallocate", status_code=200)
+async def reallocate_block(
+    block_id: uuid.UUID,
+    body: ReallocateBlockRequest,
+    claims: UserClaims = Depends(require_permission("vehicle_blocks", "create")),
+    session: AsyncSession = Depends(get_session),
+):
+    from sqlalchemy import text
+    import uuid as uuid_mod
+
+    result = await session.execute(
+        text("SELECT * FROM vehicle_blocks WHERE block_id = :bid AND tenant_id = :tid AND deleted_at IS NULL"),
+        {"bid": str(block_id), "tid": str(claims.tenant_id)},
+    )
+    block = result.mappings().first()
+    if not block:
+        raise HTTPException(status_code=404, detail="BLOCK_NOT_FOUND")
+    if block["block_type"] != "RESERVATION":
+        raise HTTPException(status_code=422, detail="NON_RESERVATION_BLOCK")
+
+    cls_result = await session.execute(
+        text("""
+            SELECT v1.vehicle_class_id::text AS src_class, v2.vehicle_class_id::text AS tgt_class
+            FROM vehicles v1
+            JOIN vehicles v2 ON v2.vehicle_id = :tgt AND v2.tenant_id = :tid
+            WHERE v1.vehicle_id = :src AND v1.tenant_id = :tid
+        """),
+        {"src": str(block["vehicle_id"]), "tgt": str(body.target_vehicle_id), "tid": str(claims.tenant_id)},
+    )
+    cls_row = cls_result.mappings().first()
+    if not cls_row or cls_row["src_class"] != cls_row["tgt_class"]:
+        raise HTTPException(status_code=422, detail="DIFFERENT_VEHICLE_CLASS")
+
+    new_block_id = uuid_mod.uuid4()
+    try:
+        await session.execute(
+            text("""
+                INSERT INTO vehicle_blocks
+                  (block_id, tenant_id, vehicle_id, location_id, block_type, label,
+                   start_time, end_time, reservation_id, created_by)
+                VALUES
+                  (:bid, :tid, :vid, :lid, :btype, :label, :start_t, :end_t, :rid, :created_by)
+            """),
+            {
+                "bid": str(new_block_id), "tid": str(claims.tenant_id),
+                "vid": str(body.target_vehicle_id),
+                "lid": str(block["location_id"]) if block["location_id"] else None,
+                "btype": block["block_type"], "label": block["label"],
+                "start_t": block["start_time"], "end_t": block["end_time"],
+                "rid": str(block["reservation_id"]) if block["reservation_id"] else None,
+                "created_by": str(claims.user_id),
+            },
+        )
+    except Exception as exc:
+        if "23P01" in str(exc) or "exclusion" in str(exc).lower():
+            raise HTTPException(status_code=409, detail="TARGET_VEHICLE_NOT_AVAILABLE")
+        raise
+
+    await session.execute(
+        text("UPDATE vehicle_blocks SET deleted_at = NOW() WHERE block_id = :bid"),
+        {"bid": str(block_id)},
+    )
+    if block["reservation_id"]:
+        await session.execute(
+            text("UPDATE reservations SET vehicle_id = :vid WHERE reservation_id = :rid"),
+            {"vid": str(body.target_vehicle_id), "rid": str(block["reservation_id"])},
+        )
+    await session.commit()
+
+    if body.notify_customer and block["reservation_id"]:
+        try:
+            from app.worker.celery_app import celery_app
+            celery_app.send_task(
+                "app.worker.tasks.notifications.dispatch_notification",
+                kwargs={"tenant_id": str(claims.tenant_id), "event_code": "VEHICLE_SWAP_NOTIFICATION",
+                        "recipient_id": "", "context": {"reservation_id": str(block["reservation_id"]),
+                        "new_vehicle_id": str(body.target_vehicle_id)}},
+                queue="notifications",
+            )
+        except Exception:
+            pass
+
+    return {"new_block_id": str(new_block_id), "from_vehicle_id": str(block["vehicle_id"]),
+            "to_vehicle_id": str(body.target_vehicle_id), "status": "REALLOCATED"}
+
+
 # ── Fleet calendar ────────────────────────────────────────────────────────────
 
 
@@ -575,6 +663,7 @@ class CalendarVehicle(BaseModel):
     vin: Optional[str] = None
     status: str
     class_name: str
+    vehicle_class_id: Optional[str] = None
     home_location_id: str
     location_name: str
     location_short_code: str
@@ -627,6 +716,7 @@ async def get_fleet_calendar(
             NULLIF(TRIM(COALESCE(v.vin, '')), '')          AS vin,
             CAST(v.status AS text) AS status,
             CAST(v.home_location_id AS text),
+            CAST(v.vehicle_class_id AS text) AS vehicle_class_id,
             COALESCE(vc.name, 'Unknown')     AS class_name,
             COALESCE(l.name, 'Unknown')      AS location_name,
             COALESCE(l.short_code, '')       AS location_short_code
@@ -718,6 +808,7 @@ async def get_fleet_calendar(
             vin                 = v["vin"] or None,
             status              = v["status"],
             class_name          = v["class_name"],
+            vehicle_class_id    = v.get("vehicle_class_id") or None,
             home_location_id    = v["home_location_id"],
             location_name       = v["location_name"],
             location_short_code = v["location_short_code"],

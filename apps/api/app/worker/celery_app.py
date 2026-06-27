@@ -28,6 +28,10 @@ celery_app = Celery(
         "app.worker.tasks.fleet_tasks",
         "app.worker.tasks.reservation_tasks",
         "app.worker.tasks.reporting_tasks",
+        # Wave G additions
+        "app.worker.tasks.channel_tasks",
+        # Agent tasks (Foundation stubs — real implementations in Wave 3)
+        "app.worker.tasks.agent_tasks",
     ],
 )
 
@@ -61,13 +65,14 @@ celery_app.conf.update(
     redbeat_key_prefix="redbeat:",
     redbeat_lock_timeout=900,  # 15 min
 
-    # ── Five queues ───────────────────────────────────────────────────────────
+    # ── Six queues (agents isolated to prevent Claude API latency from starving others) ──
     task_queues=[
         Queue("notifications",   Exchange("rcm"), routing_key="notifications"),
         Queue("rate_filing",     Exchange("rcm"), routing_key="rate_filing"),
         Queue("reports",         Exchange("rcm"), routing_key="reports"),
         Queue("batch",           Exchange("rcm"), routing_key="batch"),
         Queue("toll_processing", Exchange("rcm"), routing_key="toll_processing"),
+        Queue("agents",          Exchange("rcm"), routing_key="agents"),
     ],
     task_default_queue="batch",
     task_default_exchange="rcm",
@@ -122,6 +127,19 @@ celery_app.conf.update(
         "app.worker.tasks.reporting_tasks.*":                            {"queue": "reports"},
         "app.worker.tasks.reporting_tasks.generate_daily_revenue_report":    {"queue": "reports"},
         "app.worker.tasks.reporting_tasks.calculate_fleet_utilization":      {"queue": "reports"},
+
+        # Wave G: Channel tasks (batch queue)
+        "app.worker.tasks.channel_tasks.*":                                      {"queue": "batch"},
+        "app.worker.tasks.channel_tasks.poll_ota_channels":                      {"queue": "batch"},
+        "app.worker.tasks.channel_tasks.push_availability_to_all_channels":      {"queue": "batch"},
+
+        # Wave G: Payment bond release (batch queue)
+        "app.worker.tasks.payment_tasks.process_bond_release":                   {"queue": "batch"},
+
+        # Agent tasks (isolated queue — Claude API latency 200-400ms must not starve notifications)
+        "app.worker.tasks.agent_tasks.*":                                         {"queue": "agents"},
+        "app.worker.tasks.agent_tasks.scan_ev_alerts":                           {"queue": "agents"},
+        "app.worker.tasks.agent_tasks.scan_overdue_rentals":                     {"queue": "agents"},
     },
 
     # ── RedBeat beat schedule (8 tasks) ──────────────────────────────────────
@@ -173,6 +191,30 @@ celery_app.conf.update(
             "task": "app.worker.tasks.reports.pre_auth_expiry_report",
             "schedule": crontab(minute=0, hour=6),
             "options": {"queue": "reports", "expires": 86400},
+        },
+        # Task due reminders — every 15 minutes
+        "task-due-reminders": {
+            "task": "app.worker.tasks.notifications.task_due_reminder_scan",
+            "schedule": crontab(minute="*/15"),
+            "options": {"queue": "notifications", "expires": 900},
+        },
+        # OTA channel poll — every 5 minutes
+        "ota-channel-poll": {
+            "task": "app.worker.tasks.channel_tasks.poll_ota_channels",
+            "schedule": crontab(minute="*/5"),
+            "options": {"queue": "batch", "expires": 300},
+        },
+        # EV low-SOC alert scan — every 5 minutes (stub; real implementation in Wave 3)
+        "ev-alert-poll": {
+            "task": "app.worker.tasks.agent_tasks.scan_ev_alerts",
+            "schedule": crontab(minute="*/5"),
+            "options": {"queue": "agents", "expires": 300},
+        },
+        # Overdue rental scan — every 30 minutes (stub; real implementation in Wave 3)
+        "overdue-tracker-scan": {
+            "task": "app.worker.tasks.agent_tasks.scan_overdue_rentals",
+            "schedule": crontab(minute="*/30"),
+            "options": {"queue": "agents", "expires": 1800},
         },
     },
 )

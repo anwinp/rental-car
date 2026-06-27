@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
-from fastapi import Cookie, HTTPException, Query, status
+from fastapi import Cookie, Header, HTTPException, Query, status
 from fastapi.responses import Response
 from jose import JWTError, jwt
 from passlib.context import CryptContext
@@ -236,6 +236,38 @@ async def get_optional_current_user(
         if await redis.sismember(REVOKED_TOKENS_SET, claims.jti):
             return None
         return claims
+    except HTTPException:
+        return None
+
+
+async def get_current_user_or_bearer(
+    cookie_token: Optional[str] = Cookie(default=None, alias="rcm_access"),
+    authorization: Optional[str] = Header(default=None),
+) -> UserClaims:
+    """
+    Accepts either httpOnly cookie (browser users) or Authorization: Bearer (agent service accounts).
+    Cookie takes priority when both are present.
+    """
+    token = cookie_token
+    if not token and authorization and authorization.startswith("Bearer "):
+        token = authorization.removeprefix("Bearer ")
+    if not token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+
+    claims = decode_token(token)
+    redis = get_session_redis()
+    if await redis.sismember(REVOKED_TOKENS_SET, claims.jti):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+    return claims
+
+
+async def get_optional_current_user_or_bearer(
+    cookie_token: Optional[str] = Cookie(default=None, alias="rcm_access"),
+    authorization: Optional[str] = Header(default=None),
+) -> Optional[UserClaims]:
+    """Bearer-aware optional auth — returns None for unauthenticated guests."""
+    try:
+        return await get_current_user_or_bearer(cookie_token, authorization)
     except HTTPException:
         return None
 

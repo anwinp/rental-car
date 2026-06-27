@@ -5,6 +5,7 @@ import uuid
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query, status
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_session
@@ -25,6 +26,69 @@ from app.domains.checkout.schemas import (
 from app.domains.checkout.service import CheckoutService
 
 router = APIRouter()
+
+
+# ── E-Signature ───────────────────────────────────────────────────────────────
+
+class SignatureUploadRequest(BaseModel):
+    ra_id: str
+
+
+class SignaturePatchRequest(BaseModel):
+    s3_key: str
+    signature_hash: str
+
+
+@router.post("/signature-upload-url")
+async def get_signature_upload_url(
+    body: SignatureUploadRequest,
+    claims: UserClaims = Depends(require_permission("reservations", "update")),
+) -> dict:
+    """Generate S3 presigned URL for signature upload."""
+    import uuid as _uuid
+    from app.core.config import settings
+    s3_key = f"signatures/{claims.tenant_id}/{body.ra_id}/{_uuid.uuid4()}.png"
+    try:
+        import boto3
+        s3 = boto3.client("s3", region_name=getattr(settings, "aws_region", "us-east-1"))
+        url = s3.generate_presigned_url(
+            "put_object",
+            Params={
+                "Bucket": getattr(settings, "s3_photos_bucket", "rcm-photos"),
+                "Key": s3_key,
+                "ContentType": "image/png",
+            },
+            ExpiresIn=300,
+        )
+    except Exception:
+        url = f"https://s3-placeholder.local/{s3_key}"
+    return {"upload_url": url, "s3_key": s3_key, "expires_in": 300}
+
+
+@router.patch("/agreements/{ra_id}/signature")
+async def save_signature(
+    ra_id: uuid.UUID,
+    body: SignaturePatchRequest,
+    claims: UserClaims = Depends(require_permission("reservations", "update")),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Store signature S3 key and hash on rental agreement."""
+    from sqlalchemy import text
+    await session.execute(
+        text("""
+            UPDATE rental_agreements
+            SET customer_signature_url = :key, esignature_hash = :hash, updated_at = NOW()
+            WHERE ra_id = CAST(:ra_id AS uuid) AND tenant_id = CAST(:tid AS uuid)
+        """),
+        {
+            "key": body.s3_key,
+            "hash": body.signature_hash,
+            "ra_id": str(ra_id),
+            "tid": str(claims.tenant_id),
+        },
+    )
+    await session.commit()
+    return {"ra_id": str(ra_id), "signed": True}
 
 
 # ── Counter checkout ──────────────────────────────────────────────────────────
@@ -226,3 +290,130 @@ async def swap_vehicle(
     svc = CheckoutService(session, claims.tenant_id)
     new_ra = await svc.swap_vehicle(body, claims.user_id, claims.tenant_id)
     return RentalAgreementResponse.model_validate(new_ra, from_attributes=True)
+
+
+# ── Receipt breakdown (for ReturnAdvisor) ────────────────────────────────────
+
+class ReceiptLineItem(BaseModel):
+    label: str
+    amount: float
+    is_charge: bool = True
+
+
+class ReceiptBreakdownResponse(BaseModel):
+    ra_id: str
+    miles_driven: float
+    free_miles_included: float
+    overage_miles: float
+    overage_rate: float
+    mileage_charge: float
+    fuel_level_out_pct: float
+    fuel_level_in_pct: float
+    contracted_fuel_level_pct: float
+    fuel_steps_below_contract: int
+    fuel_charge_per_step: float
+    fuel_surcharge: float
+    late_return_minutes: int
+    late_fee_rate: float
+    late_return_charge: float
+    subtotal: float
+    line_items: list[ReceiptLineItem]
+
+
+@router.get(
+    "/agreements/{ra_id}/receipt-breakdown",
+    response_model=ReceiptBreakdownResponse,
+    summary="Arithmetic receipt breakdown for ReturnAdvisor",
+)
+async def get_receipt_breakdown(
+    ra_id: uuid.UUID,
+    claims: UserClaims = Depends(require_permission("reservations", "read", accept_bearer=True)),
+    session: AsyncSession = Depends(get_session),
+) -> ReceiptBreakdownResponse:
+    """
+    Returns arithmetic breakdown of charges so the ReturnAdvisor can explain them.
+    Does not create or modify any records.
+    """
+    from sqlalchemy import text as sqlt
+    result = await session.execute(
+        sqlt("""
+            SELECT
+                ra.ra_id,
+                ra.odometer_out, ra.odometer_in,
+                ra.fuel_level_out, ra.fuel_level_in,
+                ra.actual_return_datetime,
+                r.return_datetime,
+                vc.free_miles_per_day, vc.overage_rate_per_mile,
+                EXTRACT(EPOCH FROM (r.return_datetime - ra.created_at)) / 86400.0 AS rental_days
+            FROM rental_agreements ra
+            JOIN reservations r ON r.reservation_id = ra.reservation_id
+            LEFT JOIN vehicle_classes vc ON vc.class_id = r.vehicle_class_id
+            WHERE ra.ra_id = :ra_id AND ra.tenant_id = :tid
+        """),
+        {"ra_id": str(ra_id), "tid": str(claims.tenant_id)},
+    )
+    row = result.mappings().first()
+    if not row:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Rental agreement not found")
+
+    od_out = float(row["odometer_out"] or 0)
+    od_in = float(row["odometer_in"] or od_out)
+    miles_driven = max(0.0, od_in - od_out)
+
+    rental_days = max(1.0, float(row["rental_days"] or 1))
+    free_miles = float(row["free_miles_per_day"] or 0) * rental_days
+    overage_miles = max(0.0, miles_driven - free_miles)
+    overage_rate = float(row["overage_rate_per_mile"] or 0.25)
+    mileage_charge = round(overage_miles * overage_rate, 2)
+
+    fuel_out = float(row["fuel_level_out"] or 1.0)
+    fuel_in = float(row["fuel_level_in"] or fuel_out)
+    contracted_pct = fuel_out
+    steps_below = max(0, round((contracted_pct - fuel_in) / 0.125))
+    fuel_charge_step = 15.0
+    fuel_surcharge = round(steps_below * fuel_charge_step, 2)
+
+    late_minutes = 0
+    late_charge = 0.0
+    if row["actual_return_datetime"] and row["return_datetime"]:
+        from datetime import timezone as _tz
+        actual = row["actual_return_datetime"]
+        scheduled = row["return_datetime"]
+        delta_s = (actual - scheduled).total_seconds()
+        late_minutes = max(0, int(delta_s / 60))
+        late_rate = 35.0
+        late_hours = late_minutes // 60
+        late_charge = round(late_hours * late_rate, 2)
+    else:
+        late_rate = 35.0
+
+    subtotal = round(mileage_charge + fuel_surcharge + late_charge, 2)
+
+    items: list[ReceiptLineItem] = []
+    if mileage_charge > 0:
+        items.append(ReceiptLineItem(label=f"Mileage overage ({overage_miles:.0f} mi × ${overage_rate}/mi)", amount=mileage_charge))
+    if fuel_surcharge > 0:
+        items.append(ReceiptLineItem(label=f"Fuel surcharge ({steps_below} step{'s' if steps_below != 1 else ''} × ${fuel_charge_step})", amount=fuel_surcharge))
+    if late_charge > 0:
+        items.append(ReceiptLineItem(label=f"Late return ({late_minutes} min)", amount=late_charge))
+
+    return ReceiptBreakdownResponse(
+        ra_id=str(ra_id),
+        miles_driven=miles_driven,
+        free_miles_included=free_miles,
+        overage_miles=overage_miles,
+        overage_rate=overage_rate,
+        mileage_charge=mileage_charge,
+        fuel_level_out_pct=fuel_out,
+        fuel_level_in_pct=fuel_in,
+        contracted_fuel_level_pct=contracted_pct,
+        fuel_steps_below_contract=steps_below,
+        fuel_charge_per_step=fuel_charge_step,
+        fuel_surcharge=fuel_surcharge,
+        late_return_minutes=late_minutes,
+        late_fee_rate=late_rate,
+        late_return_charge=late_charge,
+        subtotal=subtotal,
+        line_items=items,
+    )

@@ -7,12 +7,14 @@
  * - GAP-002: DNRScope uses REGIONAL (not BRAND)
  */
 
-// ── User roles — 12 roles total ─────────────────────────────────────────────
+// ── User roles — 15 roles total (AGENT_SERVICE added in migration 042) ───────
 export enum UserRole {
   SUPER_ADMIN        = 'SUPER_ADMIN',        // platform-level, cross-tenant
   SYSTEM_ADMIN       = 'SYSTEM_ADMIN',       // tenant-level admin
+  EXECUTIVE          = 'EXECUTIVE',          // CEO / C-suite — read-only dashboards
   REGIONAL_MANAGER   = 'REGIONAL_MANAGER',
   BRANCH_MANAGER     = 'BRANCH_MANAGER',
+  SENIOR_AGENT       = 'SENIOR_AGENT',       // return agent + damage capture
   COUNTER_AGENT      = 'COUNTER_AGENT',
   FLEET_MANAGER      = 'FLEET_MANAGER',
   MAINTENANCE_TECH   = 'MAINTENANCE_TECH',
@@ -21,6 +23,7 @@ export enum UserRole {
   READONLY_AUDITOR   = 'READONLY_AUDITOR',
   API_PARTNER        = 'API_PARTNER',
   CUSTOMER           = 'CUSTOMER',
+  AGENT_SERVICE      = 'AGENT_SERVICE',      // AI agent service account (Bearer auth)
 }
 
 // ── Tenant subscription tiers ────────────────────────────────────────────────
@@ -176,6 +179,87 @@ export enum NotificationChannel {
   EMAIL = 'EMAIL',
   SMS   = 'SMS',
   PUSH  = 'PUSH',
+}
+
+// ── AI Agent names ───────────────────────────────────────────────────────────
+export enum AgentName {
+  RESERVATION_MANAGER = 'ReservationManager',
+  BOOKING_CONCIERGE   = 'BookingConcierge',
+  RETURN_ADVISOR      = 'ReturnAdvisor',
+  DAMAGE_MEDIATOR     = 'DamageMediator',
+  CLAIMS_PROCESSOR    = 'ClaimsProcessor',
+  FLEET_OPTIMIZER     = 'FleetOptimizer',
+  PRICING_STRATEGIST  = 'PricingStrategist',
+  OVERDUE_TRACKER     = 'OverdueTracker',
+  ECHO                = 'echo',
+}
+
+// ── Agent chat types ─────────────────────────────────────────────────────────
+
+export interface AgentMessage {
+  role: 'user' | 'assistant'
+  content: string
+  ts: string        // ISO8601
+  agent?: AgentName | string
+}
+
+export type AgentCardKind =
+  | 'reservation_detail'
+  | 'cancellation_preview'
+  | 'date_modification'
+  | 'booking_search_form'
+  | 'vehicle_class_list'
+  | 'quote_summary'
+  | 'guest_details_form'
+  | 'booking_confirmed'
+  | 'payment_capture'
+  | 'damage_comparison'
+  | 'receipt_breakdown'
+  | 'upgrade_offer'
+  | 'generic'
+
+export interface AgentCard {
+  kind: AgentCardKind
+  data: Record<string, unknown>
+}
+
+export interface AgentChatRequest {
+  session_id?: string | null
+  message: string
+}
+
+export interface AgentChatResponse {
+  session_id: string
+  message: string
+  card?: AgentCard | null
+  chips: string[]
+  agent: AgentName | string
+}
+
+export interface AgentSession {
+  session_id: string
+  tenant_id: string
+  customer_id: string | null
+  active_agent: AgentName | string | null
+  created_at: string
+  last_active: string
+  messages: AgentMessage[]
+  context: {
+    reservation_id: string | null
+    rental_agreement_id: string | null
+    damage_claim_id: string | null
+    resolved_issues: string[]
+  }
+  handoff_summary: string | null
+}
+
+// Counter agent suggestion (web-counter only, Wave 5)
+export interface CounterSuggestion {
+  kind: 'upgrade' | 'add_on' | 'alert' | 'info'
+  title: string
+  body: string
+  action_label?: string
+  action_payload?: Record<string, unknown>
 }
 
 // ── Audit action types ───────────────────────────────────────────────────────

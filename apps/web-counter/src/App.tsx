@@ -1,14 +1,18 @@
-import { BrowserRouter, Routes, Route, Navigate, NavLink } from 'react-router-dom'
-import { RouteGuard } from '@rcm/ui/auth'
+import { BrowserRouter, Routes, Route, Navigate, NavLink, useNavigate } from 'react-router-dom'
+import { useState, FormEvent } from 'react'
+import { RouteGuard, useAuth } from '@rcm/ui/auth'
 import { QueryProvider } from '@rcm/ui/query'
 import { AuthProvider } from '@rcm/ui/auth'
 import { UserRole } from '@rcm/shared-types'
+import { apiClient } from '@rcm/api-client'
 import { OfflineBanner } from './components/OfflineBanner'
 import { CheckoutPage } from './pages/CheckoutPage'
 import { CheckInPage } from './pages/CheckInPage'
 import { ShiftPage } from './pages/ShiftPage'
 import { OverduePage } from './pages/OverduePage'
 import { useCounterStore, selectOfflineQueueCount } from './store/counterStore'
+
+const _TENANT = '00000000-0000-0000-0000-000000000001'
 
 const COUNTER_ROLES = [
   UserRole.COUNTER_AGENT,
@@ -19,32 +23,312 @@ const COUNTER_ROLES = [
 ]
 
 function LoginPage() {
-  // No login here — authentication happens at the admin app.
-  // Redirect there and it will send the user back after login.
-  window.location.replace('http://localhost:3002/login')
-  return null
+  const { setUser } = useAuth()
+  const navigate = useNavigate()
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
+
+  async function handleSubmit(e: FormEvent) {
+    e.preventDefault()
+    setError('')
+    setLoading(true)
+    try {
+      const { data, error: apiError } = await (apiClient as any).POST('/auth/login', {
+        body: { email, password, app_context: 'web-counter' },
+      })
+      if (apiError || !data) {
+        setError(typeof apiError === 'string' ? apiError : 'Invalid email or password')
+        return
+      }
+      setUser(data)
+      navigate('/', { replace: true })
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Login failed. Please try again.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // ── Design tokens (Ferrari spec) ──────────────────────────────────
+  const C = {
+    canvas:         '#181818',
+    canvasElevated: '#303030',
+    primary:        '#da291c',
+    ink:            '#ffffff',
+    body:           '#969696',
+    muted:          '#666666',
+    hairline:       '#303030',
+    warning:        '#f13a2c',
+  }
+
+  // text-input-on-dark — h48, pad 14×16, canvas bg, 1px hairline, radius 4px
+  const input: React.CSSProperties = {
+    display: 'block', width: '100%', height: 48,
+    padding: '0 16px', boxSizing: 'border-box',
+    fontSize: 14, fontWeight: 400, lineHeight: '48px',
+    color: C.ink, background: C.canvas,
+    border: `1px solid ${C.hairline}`, borderRadius: 4,
+    outline: 'none', letterSpacing: 0,
+  }
+
+  // caption-uppercase — 11px / 600 / 1.1px / uppercase
+  const capUp: React.CSSProperties = {
+    fontSize: 11, fontWeight: 600, lineHeight: 1.4,
+    letterSpacing: '1.1px', textTransform: 'uppercase',
+    color: C.muted, margin: 0,
+  }
+
+  return (
+    <div style={{ display: 'flex', minHeight: '100vh', background: C.canvas }}>
+
+      {/* ── LEFT — Cinematic panel ──────────────────────────────────── */}
+      <div style={{
+        flex: '0 0 58%',
+        position: 'relative',
+        // "dark grey gradient" from spec: atmospheric depth, no photo needed
+        background: 'linear-gradient(160deg, #3c3c3c 0%, #1e1e1e 50%, #030303 100%)',
+        display: 'flex',
+        flexDirection: 'column',
+        justifyContent: 'space-between',
+        padding: '48px 64px',
+        overflow: 'hidden',
+      }}>
+
+        {/* Rosso Corsa top stripe — scarcest possible brand voltage */}
+        <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 2, background: C.primary }} />
+
+        {/* Logo mark — top left */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div style={{
+            width: 32, height: 32, background: C.primary,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+          }}>
+            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24"
+              fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M5 17H3a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h1l2-4h10l2 4h1a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2h-2"/>
+              <circle cx="7" cy="17" r="2"/><circle cx="17" cy="17" r="2"/>
+            </svg>
+          </div>
+          <span style={{
+            fontSize: 13, fontWeight: 600,
+            letterSpacing: '1.4px', textTransform: 'uppercase',
+            color: C.ink,
+          }}>RCM</span>
+        </div>
+
+        {/* Editorial copy — floats at bottom like headline over a cinema hero */}
+        <div>
+          {/* Hairline above copy — editorial separator */}
+          <div style={{ height: 1, background: C.hairline, marginBottom: 32 }} />
+
+          <p style={{ ...capUp, marginBottom: 24, color: C.muted }}>Counter Operations</p>
+
+          {/* display-xl — 56px / 500 / -1.12px — the editorial headline */}
+          <h1 style={{
+            margin: '0 0 24px',
+            fontSize: 56, fontWeight: 500, lineHeight: 1.1,
+            letterSpacing: '-1.12px', color: C.ink,
+          }}>
+            Counter<br />Station
+          </h1>
+
+          {/* body-md descriptor */}
+          <p style={{
+            margin: 0,
+            fontSize: 14, fontWeight: 400, lineHeight: 1.5,
+            color: C.body, maxWidth: 340,
+          }}>
+            Fleet management built for rental car counter operations — checkout, check-in,
+            and shift management in one unified surface.
+          </p>
+        </div>
+      </div>
+
+      {/* ── RIGHT — Login form panel ────────────────────────────────── */}
+      <div style={{
+        flex: 1,
+        display: 'flex',
+        flexDirection: 'column',
+        justifyContent: 'center',
+        padding: '64px 56px',
+        borderLeft: `1px solid ${C.hairline}`,
+      }}>
+        <div style={{ maxWidth: 360, width: '100%' }}>
+
+          {/* Section label */}
+          <p style={{ ...capUp, marginBottom: 16 }}>Staff Access</p>
+          <div style={{ height: 1, background: C.hairline, marginBottom: 32 }} />
+
+          {/* display-md headline — 26px / 500 / 0.195px */}
+          <h2 style={{
+            margin: '0 0 8px',
+            fontSize: 26, fontWeight: 500, lineHeight: 1.5,
+            letterSpacing: '0.195px', color: C.ink,
+          }}>
+            Welcome back
+          </h2>
+
+          {/* body-md subtitle */}
+          <p style={{
+            margin: '0 0 48px',
+            fontSize: 14, fontWeight: 400, lineHeight: 1.5,
+            color: C.body,
+          }}>
+            Enter your credentials to access counter operations.
+          </p>
+
+          <form onSubmit={handleSubmit}>
+
+            {/* Email */}
+            <div style={{ marginBottom: 24 }}>
+              <label style={{ ...capUp, display: 'block', marginBottom: 8 }}>Email</label>
+              <input
+                type="email"
+                placeholder="name@company.com"
+                value={email}
+                onChange={e => setEmail(e.target.value)}
+                required
+                autoComplete="email"
+                style={input}
+              />
+            </div>
+
+            {/* Password */}
+            <div style={{ marginBottom: 32 }}>
+              <label style={{ ...capUp, display: 'block', marginBottom: 8 }}>Password</label>
+              <div style={{ position: 'relative' }}>
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  placeholder="••••••••"
+                  value={password}
+                  onChange={e => setPassword(e.target.value)}
+                  required
+                  autoComplete="current-password"
+                  style={{ ...input, paddingRight: 60 }}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(v => !v)}
+                  style={{
+                    position: 'absolute', right: 16, top: '50%', transform: 'translateY(-50%)',
+                    background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+                    fontSize: 11, fontWeight: 600, letterSpacing: '1.1px',
+                    textTransform: 'uppercase', color: C.muted, lineHeight: 1,
+                  }}
+                >
+                  {showPassword ? 'Hide' : 'Show'}
+                </button>
+              </div>
+            </div>
+
+            {/* Validation error */}
+            {error && (
+              <p style={{
+                margin: '0 0 24px',
+                fontSize: 13, fontWeight: 400, lineHeight: 1.5,
+                color: C.warning,
+              }}>
+                {error}
+              </p>
+            )}
+
+            {/* button-primary — Rosso Corsa / 0px radius / uppercase / 1.4px tracking */}
+            <button
+              type="submit"
+              disabled={loading}
+              style={{
+                display: 'block', width: '100%', height: 48,
+                padding: '0 32px', borderRadius: 0, border: 'none',
+                fontSize: 14, fontWeight: 700, lineHeight: 1,
+                letterSpacing: '1.4px', textTransform: 'uppercase',
+                background: loading ? C.canvasElevated : C.primary,
+                color: C.ink,
+                cursor: loading ? 'not-allowed' : 'pointer',
+              }}
+            >
+              {loading ? 'Signing In…' : 'Sign In'}
+            </button>
+
+          </form>
+
+          {/* Footer caption */}
+          <div style={{ marginTop: 48, paddingTop: 24, borderTop: `1px solid ${C.hairline}` }}>
+            <p style={{
+              margin: 0, textAlign: 'center',
+              fontSize: 12, fontWeight: 400, lineHeight: 1.4,
+              color: C.muted,
+            }}>
+              Rental Car Manager · Counter Operations
+            </p>
+          </div>
+
+        </div>
+      </div>
+
+    </div>
+  )
+}
+
+// ── Shared Ferrari tokens for inner pages ──────────────────────────
+const T = {
+  canvas:         '#181818',
+  canvasElevated: '#303030',
+  primary:        '#da291c',
+  ink:            '#ffffff',
+  body:           '#969696',
+  muted:          '#666666',
+  hairline:       '#303030',
 }
 
 function Dashboard() {
+  const tiles = [
+    { label: 'Checkout',  href: '/checkout', icon: '→' },
+    { label: 'Check-In',  href: '/check-in',  icon: '←' },
+    { label: 'Overdue',   href: '/overdue',   icon: '!' },
+    { label: 'Shift',     href: '/shift',     icon: '≡' },
+  ]
   return (
-    <div className="p-4">
-      <h1 className="text-2xl font-bold">Counter Dashboard</h1>
-      <p className="mt-2 text-muted-foreground">
-        Select an action from the navigation menu.
+    <div style={{ maxWidth: 1280 }}>
+      {/* Section label */}
+      <p style={{
+        margin: '0 0 16px', fontSize: 11, fontWeight: 600,
+        letterSpacing: '1.1px', textTransform: 'uppercase', color: T.muted,
+      }}>
+        Counter Operations
       </p>
-      <div className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-4">
-        {[
-          { label: 'Checkout', href: '/checkout', color: 'bg-blue-50 text-blue-700' },
-          { label: 'Check-In', href: '/check-in', color: 'bg-green-50 text-green-700' },
-          { label: 'Overdue', href: '/overdue', color: 'bg-amber-50 text-amber-700' },
-          { label: 'Shift', href: '/shift', color: 'bg-purple-50 text-purple-700' },
-        ].map(({ label, href, color }) => (
+      <div style={{ height: 1, background: T.hairline, marginBottom: 32 }} />
+
+      {/* display-md headline */}
+      <h1 style={{
+        margin: '0 0 8px', fontSize: 26, fontWeight: 500,
+        lineHeight: 1.5, letterSpacing: '0.195px', color: T.ink,
+      }}>
+        Counter Dashboard
+      </h1>
+      <p style={{ margin: '0 0 48px', fontSize: 14, fontWeight: 400, lineHeight: 1.5, color: T.body }}>
+        Select an action to begin.
+      </p>
+
+      {/* 4-up action grid — feature-card style, sharp 0px corners */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 1, background: T.hairline }}>
+        {tiles.map(({ label, href, icon }) => (
           <a
             key={label}
             href={href}
-            className={`flex min-h-[80px] items-center justify-center rounded-xl border font-semibold text-lg ${color} hover:opacity-80 transition-opacity`}
+            style={{
+              display: 'flex', flexDirection: 'column', justifyContent: 'space-between',
+              padding: '32px 24px', minHeight: 160,
+              background: T.canvasElevated, textDecoration: 'none',
+              borderRadius: 0,
+            }}
           >
-            {label}
+            <span style={{ fontSize: 24, color: T.muted, lineHeight: 1 }}>{icon}</span>
+            <p style={{ margin: 0, fontSize: 18, fontWeight: 500, color: T.ink, lineHeight: 1.2 }}>
+              {label}
+            </p>
           </a>
         ))}
       </div>
@@ -53,6 +337,8 @@ function Dashboard() {
 }
 
 function NavBar() {
+  const { user, logout } = useAuth()
+  const navigate = useNavigate()
   const offlineQueueCount = useCounterStore(selectOfflineQueueCount)
 
   const navItems = [
@@ -63,48 +349,137 @@ function NavBar() {
     { to: '/shift', label: 'Shift' },
   ]
 
+  async function handleLogout() {
+    await logout()
+    navigate('/login', { replace: true })
+  }
+
+  const initials = user
+    ? `${user.first_name?.[0] ?? ''}${user.last_name?.[0] ?? ''}`.toUpperCase()
+    : '?'
+
   return (
     <nav
       aria-label="Counter navigation"
-      className="flex items-center gap-1 border-b bg-card px-4 py-2 overflow-x-auto"
+      style={{
+        display: 'flex', alignItems: 'center', gap: 0,
+        height: 64, padding: '0 32px',
+        background: T.canvas, borderBottom: `1px solid ${T.hairline}`,
+        overflowX: 'auto', flexShrink: 0,
+      }}
     >
+      {/* Logo mark */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginRight: 40, flexShrink: 0 }}>
+        <div style={{
+          width: 28, height: 28, background: T.primary, flexShrink: 0,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"
+            fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M5 17H3a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h1l2-4h10l2 4h1a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2h-2"/>
+            <circle cx="7" cy="17" r="2"/><circle cx="17" cy="17" r="2"/>
+          </svg>
+        </div>
+        <span style={{ fontSize: 12, fontWeight: 600, letterSpacing: '1.4px', textTransform: 'uppercase', color: T.ink }}>
+          RCM
+        </span>
+      </div>
+
+      {/* Hairline divider */}
+      <div style={{ width: 1, height: 24, background: T.hairline, marginRight: 32, flexShrink: 0 }} />
+
+      {/* Nav links — nav-link spec: 13px / 600 / 0.65px / uppercase */}
       {navItems.map(({ to, label, exact }) => (
         <NavLink
           key={to}
           to={to}
           end={exact}
-          className={({ isActive }) =>
-            `inline-flex min-h-[44px] items-center rounded-md px-3 text-sm font-medium transition-colors whitespace-nowrap ${
-              isActive
-                ? 'bg-primary text-primary-foreground'
-                : 'text-muted-foreground hover:bg-muted hover:text-foreground'
-            }`
-          }
+          style={({ isActive }: { isActive: boolean }) => ({
+            display: 'inline-flex', alignItems: 'center', height: 64,
+            padding: '0 16px', textDecoration: 'none', whiteSpace: 'nowrap',
+            fontSize: 13, fontWeight: 600, letterSpacing: '0.65px', textTransform: 'uppercase',
+            color: isActive ? T.ink : T.body,
+            borderBottom: isActive ? `2px solid ${T.primary}` : '2px solid transparent',
+            boxSizing: 'border-box',
+          })}
         >
           {label}
         </NavLink>
       ))}
-      {offlineQueueCount > 0 && (
-        <div
-          className="ml-auto flex items-center gap-1.5 rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-800"
-          role="status"
-          aria-live="polite"
-          aria-label={`${offlineQueueCount} actions pending sync`}
-        >
-          <span className="h-2 w-2 animate-pulse rounded-full bg-amber-500" aria-hidden="true" />
-          {offlineQueueCount} pending
+
+      {/* Right side — pushed to end */}
+      <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 16, flexShrink: 0 }}>
+
+        {/* Offline queue badge */}
+        {offlineQueueCount > 0 && (
+          <div
+            role="status"
+            aria-live="polite"
+            style={{
+              display: 'flex', alignItems: 'center', gap: 6,
+              padding: '4px 12px', background: T.canvasElevated,
+              fontSize: 11, fontWeight: 600, letterSpacing: '1.1px',
+              textTransform: 'uppercase', color: '#f59e0b',
+            }}
+          >
+            <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#f59e0b' }} />
+            {offlineQueueCount} pending
+          </div>
+        )}
+
+        {/* Hairline divider */}
+        <div style={{ width: 1, height: 24, background: T.hairline }} />
+
+        {/* User initials + name */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div style={{
+            width: 32, height: 32, borderRadius: '50%',
+            background: T.canvasElevated, border: `1px solid ${T.hairline}`,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontSize: 11, fontWeight: 700, letterSpacing: '0.5px', color: T.ink,
+            flexShrink: 0,
+          }}>
+            {initials}
+          </div>
+          <div style={{ lineHeight: 1.2 }}>
+            <p style={{ margin: 0, fontSize: 13, fontWeight: 500, color: T.ink, whiteSpace: 'nowrap' }}>
+              {user?.first_name} {user?.last_name}
+            </p>
+            <p style={{
+              margin: 0, fontSize: 11, fontWeight: 400,
+              color: T.muted, textTransform: 'capitalize', whiteSpace: 'nowrap',
+            }}>
+              {user?.role?.replace(/_/g, ' ').toLowerCase() ?? 'counter agent'}
+            </p>
+          </div>
         </div>
-      )}
+
+        {/* Hairline divider */}
+        <div style={{ width: 1, height: 24, background: T.hairline }} />
+
+        {/* Logout — button-tertiary-text spec: uppercase, tracked, no fill */}
+        <button
+          onClick={handleLogout}
+          style={{
+            background: 'none', border: 'none', padding: '0 4px',
+            fontSize: 11, fontWeight: 600, letterSpacing: '1.1px',
+            textTransform: 'uppercase', color: T.muted,
+            cursor: 'pointer', whiteSpace: 'nowrap',
+          }}
+        >
+          Sign Out
+        </button>
+      </div>
     </nav>
   )
 }
 
 function AppLayout({ children }: { children: React.ReactNode }) {
   return (
-    <div className="flex min-h-screen flex-col">
+    <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh', background: T.canvas }}>
       <OfflineBanner />
       <NavBar />
-      <main id="main-content" className="flex-1 overflow-auto">
+      <main id="main-content" style={{ flex: 1, overflowY: 'auto', padding: '48px 64px' }}>
         {children}
       </main>
     </div>
@@ -116,12 +491,6 @@ export default function App() {
     <QueryProvider>
       <AuthProvider>
         <BrowserRouter>
-          <a
-            href="#main-content"
-            className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50 focus:bg-background focus:px-4 focus:py-2 focus:text-sm focus:font-semibold focus:rounded focus:shadow"
-          >
-            Skip to content
-          </a>
           <Routes>
             <Route path="/login" element={<LoginPage />} />
             <Route

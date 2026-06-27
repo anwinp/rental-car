@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_session
 from app.core.redis import get_avail_redis
+from app.core.rbac import require_permission
 from app.core.security import UserClaims, get_current_user
 from app.domains.pricing.repository import PricingRepository
 from app.domains.pricing.schemas import (
@@ -109,6 +110,7 @@ async def list_rate_codes(
 )
 async def create_rate_code(
     payload: RateCodeCreate,
+    _: UserClaims = Depends(require_permission("rate_codes", "create")),
     svc: PricingService = Depends(_get_service),
 ) -> RateCodeResponse:
     rc = await svc.create_rate_code(payload)
@@ -138,6 +140,7 @@ async def get_rate_code(
 async def update_rate_code(
     rate_code_id: UUID,
     payload: RateCodeUpdate,
+    _: UserClaims = Depends(require_permission("rate_codes", "update")),
     svc: PricingService = Depends(_get_service),
 ) -> RateCodeResponse:
     rc = await svc.update_rate_code(rate_code_id, payload)
@@ -153,6 +156,7 @@ async def update_rate_code(
 async def activate_rate_code(
     rate_code_id: UUID,
     payload: RateCodeActivate = RateCodeActivate(),
+    _: UserClaims = Depends(require_permission("rate_codes", "update")),
     svc: PricingService = Depends(_get_service),
 ) -> RateCodeResponse:
     rc = await svc.activate_rate_code(rate_code_id, payload)
@@ -186,6 +190,7 @@ async def get_schedule_items(
 async def add_schedule_item(
     rate_code_id: UUID,
     payload: RateScheduleItemCreate,
+    _: UserClaims = Depends(require_permission("rate_codes", "create")),
     svc: PricingService = Depends(_get_service),
 ) -> RateScheduleItemResponse:
     item = await svc.add_schedule_item(rate_code_id, payload)
@@ -218,6 +223,7 @@ async def list_extras(
 )
 async def create_extra(
     payload: ExtrasCatalogCreate,
+    _: UserClaims = Depends(require_permission("rate_codes", "create")),
     svc: PricingService = Depends(_get_service),
 ) -> ExtrasCatalogItem:
     extra = await svc.create_extra(payload)
@@ -233,6 +239,7 @@ async def create_extra(
 async def update_extra(
     extra_id: UUID,
     payload: ExtrasCatalogUpdate,
+    _: UserClaims = Depends(require_permission("rate_codes", "update")),
     svc: PricingService = Depends(_get_service),
 ) -> ExtrasCatalogItem:
     extra = await svc.update_extra(extra_id, payload)

@@ -30,6 +30,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         logger.warning("Redis startup ping failed (%s) — continuing without cache", exc)
     await load_permission_matrix()
     init_tracing(app)
+    # Import all ORM models so SQLAlchemy metadata is fully populated before
+    # any request handler runs. Prevents NoReferencedTableError when FK
+    # resolution crosses domain boundaries (e.g. fleet → reservations → locations).
+    _import_all_models()
     yield
     # Shutdown
     try:
@@ -37,6 +41,23 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     except Exception:
         pass
     await dispose_engine()
+
+
+def _import_all_models() -> None:
+    """Force-import every ORM model so SQLAlchemy metadata resolves all FK references."""
+    import app.domains.auth.models  # noqa: F401
+    import app.domains.tenants.models  # noqa: F401
+    import app.domains.locations.models  # noqa: F401
+    import app.domains.fleet.models  # noqa: F401
+    import app.domains.reservations.models  # noqa: F401
+    import app.domains.checkout.models  # noqa: F401
+    import app.domains.customers.models  # noqa: F401
+    import app.domains.pricing.models  # noqa: F401
+    import app.domains.payments.models  # noqa: F401
+    import app.domains.damage.models  # noqa: F401
+    import app.domains.notifications.models  # noqa: F401
+    import app.domains.channels.models  # noqa: F401
+    import app.domains.tasks.models  # noqa: F401
 
 
 def create_app() -> FastAPI:
@@ -67,7 +88,7 @@ def create_app() -> FastAPI:
         allow_origins=settings.cors_origins,
         allow_credentials=True,
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-        allow_headers=["Content-Type", "X-Tenant-ID", "X-Request-ID"],
+        allow_headers=["Content-Type", "X-Tenant-ID", "X-Request-ID", "Authorization"],
         expose_headers=["X-Request-ID"],
     )
 
@@ -100,6 +121,8 @@ def create_app() -> FastAPI:
     from app.domains.admin.router        import router as admin_router
     from app.domains.billing.router      import router as billing_router
     from app.domains.dashboard.router   import router as dashboard_router
+    from app.domains.tasks.router       import router as tasks_router
+    from app.domains.agents.router      import router as agents_router
 
     PREFIX = "/api/v1"
     app.include_router(auth_router,           prefix=f"{PREFIX}/auth",          tags=["auth"])
@@ -120,6 +143,8 @@ def create_app() -> FastAPI:
     app.include_router(admin_router,          prefix=f"{PREFIX}/admin",         tags=["admin"])
     app.include_router(billing_router,        prefix=f"{PREFIX}/billing",       tags=["billing"])
     app.include_router(dashboard_router,      prefix=f"{PREFIX}/dashboard",     tags=["dashboard"])
+    app.include_router(tasks_router,          prefix=f"{PREFIX}/tasks",          tags=["tasks"])
+    app.include_router(agents_router,         prefix=f"{PREFIX}/agents",         tags=["agents"])
 
     # Health check — no auth, no prefix (ALB health check target)
     from app.core.dependencies import health_router

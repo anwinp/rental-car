@@ -34,6 +34,15 @@ interface AdminStore {
   toggleItem: (id: string) => void
   selectAll: (ids: string[]) => void
   clearSelection: () => void
+
+  // Intelligence panel (Wave 5)
+  intelligencePanelOpen: boolean
+  toggleIntelligencePanel: () => void
+  setIntelligencePanelOpen: (v: boolean) => void
+
+  // Command palette (Wave 5)
+  commandPaletteOpen: boolean
+  toggleCommandPalette: () => void
 }
 
 export const useAdminStore = create<AdminStore>()((set) => ({
@@ -61,4 +70,13 @@ export const useAdminStore = create<AdminStore>()((set) => ({
     })),
   selectAll: (ids) => set({ selectedItems: ids }),
   clearSelection: () => set({ selectedItems: [] }),
+
+  // Intelligence panel
+  intelligencePanelOpen: false,
+  toggleIntelligencePanel: () => set((s) => ({ intelligencePanelOpen: !s.intelligencePanelOpen })),
+  setIntelligencePanelOpen: (v) => set({ intelligencePanelOpen: v }),
+
+  // Command palette
+  commandPaletteOpen: false,
+  toggleCommandPalette: () => set((s) => ({ commandPaletteOpen: !s.commandPaletteOpen })),
 }))

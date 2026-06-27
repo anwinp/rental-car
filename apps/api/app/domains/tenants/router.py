@@ -121,3 +121,71 @@ async def accept_tos(
         request.headers.get("X-Forwarded-For", request.client.host or "").split(",")[0].strip()
     )
     await _svc.accept_tos(session, tenant_id, ip, body.tos_version)
+
+
+# ── GET/PUT /tenants/{tenant_id}/llm-settings ───────────────────────────────
+
+from pydantic import BaseModel  # noqa: E402
+
+class LLMSettingsResponse(BaseModel):
+    provider: str
+    key_configured: bool
+    key_preview: str | None  # last 4 chars of key, or None
+
+
+class LLMSettingsUpdate(BaseModel):
+    provider: str = "anthropic"
+    api_key: str | None = None  # None = clear key; empty string = no change
+
+
+@router.get(
+    "/{tenant_id}/llm-settings",
+    response_model=LLMSettingsResponse,
+    summary="Get per-tenant LLM configuration",
+)
+async def get_llm_settings(
+    tenant_id: str,
+    session: AsyncSession = Depends(get_session),
+    claims: UserClaims = Depends(get_current_user),
+) -> LLMSettingsResponse:
+    tenant = await _svc.get_tenant(session, tenant_id)
+    key = tenant.anthropic_api_key or ""
+    return LLMSettingsResponse(
+        provider=tenant.llm_provider or "anthropic",
+        key_configured=bool(key),
+        key_preview=f"sk-...{key[-4:]}" if len(key) >= 4 else None,
+    )
+
+
+@router.put(
+    "/{tenant_id}/llm-settings",
+    response_model=LLMSettingsResponse,
+    summary="Save per-tenant LLM API key (BYOK)",
+)
+async def update_llm_settings(
+    tenant_id: str,
+    body: LLMSettingsUpdate,
+    session: AsyncSession = Depends(get_session),
+    claims: UserClaims = Depends(require_permission("admin", "config")),
+) -> LLMSettingsResponse:
+    from sqlalchemy import select, update
+    from app.domains.tenants.models import Tenant
+
+    stmt = (
+        update(Tenant)
+        .where(Tenant.tenant_id == tenant_id)
+        .values(
+            llm_provider=body.provider,
+            **({"anthropic_api_key": body.api_key} if body.api_key is not None else {}),
+        )
+        .returning(Tenant.anthropic_api_key, Tenant.llm_provider)
+    )
+    result = await session.execute(stmt)
+    await session.commit()
+    row = result.mappings().first()
+    key = (row["anthropic_api_key"] or "") if row else ""
+    return LLMSettingsResponse(
+        provider=(row["llm_provider"] or "anthropic") if row else body.provider,
+        key_configured=bool(key),
+        key_preview=f"sk-...{key[-4:]}" if len(key) >= 4 else None,
+    )

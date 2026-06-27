@@ -6,7 +6,7 @@ from typing import Callable, FrozenSet, Optional
 
 from fastapi import Depends, HTTPException, Request, status
 
-from app.core.security import UserClaims, get_current_user
+from app.core.security import UserClaims, get_current_user, get_current_user_or_bearer
 
 # In-memory permission cache: role → frozenset of "resource:action" strings
 _PERMISSION_MATRIX: dict[str, FrozenSet[str]] = {}
@@ -79,6 +79,7 @@ def require_permission(
     resource: str,
     action: str,
     location_id_param: Optional[str] = None,
+    accept_bearer: bool = False,
 ) -> Callable:
     """
     Factory that returns a FastAPI dependency enforcing role permission AND
@@ -97,9 +98,11 @@ def require_permission(
             claims: UserClaims = Depends(require_permission("fleet", "read")),
         ): ...
     """
+    _auth_dep = get_current_user_or_bearer if accept_bearer else get_current_user
+
     async def _dependency(
         request: Request,
-        claims: UserClaims = Depends(get_current_user),
+        claims: UserClaims = Depends(_auth_dep),
     ) -> UserClaims:
         # Check role permission — any matching role is sufficient
         has_perm = any(

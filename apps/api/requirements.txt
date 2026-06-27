@@ -54,3 +54,6 @@ Pillow==10.4.0
 pyotp==2.9.0
 sendgrid==6.12.5
 twilio==9.3.7
+
+# AI agents — OpenAI-compatible LLM client (NVIDIA NIM / OpenAI)
+openai==2.44.0

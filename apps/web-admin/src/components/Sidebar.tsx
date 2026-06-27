@@ -144,52 +144,64 @@ const Ic = {
   ),
 }
 
-const ADMIN  =[UserRole.SYSTEM_ADMIN, UserRole.SUPER_ADMIN]
-const MANAGE = [UserRole.BRANCH_MANAGER, UserRole.REGIONAL_MANAGER, UserRole.SYSTEM_ADMIN, UserRole.SUPER_ADMIN, UserRole.CLAIMS_COORDINATOR, UserRole.READONLY_AUDITOR]
-const FLEET  = [...MANAGE, UserRole.FLEET_MANAGER, UserRole.MAINTENANCE_TECH]
-const REPORT = [...MANAGE, UserRole.FINANCE_ANALYST]
-const STAFF  = [...FLEET, UserRole.COUNTER_AGENT]
+const ADMIN    = [UserRole.SYSTEM_ADMIN, UserRole.SUPER_ADMIN]
+const EXEC     = [UserRole.EXECUTIVE, ...ADMIN]
+const MANAGE   = [UserRole.BRANCH_MANAGER, UserRole.REGIONAL_MANAGER, ...ADMIN, UserRole.CLAIMS_COORDINATOR, UserRole.READONLY_AUDITOR]
+const FLEET    = [...MANAGE, UserRole.FLEET_MANAGER, UserRole.MAINTENANCE_TECH]
+const REPORT   = [...MANAGE, UserRole.EXECUTIVE, UserRole.FINANCE_ANALYST]
+const STAFF    = [...FLEET, UserRole.COUNTER_AGENT, UserRole.SENIOR_AGENT]
+const RETURNS  = [...ADMIN, UserRole.BRANCH_MANAGER, UserRole.REGIONAL_MANAGER, UserRole.SENIOR_AGENT]
 
 const GROUPS = [
   { label: 'Dashboards', items: [
-    { label: 'Overview',      href: '/dashboard',    roles: MANAGE, icon: <Ic.Grid /> },
-    { label: 'Operations',    href: '/staff',        roles: STAFF,  icon: <Ic.Clipboard /> },
-    { label: 'Back Office',   href: '/back-office',  roles: FLEET,  icon: <Ic.Wrench /> },
-    { label: 'Task Board',    href: '/tasks',        roles: STAFF,  icon: <Ic.CheckList /> },
+    { label: 'Executive Summary', href: '/executive',   roles: EXEC,   icon: <Ic.Chart /> },
+    { label: 'Regional Overview', href: '/regional',    roles: [UserRole.REGIONAL_MANAGER, UserRole.SYSTEM_ADMIN, UserRole.SUPER_ADMIN], icon: <Ic.Building /> },
+    { label: 'Overview',          href: '/dashboard',   roles: MANAGE, icon: <Ic.Grid /> },
+    { label: 'Operations',        href: '/staff',       roles: STAFF,  icon: <Ic.Clipboard /> },
+    { label: 'Back Office',       href: '/back-office', roles: FLEET,  icon: <Ic.Wrench /> },
+    { label: 'My Tasks',          href: '/tasks',       roles: STAFF,  icon: <Ic.CheckList /> },
   ]},
   { label: 'Fleet', items: [
-    { label: 'Vehicles',       href: '/fleet',          roles: FLEET,  icon: <Ic.Car /> },
-    { label: 'Fleet Calendar', href: '/fleet-calendar', roles: FLEET,  icon: <Ic.Gantt /> },
-    { label: 'Locations',      href: '/locations',      roles: FLEET,  icon: <Ic.MapPin /> },
-    { label: 'Maintenance',    href: '/maintenance',    roles: FLEET,  icon: <Ic.Wrench /> },
-    { label: 'Damage Claims',  href: '/damage',         roles: MANAGE, icon: <Ic.Shield /> },
+    { label: 'Vehicles',       href: '/fleet',          roles: FLEET,   icon: <Ic.Car /> },
+    { label: 'Fleet Calendar', href: '/fleet-calendar', roles: FLEET,   icon: <Ic.Gantt /> },
+    { label: 'Locations',      href: '/locations',      roles: [...FLEET, UserRole.EXECUTIVE], icon: <Ic.MapPin /> },
+    { label: 'Maintenance',    href: '/maintenance',    roles: FLEET,   icon: <Ic.Wrench /> },
+    { label: 'Damage Claims',  href: '/damage',         roles: RETURNS, icon: <Ic.Shield /> },
   ]},
   { label: 'Bookings', items: [
-    { label: 'Reservations',     href: '/reservations', roles: MANAGE, icon: <Ic.Calendar /> },
-    { label: 'Customers',        href: '/customers',    roles: MANAGE, icon: <Ic.Users /> },
-    { label: 'Counter Checkout', href: '/checkout',     roles: STAFF,  icon: <Ic.Counter /> },
-    { label: 'Shift',            href: '/shift',        roles: STAFF,  icon: <Ic.Clock /> },
-    { label: 'Process Return',   href: '/returns',      roles: STAFF,  icon: <Ic.ReturnKey /> },
-    { label: 'Inspections',      href: '/inspections',  roles: STAFF,  icon: <Ic.Clipboard /> },
-    { label: 'Overdue Rentals',  href: '/overdue',      roles: STAFF,  icon: <Ic.AlertTriangle /> },
+    { label: 'Reservations',     href: '/reservations', roles: MANAGE,  icon: <Ic.Calendar /> },
+    { label: 'Customers',        href: '/customers',    roles: MANAGE,  icon: <Ic.Users /> },
+    { label: 'Counter Checkout', href: '/checkout',     roles: STAFF,   icon: <Ic.Counter /> },
+    { label: 'Shift',            href: '/shift',        roles: STAFF,   icon: <Ic.Clock /> },
+    { label: 'Process Return',   href: '/returns',      roles: RETURNS, icon: <Ic.ReturnKey /> },
+    { label: 'Inspections',      href: '/inspections',  roles: RETURNS, icon: <Ic.Clipboard /> },
+    { label: 'Overdue Rentals',  href: '/overdue',      roles: STAFF,   icon: <Ic.AlertTriangle /> },
   ]},
   { label: 'Analytics', items: [
-    { label: 'Payments',     href: '/payments',     roles: MANAGE, icon: <Ic.DollarSign /> },
-    { label: 'Corporate',    href: '/corporate',    roles: MANAGE, icon: <Ic.Building /> },
-    { label: 'Pricing',      href: '/pricing',      roles: ADMIN,  icon: <Ic.Tag /> },
-    { label: 'Reports',      href: '/reports',      roles: REPORT, icon: <Ic.Chart /> },
+    { label: 'Payments',     href: '/payments',     roles: MANAGE,  icon: <Ic.DollarSign /> },
+    { label: 'Corporate',    href: '/corporate',    roles: [...MANAGE, UserRole.EXECUTIVE], icon: <Ic.Building /> },
+    { label: 'OTA Leads',    href: '/ota-leads',    roles: [UserRole.REGIONAL_MANAGER, ...ADMIN], icon: <Ic.Calendar /> },
+    { label: 'Pricing',      href: '/pricing',      roles: ADMIN,   icon: <Ic.Tag /> },
+    { label: 'Reports',      href: '/reports',      roles: REPORT,  icon: <Ic.Chart /> },
   ]},
   { label: 'System', items: [
-    { label: 'Settings',     href: '/settings',     roles: ADMIN,  icon: <Ic.Gear /> },
+    { label: 'Settings',     href: '/settings',     roles: ADMIN,   icon: <Ic.Gear /> },
   ]},
 ]
 
 const ROLE_LABEL: Record<string, string> = {
-  SUPER_ADMIN: 'Super Admin', SYSTEM_ADMIN: 'System Admin',
-  REGIONAL_MANAGER: 'Regional Manager', BRANCH_MANAGER: 'Branch Manager',
-  FLEET_MANAGER: 'Fleet Manager', COUNTER_AGENT: 'Counter Agent',
-  MAINTENANCE_TECH: 'Maintenance', CLAIMS_COORDINATOR: 'Claims Coord.',
-  FINANCE_ANALYST: 'Finance Analyst', READONLY_AUDITOR: 'Auditor',
+  SUPER_ADMIN:        'Super Admin',
+  SYSTEM_ADMIN:       'System Admin',
+  EXECUTIVE:          'Executive',
+  REGIONAL_MANAGER:   'Regional Manager',
+  BRANCH_MANAGER:     'Branch Manager',
+  SENIOR_AGENT:       'Senior Agent',
+  COUNTER_AGENT:      'Counter Agent',
+  FLEET_MANAGER:      'Fleet Manager',
+  MAINTENANCE_TECH:   'Maintenance',
+  CLAIMS_COORDINATOR: 'Claims Coord.',
+  FINANCE_ANALYST:    'Finance Analyst',
+  READONLY_AUDITOR:   'Auditor',
 }
 
 export function Sidebar() {

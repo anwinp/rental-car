@@ -48,8 +48,10 @@ export function Navbar() {
       position: 'fixed', top: 0, left: 0, width: '100%', height: 64, zIndex: 200,
       display: 'flex', alignItems: 'center', justifyContent: 'space-between',
       padding: '0 48px',
-      background: scrolled ? '#181818' : 'transparent',
-      borderBottom: scrolled ? '1px solid #303030' : '1px solid transparent',
+      background: scrolled ? '#181818' : 'rgba(18,18,18,0.55)',
+      backdropFilter: 'blur(16px)',
+      WebkitBackdropFilter: 'blur(16px)',
+      borderBottom: scrolled ? '1px solid #303030' : '1px solid rgba(255,255,255,0.06)',
       transition: 'background 0.3s ease, border-color 0.3s ease',
     }}>
       {/* Logo */}

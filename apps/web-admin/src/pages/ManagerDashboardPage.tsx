@@ -17,7 +17,7 @@ interface ManagerKPI {
   revenue_this_month:  number
 }
 
-interface ForecastDay { date: string; pickups: number; returns: number }
+interface ForecastDay { date: string; pickups: number; returns: number; revenue: number }
 
 interface PickupRow {
   confirmation_number: string
@@ -38,11 +38,22 @@ interface ReturnRow {
   days_overdue: number
 }
 
+interface OverdueRow {
+  confirmation_number: string
+  customer_name: string
+  vehicle: string | null
+  return_time: string | null
+  days_overdue: number
+}
+
 interface DashboardData {
-  kpi:      ManagerKPI
-  forecast: ForecastDay[]
-  pickups:  PickupRow[]
-  returns:  ReturnRow[]
+  kpi:           ManagerKPI
+  forecast:      ForecastDay[]
+  pickups:       PickupRow[]
+  returns:       ReturnRow[]
+  overdue:       OverdueRow[]
+  location_name: string | null
+  location_code: string | null
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -116,6 +127,7 @@ function ForecastBar({ day, max }: { day: ForecastDay; max: number }) {
       <p className="text-[10px]" style={{ color: 'var(--text-3)' }}>
         {d.getDate()}
       </p>
+      <span style={{ fontSize: 10, color: 'var(--text-3)' }}>{day.revenue > 0 ? `$${Math.round(day.revenue).toLocaleString()}` : ''}</span>
     </div>
   )
 }
@@ -131,7 +143,7 @@ export function ManagerDashboardPage() {
     queryKey: ['dashboard-manager'],
     queryFn:  fetchDashboard,
     staleTime: 60_000,
-    refetchInterval: 120_000,
+    refetchInterval: 30_000,
   })
 
   const kpi = data?.kpi
@@ -141,13 +153,34 @@ export function ManagerDashboardPage() {
   return (
     <div className="space-y-5 max-w-[1400px]">
       {/* Header */}
-      <div>
-        <h1 className="text-[22px] font-bold tracking-tight" style={{ color: 'var(--text-1)' }}>
-          {greeting}{user?.first_name ? `, ${user.first_name}` : ''}
-        </h1>
-        <p className="mt-0.5 text-[13px]" style={{ color: 'var(--text-3)' }}>
-          {new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
-        </p>
+      <div className="flex items-start justify-between">
+        <div>
+          <h1 className="text-[22px] font-bold tracking-tight" style={{ color: 'var(--text-1)' }}>
+            {greeting}{user?.first_name ? `, ${user.first_name}` : ''}
+          </h1>
+          <p className="mt-0.5 text-[13px]" style={{ color: 'var(--text-3)' }}>
+            {new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
+          </p>
+        </div>
+        {data?.location_name && (
+          <div
+            className="flex items-center gap-2 rounded-lg px-3 py-2"
+            style={{ background: 'var(--accent-sub)', border: '1px solid var(--accent)', flexShrink: 0 }}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ color: 'var(--sb-accent)' }}>
+              <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/>
+              <circle cx="12" cy="10" r="3"/>
+            </svg>
+            <div>
+              <p className="text-[11px] font-semibold" style={{ color: 'var(--sb-accent)' }}>
+                {data.location_code}
+              </p>
+              <p className="text-[10px]" style={{ color: 'var(--text-3)' }}>
+                {data.location_name}
+              </p>
+            </div>
+          </div>
+        )}
       </div>
 
       {isLoading && (

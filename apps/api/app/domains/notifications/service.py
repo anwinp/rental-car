@@ -79,6 +79,61 @@ class NotificationService:
             recipient_id=request.recipient_id,
         )
 
+    # ── Send Notification (called by Celery task) ─────────────────────────────
+
+    async def send_notification(
+        self,
+        event_code: str,
+        recipient_id: str,
+        context: dict[str, Any],
+        channel: Optional[str],
+        tenant_id: str,
+    ) -> None:
+        """
+        Look up the recipient's preferred channel (or use the provided override),
+        resolve their contact address, then call render_and_send.
+        """
+        from sqlalchemy import text
+
+        resolved_channel = channel or "EMAIL"
+        recipient_address: Optional[str] = None
+
+        # Try staff_users first, then customers
+        staff_result = await self._session.execute(
+            text("SELECT email, phone_number FROM staff_users WHERE user_id = CAST(:rid AS uuid) AND deleted_at IS NULL LIMIT 1"),
+            {"rid": recipient_id},
+        )
+        staff_row = staff_result.mappings().first()
+        if staff_row:
+            if resolved_channel == "SMS" or resolved_channel == "WHATSAPP":
+                recipient_address = staff_row["phone_number"]
+            else:
+                recipient_address = staff_row["email"]
+        else:
+            cust_result = await self._session.execute(
+                text("SELECT email, phone FROM customers WHERE customer_id = CAST(:rid AS uuid) LIMIT 1"),
+                {"rid": recipient_id},
+            )
+            cust_row = cust_result.mappings().first()
+            if cust_row:
+                if resolved_channel == "SMS" or resolved_channel == "WHATSAPP":
+                    recipient_address = cust_row["phone"]
+                else:
+                    recipient_address = cust_row["email"]
+
+        if not recipient_address:
+            log.warning("send_notification_no_address", event_code=event_code, recipient_id=recipient_id)
+            return
+
+        await self.render_and_send(
+            event_code=event_code,
+            recipient_id=recipient_id,
+            merge_vars=context,
+            tenant_id=tenant_id,
+            channel=resolved_channel,
+            recipient_address=recipient_address,
+        )
+
     # ── Render and Send (Celery worker path) ──────────────────────────────────
 
     async def render_and_send(
@@ -181,6 +236,24 @@ class NotificationService:
                 )
                 gateway_msg_id = sid
                 status = "SENT"
+
+            elif channel == "WHATSAPP":
+                if settings.twilio_account_sid and getattr(settings, "twilio_whatsapp_from", ""):
+                    from twilio.rest import Client as _TwilioClient
+                    wa_client = _TwilioClient(
+                        settings.twilio_account_sid,
+                        settings.twilio_auth_token.get_secret_value(),
+                    )
+                    msg = wa_client.messages.create(
+                        from_=f"whatsapp:{settings.twilio_whatsapp_from}",
+                        to=f"whatsapp:{recipient_address}",
+                        body=rendered_body[:1600],
+                    )
+                    gateway_msg_id = msg.sid
+                    status = "SENT"
+                else:
+                    log.info("whatsapp_not_configured", event_code=event_code)
+                    status = "SKIPPED"
 
             else:
                 # PUSH and other channels not yet implemented

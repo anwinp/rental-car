@@ -5,6 +5,7 @@ import './globals.css'
 import { Navbar } from './components/Navbar'
 import { Footer } from './components/Footer'
 import { Providers } from './providers'
+import { AgentChatPanel } from './components/agent/AgentChatPanel'
 
 const inter = Inter({
   subsets: ['latin'],
@@ -30,11 +31,17 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           >
             Skip to main content
           </a>
-          <Navbar />
-          <main id="main-content" className="flex-1">
-            {children}
-          </main>
-          <Footer />
+          <div style={{ display: 'flex', height: '100vh', overflow: 'hidden' }}>
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflowY: 'auto' }}>
+              <Navbar />
+              <main id="main-content" style={{ flex: 1 }}>
+                {children}
+              </main>
+              <Footer />
+            </div>
+          </div>
+          {/* Chat panel renders as fixed overlay — does not affect flex layout */}
+          <AgentChatPanel />
         </Providers>
       </body>
     </html>

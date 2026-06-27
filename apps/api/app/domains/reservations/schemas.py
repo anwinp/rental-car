@@ -75,6 +75,8 @@ class ReservationCreate(BaseModel):
     guest_info: Optional[GuestInfo] = None
 
     location_id: UUID
+    # Optional one-way drop-off location. Defaults to location_id (round-trip).
+    dropoff_location_id: Optional[UUID] = None
     vehicle_class_id: UUID
 
     pickup_dt: datetime

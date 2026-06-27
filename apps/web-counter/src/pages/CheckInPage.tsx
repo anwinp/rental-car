@@ -129,8 +129,12 @@ export function CheckInPage() {
   }
 
   return (
-    <div className="p-4 space-y-6">
-      <h1 className="text-2xl font-bold">Vehicle Check-In</h1>
+    <div className="space-y-6">
+      <div>
+        <p style={{ margin: '0 0 8px', fontSize: 11, fontWeight: 600, letterSpacing: '1.4px', textTransform: 'uppercase', color: '#969696' }}>Counter Operations</p>
+        <div style={{ width: 32, height: 1, background: '#303030', marginBottom: 12 }} />
+        <h1 style={{ margin: 0, fontSize: 26, fontWeight: 500, letterSpacing: '0.195px', color: '#ffffff', lineHeight: 1.2 }}>Vehicle Check-In</h1>
+      </div>
 
       {/* Search */}
       <Card>

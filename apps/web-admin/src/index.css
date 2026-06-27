@@ -45,6 +45,17 @@
     --sb-active:  rgba(139,92,246,0.14);
     --sb-accent:  #a78bfa;
     --sb-sect:    #334155;
+
+    /* ── Agent intelligence panel ── */
+    --agent-panel-width:  300px;
+    --agent-panel-bg:     var(--elevated);
+    --agent-card-bg:      var(--card-bg);
+    --agent-alert-danger: var(--danger);
+    --agent-alert-warn:   var(--warn);
+    --agent-alert-info:   var(--info);
+    --agent-chip-bg:      rgba(139, 92, 246, 0.08);
+    --agent-chip-border:  var(--border);
+    --agent-chip-hover:   var(--accent-sub);
   }
 
   *, *::before, *::after {

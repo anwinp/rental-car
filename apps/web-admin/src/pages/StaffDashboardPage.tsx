@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
+import { useAuth } from '@rcm/ui/auth'
 
 interface StaffPickup {
   confirmation_number:  string
@@ -102,6 +103,26 @@ export function StaffDashboardPage() {
     refetchInterval: 60_000,
   })
 
+  const { data: damageData } = useQuery<{ items: Array<{ claim_status: string }> }>({
+    queryKey: ['damage-open'],
+    queryFn: async () => {
+      const res = await fetch('/api/v1/damage?status=OPEN', { credentials: 'include' })
+      if (!res.ok) return { items: [] }
+      const d = await res.json()
+      return { items: Array.isArray(d) ? d : (d.items ?? []) }
+    },
+    staleTime: 60_000,
+  })
+
+  const { user } = useAuth()
+  const role = user?.role ?? ''
+  const isReturnAgent = role === 'SENIOR_AGENT'
+  const isManager = ['BRANCH_MANAGER', 'REGIONAL_MANAGER', 'SYSTEM_ADMIN', 'SUPER_ADMIN'].includes(role)
+
+  const returnsQueueCount = data?.returns_today.length ?? 0
+  const overdueReturnCount = data?.returns_today.filter(r => r.is_overdue).length ?? 0
+  const openDamageCount = damageData?.items.filter(d => d.claim_status === 'OPEN').length ?? (damageData?.items.length ?? 0)
+
   if (isLoading) {
     return (
       <div className="flex h-48 items-center justify-center text-sm" style={{ color: 'var(--text-3)' }}>
@@ -117,20 +138,48 @@ export function StaffDashboardPage() {
     )
   }
 
-  const overdueCount = data?.returns_today.filter(r => r.is_overdue).length ?? 0
-
   return (
     <div className="space-y-5 max-w-[1400px]">
+      {isReturnAgent && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 12, marginBottom: 20 }}>
+          {[
+            { label: 'RETURNS QUEUE', value: returnsQueueCount, sub: 'due today', danger: false },
+            { label: 'OVERDUE', value: overdueReturnCount, sub: 'action required', danger: overdueReturnCount > 0 },
+            { label: 'OPEN DAMAGE', value: openDamageCount, sub: 'claims', danger: false },
+          ].map(card => (
+            <div key={card.label} style={{ background: 'var(--card-bg)', padding: '16px 20px', borderRadius: 0, border: '1px solid var(--border)' }}>
+              <p style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-3)', marginBottom: 8 }}>{card.label}</p>
+              <p style={{ fontSize: 32, fontWeight: 700, color: card.danger ? 'var(--danger)' : 'var(--text-1)', lineHeight: 1 }}>{card.value}</p>
+              <p style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 6 }}>{card.sub}</p>
+            </div>
+          ))}
+        </div>
+      )}
+      {isManager && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 12, marginBottom: 20 }}>
+          {[
+            { label: 'PICKUPS TODAY', value: data?.pickups_today.length ?? 0, sub: '', danger: false },
+            { label: 'RETURNS TODAY', value: returnsQueueCount, sub: '', danger: false },
+            { label: 'OVERDUE RETURNS', value: overdueReturnCount, sub: '', danger: overdueReturnCount > 0 },
+          ].map(card => (
+            <div key={card.label} style={{ background: 'var(--card-bg)', padding: '16px 20px', borderRadius: 0, border: '1px solid var(--border)' }}>
+              <p style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-3)', marginBottom: 8 }}>{card.label}</p>
+              <p style={{ fontSize: 32, fontWeight: 700, color: card.danger ? 'var(--danger)' : 'var(--text-1)', lineHeight: 1 }}>{card.value}</p>
+              <p style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 6 }}>{card.sub}</p>
+            </div>
+          ))}
+        </div>
+      )}
       {/* Header */}
       <div>
         <h1 className="text-[22px] font-bold tracking-tight" style={{ color: 'var(--text-1)' }}>
-          Operations — Today
+          {isReturnAgent ? 'Returns — Today' : 'Operations — Today'}
         </h1>
         <p className="mt-0.5 text-[13px]" style={{ color: 'var(--text-3)' }}>
           {new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}
           {' '}&middot;{' '}
           {(data?.pickups_today.length ?? 0)} pickups · {(data?.returns_today.length ?? 0)} returns
-          {overdueCount > 0 && ` · ${overdueCount} overdue`}
+          {overdueReturnCount > 0 && ` · ${overdueReturnCount} overdue`}
         </p>
       </div>
 
@@ -197,7 +246,7 @@ export function StaffDashboardPage() {
 
         {/* Returns */}
         <div className="rounded-xl" style={{ background: 'var(--card-bg)', border: '1px solid var(--border)' }}>
-          <SectionHeader title="Returns Today" count={data?.returns_today.length ?? 0} danger={overdueCount > 0} />
+          <SectionHeader title="Returns Today" count={data?.returns_today.length ?? 0} danger={overdueReturnCount > 0} />
           {(data?.returns_today.length ?? 0) === 0 ? (
             <EmptyRow msg="No returns expected today." />
           ) : (

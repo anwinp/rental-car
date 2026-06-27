@@ -113,6 +113,10 @@ export default function BookingPage({ params, searchParams }: BookingPageProps) 
   const [ageWarning, setAgeWarning] = useState(false)
   const [isPending, setIsPending] = useState(false)
   const [bookingError, setBookingError] = useState<string | null>(null)
+  const [promoCode, setPromoCode] = useState('')
+  const [promoResult, setPromoResult] = useState<{ discount_type: string; discount_value: number; code: string } | null>(null)
+  const [promoError, setPromoError] = useState('')
+  const [promoLoading, setPromoLoading] = useState(false)
 
   useEffect(() => {
     if (draft.selectedExtras.length) setSelectedExtras(draft.selectedExtras)
@@ -155,6 +159,42 @@ export default function BookingPage({ params, searchParams }: BookingPageProps) 
       : [...selectedExtras, code]
     setSelectedExtras(next)
     draft.setExtras(next)
+  }
+
+  async function handleApplyPromo() {
+    setPromoError('')
+    if (!promoCode.trim()) return
+    setPromoLoading(true)
+    try {
+      const res = await fetch('/api/v1/pricing/quote', {
+        method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/json', 'X-Tenant-ID': TENANT },
+        body: JSON.stringify({
+          pickup_location_id: pickup,
+          vehicle_class_id: classId,
+          pickup_dt: from,
+          dropoff_dt: to,
+          extras: selectedExtras.map(code => ({ extra_id: code, quantity: 1 })),
+          promo_code: promoCode.trim().toUpperCase(),
+        }),
+      })
+      if (res.ok) {
+        const data = await res.json()
+        const discountLine = (data.line_items ?? []).find((l: { type: string; amount: number }) => l.type === 'DISCOUNT')
+        if (discountLine) {
+          setPromoResult({ discount_type: 'FIXED', discount_value: Math.abs(discountLine.amount), code: promoCode.trim().toUpperCase() })
+        } else {
+          setPromoError('Code applied but no discount found.')
+        }
+      } else {
+        const err = await res.json().catch(() => ({}))
+        setPromoError((err as any).detail || 'Invalid promo code')
+      }
+    } catch {
+      setPromoError('Failed to apply code')
+    } finally {
+      setPromoLoading(false)
+    }
   }
 
   function handleDriverSubmit(data: DriverFormData) {
@@ -358,6 +398,46 @@ export default function BookingPage({ params, searchParams }: BookingPageProps) 
                       })}
                     </div>
                   </fieldset>
+                </div>
+                <div style={{ padding: '16px 24px', borderTop: '1px solid rgba(255,255,255,0.07)' }}>
+                  <p style={{ fontSize: 13, fontWeight: 600, color: '#ffffff', marginBottom: 8 }}>Promo Code</p>
+                  {promoResult ? (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span style={{ fontSize: 13, color: '#10b981', fontWeight: 600 }}>
+                        {promoResult.code} — saving ${promoResult.discount_value.toFixed(2)}
+                      </span>
+                      <button type="button" onClick={() => { setPromoResult(null); setPromoCode('') }}
+                        style={{ fontSize: 11, color: '#969696', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit' }}>
+                        Remove
+                      </button>
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <input
+                        type="text"
+                        placeholder="Enter promo code"
+                        value={promoCode}
+                        onChange={e => setPromoCode(e.target.value.toUpperCase())}
+                        style={{ flex: 1, height: 44, padding: '0 12px', fontSize: 14,
+                          background: 'rgba(255,255,255,0.05)', color: '#ffffff',
+                          border: '1px solid rgba(255,255,255,0.12)', borderRadius: 4,
+                          fontFamily: 'inherit', outline: 'none' }}
+                      />
+                      <button
+                        type="button"
+                        disabled={promoLoading || !promoCode.trim()}
+                        onClick={handleApplyPromo}
+                        style={{ height: 44, padding: '0 16px', fontSize: 13, fontWeight: 700,
+                          background: '#da291c', color: '#fff', border: 'none', borderRadius: 0,
+                          cursor: promoLoading || !promoCode.trim() ? 'not-allowed' : 'pointer',
+                          textTransform: 'uppercase', letterSpacing: '1.4px', fontFamily: 'inherit',
+                          opacity: promoLoading || !promoCode.trim() ? 0.6 : 1 }}
+                      >
+                        {promoLoading ? '...' : 'Apply'}
+                      </button>
+                    </div>
+                  )}
+                  {promoError && <p style={{ fontSize: 12, color: '#da291c', marginTop: 4 }}>{promoError}</p>}
                 </div>
                 <div style={{ ...cosmosCardFoot, justifyContent: 'flex-end' }}>
                   <button

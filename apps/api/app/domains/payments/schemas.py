@@ -86,6 +86,12 @@ class RefundRequest(BaseModel):
     amount: Decimal = Field(gt=Decimal("0"))
     reason: str = Field(max_length=500)
     initiated_by: UUID
+    # Goodwill refund path (agent-issued, bypasses manager approval)
+    is_goodwill: bool = False
+    goodwill_under: Optional[Decimal] = None   # agent authority ceiling
+    goodwill_session_id: Optional[str] = None  # agent session for ledger
+    goodwill_customer_id: Optional[UUID] = None
+    goodwill_ra_id: Optional[UUID] = None
 
 
 class WebhookEvent(BaseModel):
@@ -107,6 +113,8 @@ class PreAuthResponse(BaseModel):
     amount_authorized: Decimal
     currency: str
     auth_expiry_at: Optional[datetime] = None
+    gateway_session_token: Optional[str] = None   # Tyro iClient session token (None for Stripe)
+    iclient_sdk_url: Optional[str] = None         # Set from settings when gateway=TYRO
 
 
 class CaptureResponse(BaseModel):

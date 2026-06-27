@@ -94,3 +94,7 @@ test-results/
 .cache/
 tmp/
 temp/
+
+# Local Claude Code config & build artifacts
+.claude/
+apps/web-counter/dev-dist/

@@ -157,9 +157,13 @@ export function OverduePage() {
   )
 
   return (
-    <div className="p-4 space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Overdue Rentals</h1>
+    <div className="space-y-6">
+      <div className="flex items-end justify-between">
+        <div>
+          <p style={{ margin: '0 0 8px', fontSize: 11, fontWeight: 600, letterSpacing: '1.4px', textTransform: 'uppercase', color: '#969696' }}>Counter Operations</p>
+          <div style={{ width: 32, height: 1, background: '#303030', marginBottom: 12 }} />
+          <h1 style={{ margin: 0, fontSize: 26, fontWeight: 500, letterSpacing: '0.195px', color: '#ffffff', lineHeight: 1.2 }}>Overdue Rentals</h1>
+        </div>
         {!isLoading && (
           <Badge variant={sorted.length > 0 ? 'destructive' : 'success'} aria-live="polite">
             {sorted.length} overdue

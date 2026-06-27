@@ -83,6 +83,11 @@ class CheckInRequest(BaseModel):
     odometer_in: int = Field(ge=0)
     fuel_level_in: int = Field(ge=0, le=8)
     agent_notes: Optional[str] = Field(default=None, max_length=2000)
+    return_condition: str = Field(
+        default="NO_DAMAGE",
+        description="NO_DAMAGE | DAMAGE_FOUND | PENDING_INSPECTION"
+    )
+    damage_charge_amount: Decimal = Field(default=Decimal("0.00"), ge=Decimal("0"))
 
 
 class CheckInResponse(BaseModel):

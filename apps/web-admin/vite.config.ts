@@ -12,7 +12,9 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': {
-        target: 'http://localhost:8000',
+        // 127.0.0.1 (not localhost) so it never resolves to an IPv6 listener
+        // ahead of the local Uvicorn — e.g. a Docker-forwarded :8000 port.
+        target: 'http://127.0.0.1:8000',
         changeOrigin: true,
       },
     },

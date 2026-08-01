@@ -19,13 +19,39 @@ export function getActiveTenant(): string | null {
   return activeTenantId
 }
 
-function resolveTenant(hostname: string): string {
-  // Runtime resolution wins: it reflects the workspace actually signed into.
-  if (activeTenantId) return activeTenantId
-  const envTenant = (import.meta as Record<string, any>).env?.VITE_TENANT_ID as string | undefined
-  if (envTenant) return envTenant
+const NON_TENANT_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', ''])
+
+/** True when the hostname carries a workspace label the server can resolve. */
+function hostHasTenantLabel(hostname: string): boolean {
+  if (NON_TENANT_HOSTS.has(hostname)) return false
   const parts = hostname.split('.')
-  return parts.length >= 3 ? parts[0] : 'dev'
+  // acme.localtest.me / acme.rcm.ceez.ai — a label in front of the base domain.
+  return parts.length >= 3
+}
+
+/**
+ * The tenant id to send, or null to send no header at all.
+ *
+ * Order matters, and it used to be wrong. VITE_TENANT_ID was consulted BEFORE
+ * the hostname, and both dev env files pin it to the seed tenant — so every
+ * request made before the app finished resolving its workspace was stamped
+ * with test-rental-co's id no matter which subdomain you were on. On
+ * acme-iso.localtest.me the boot requests spoke for the wrong tenant entirely.
+ *
+ * The old fallbacks were also unusable values: it returned the SLUG, or the
+ * literal string 'dev', into a header the API parses as a UUID.
+ *
+ * Now: a resolved workspace wins; otherwise a tenant hostname means send
+ * nothing and let the server derive the tenant from Host, which is the one
+ * signal a caller cannot forge and the order app/core/tenancy.py already
+ * enforces. The env var survives only for plain localhost, where there is no
+ * label to read.
+ */
+function resolveTenant(hostname: string): string | null {
+  if (activeTenantId) return activeTenantId
+  if (hostHasTenantLabel(hostname)) return null
+  const envTenant = (import.meta as Record<string, any>).env?.VITE_TENANT_ID as string | undefined
+  return envTenant ?? null
 }
 
 /**
@@ -42,7 +68,12 @@ export const apiClient = createClient<paths>({
 apiClient.use({
   onRequest({ request }) {
     const tenant = resolveTenant(window.location.hostname)
-    request.headers.set('X-Tenant-ID', tenant)
+    // No header when the hostname already names the workspace. Sending one
+    // anyway risks a 403: the API rejects a header that disagrees with the
+    // host rather than silently preferring either.
+    if (tenant) {
+      request.headers.set('X-Tenant-ID', tenant)
+    }
     return request
   },
   onResponse({ response }) {

@@ -33,6 +33,14 @@ export default defineConfig({
   ],
   server: {
     port: 3001,
+    // Bind every interface, not just loopback. Without this Vite listened on
+    // [::1] alone, so http://acme.localtest.me:3001 refused the connection —
+    // and the counter app was the only one of the three that could not be
+    // reached on a workspace hostname, which is how tenants are told apart.
+    host: true,
+    // Vite blocks unknown Host headers by default; the workspace label varies
+    // per tenant, so the whole suffix has to be allowed.
+    allowedHosts: ['.localtest.me', 'localhost', '127.0.0.1'],
     proxy: {
       '/api': {
         // 127.0.0.1 (not localhost) so it never resolves to an IPv6 listener

@@ -105,6 +105,7 @@ def create_app() -> FastAPI:
     # ── Router registration ───────────────────────────────────────────────────
     from app.domains.auth.router         import router as auth_router
     from app.domains.tenants.router      import router as tenants_router
+    from app.domains.catalogue.router import router as catalogue_router
     from app.domains.tenants.public_router import router as public_router
     from app.domains.platform.router       import router as platform_router
     from app.domains.tenants.team_router   import router as team_router
@@ -133,6 +134,7 @@ def create_app() -> FastAPI:
     # Anonymous surface: sign-up and runtime config. Kept in its own
     # namespace so it is obvious in review which handlers may not trust
     # their input, and so the proxy can rate-limit it separately.
+    app.include_router(catalogue_router,      prefix=f"{PREFIX}/catalogue",     tags=["catalogue"])
     app.include_router(public_router,         prefix=f"{PREFIX}/public",        tags=["public"])
     # Cross-tenant administration. Gated on staff_users.is_platform_admin,
     # which no tenant-facing endpoint can set — see the router docstring.

@@ -201,17 +201,37 @@ async def db_probes() -> None:
             f"{leaked} rows visible under a tenant that does not exist",
         )
 
-        # Probe 2b: shared catalogues (tenant_id IS NULL) must stay READABLE —
-        # a strict policy here silently breaks quoting for every tenant.
+        # Probe 2b: a tenant must OWN its catalogue, not borrow a shared one.
+        #
+        # These used to be global rows with tenant_id IS NULL that every tenant
+        # read in common. Nobody owned them, so nobody could change them, and a
+        # policy that admits NULL for reads admits it for DELETE too — which is
+        # how an unscoped delete once wiped every tenant's templates at once.
+        # Since migration 065 each tenant has its own copies and the templates
+        # are invisible to tenants.
         await conn.execute(
             "SELECT set_config('app.current_tenant_id', $1, false)", str(A_TENANT)
         )
-        classes = await conn.fetchval("SELECT count(*) FROM vehicle_classes")
-        check(
-            "db: shared catalogue is readable by a tenant",
-            classes > 0,
-            "vehicle_classes empty — global rows hidden by an over-strict policy",
-        )
+        for table, label in (("vehicle_classes", "vehicle classes"),
+                             ("extras_catalog", "extras"),
+                             ("notification_templates", "notification templates")):
+            owned = await conn.fetchval(
+                f"SELECT count(*) FROM {table} WHERE tenant_id = $1", A_TENANT  # noqa: S608
+            )
+            check(
+                f"db: tenant owns its own {label}",
+                owned > 0,
+                f"{table} has no rows owned by this tenant — quoting and "
+                "notifications will silently produce nothing",
+            )
+            visible_global = await conn.fetchval(
+                f"SELECT count(*) FROM {table} WHERE tenant_id IS NULL"  # noqa: S608
+            )
+            check(
+                f"db: seed templates are hidden from tenants in {table}",
+                visible_global == 0,
+                f"{visible_global} unowned rows visible — catalogues are still shared",
+            )
 
         # Probe 2c: ...but a tenant must not be able to WRITE a global row,
         # which would publish into every other tenant's catalogue.
@@ -229,20 +249,20 @@ async def db_probes() -> None:
             check("db: tenant cannot write a global catalogue row",
                   "row-level security" in str(exc).lower(), str(exc)[:100])
 
-        # Probe 2d: a genuinely UNSCOPED delete, with a tenant adopted, must not
-        # reach the SHARED (tenant_id IS NULL) catalogue rows.
+        # Probe 2d: an unscoped DELETE must remove ONLY this tenant's rows.
         #
-        # An earlier version of this probe ran
-        #     DELETE FROM extras_catalog WHERE tenant_id = $1
-        # which is explicitly scoped, so it proved nothing and passed while the
-        # hole was wide open. The statement below has no WHERE clause at all —
-        # exactly what an unscoped tenant-deletion routine issues. DELETE is
-        # filtered by the policy's USING clause only, and a USING clause that
-        # admits `tenant_id IS NULL` therefore admits deleting every tenant's
-        # shared rows.
+        # This probe has to keep earning its place. It once ran an explicitly
+        # scoped DELETE and proved nothing; then it checked that shared rows
+        # survived, which became vacuous the moment migration 065 hid the seed
+        # templates from tenants (before and after both zero, always green).
+        #
+        # The assertion that still means something: the number of rows an
+        # unscoped DELETE removes must equal exactly what this tenant owns. If
+        # it reached another tenant's rows or the seed templates, it would
+        # remove more.
         for table in ("extras_catalog", "notification_templates", "vehicle_classes"):
-            before = await conn.fetchval(
-                f"SELECT count(*) FROM {table} WHERE tenant_id IS NULL"  # noqa: S608
+            owned = await conn.fetchval(
+                f"SELECT count(*) FROM {table} WHERE tenant_id = $1", A_TENANT  # noqa: S608
             )
             try:
                 async with conn.transaction():
@@ -250,59 +270,47 @@ async def db_probes() -> None:
                         "SELECT set_config('app.current_tenant_id', $1, true)",
                         str(A_TENANT),
                     )
-                    await conn.execute(f"DELETE FROM {table}")  # noqa: S608
-                    still = await conn.fetchval(
-                        f"SELECT count(*) FROM {table} WHERE tenant_id IS NULL"  # noqa: S608
-                    )
-                    raise _Rollback(still)
+                    status = await conn.execute(f"DELETE FROM {table}")  # noqa: S608
+                    removed = int(status.split()[-1])
+                    raise _Rollback(removed)
             except _Rollback as exc:
                 check(
-                    f"db: unscoped DELETE cannot reach shared rows in {table}",
-                    exc.remaining == before,
-                    f"shared rows went {before} -> {exc.remaining}",
+                    f"db: unscoped DELETE removes only own rows in {table}",
+                    exc.remaining == owned,
+                    f"tenant owns {owned} rows but the delete removed "
+                    f"{exc.remaining} — it reached beyond this tenant",
                 )
             except asyncpg.exceptions.InsufficientPrivilegeError:
-                check(f"db: unscoped DELETE cannot reach shared rows in {table}", True,
+                check(f"db: unscoped DELETE removes only own rows in {table}", True,
                       "denied by policy")
             except asyncpg.exceptions.ForeignKeyViolationError as exc:
-                # A referencing row happened to block this delete. That is a
-                # real barrier but it is not a tenancy control — it depends on
-                # data that may not exist tomorrow. Recorded as passing so the
-                # suite is not red for the wrong reason, with the caveat stated.
-                check(f"db: unscoped DELETE cannot reach shared rows in {table}", True,
+                check(f"db: unscoped DELETE removes only own rows in {table}", True,
                       f"blocked by FK, not by policy: {str(exc).split(chr(10))[0][:70]}")
 
-        # Probe 2e: a tenant must not be able to CLAIM a shared row by rewriting
-        # its tenant_id. UPDATE is filtered by USING (which rows are visible to
-        # change) and WITH CHECK (what they may become) — if USING admits NULL,
-        # a global row can be adopted into one tenant and vanish for everyone.
+        # Probe 2e: a tenant must not be able to hand its rows to another
+        # tenant, nor claim anyone else's. WITH CHECK governs what a row may
+        # become; USING governs which rows are even visible to change.
         for table in ("vehicle_classes", "extras_catalog"):
-            before = await conn.fetchval(
-                f"SELECT count(*) FROM {table} WHERE tenant_id IS NULL"  # noqa: S608
-            )
             try:
                 async with conn.transaction():
                     await conn.execute(
                         "SELECT set_config('app.current_tenant_id', $1, true)",
                         str(A_TENANT),
                     )
-                    await conn.execute(
-                        f"UPDATE {table} SET tenant_id = $1 WHERE tenant_id IS NULL",  # noqa: S608
-                        A_TENANT,
+                    status = await conn.execute(
+                        f"UPDATE {table} SET tenant_id = $1", B_TENANT  # noqa: S608
                     )
-                    still = await conn.fetchval(
-                        f"SELECT count(*) FROM {table} WHERE tenant_id IS NULL"  # noqa: S608
-                    )
-                    raise _Rollback(still)
+                    moved = int(status.split()[-1])
+                    raise _Rollback(moved)
             except _Rollback as exc:
                 check(
-                    f"db: tenant cannot hijack shared rows in {table}",
-                    exc.remaining == before,
-                    f"shared rows went {before} -> {exc.remaining} (claimed by tenant A)",
+                    f"db: tenant cannot reassign its {table} rows to another tenant",
+                    exc.remaining == 0,
+                    f"{exc.remaining} rows were handed to tenant B",
                 )
-            except asyncpg.exceptions.InsufficientPrivilegeError:
-                check(f"db: tenant cannot hijack shared rows in {table}", True,
-                      "denied by policy")
+            except Exception:  # noqa: BLE001 — a policy refusal is the pass case
+                check(f"db: tenant cannot reassign its {table} rows to another tenant",
+                      True, "denied by policy")
 
         # Probe 2f: the audit schema is not exempt. audit.audit_events stores
         # full before/after row snapshots, so it is a superset of the PII that

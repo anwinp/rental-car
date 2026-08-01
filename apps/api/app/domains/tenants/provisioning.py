@@ -23,11 +23,21 @@ from decimal import Decimal
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-# Shared catalogues (vehicle classes, extras, notification templates, tax
-# templates) live as global rows with tenant_id IS NULL and are readable by
-# every tenant — see migration 053. They are deliberately NOT copied per tenant:
-# duplicating 35 templates per organisation buys nothing and drifts immediately.
-# What a tenant genuinely needs of its own is created below.
+# Catalogues (vehicle classes, extras, notification templates, tax templates)
+# are COPIED per tenant — see migration 065. They used to be global rows with
+# tenant_id IS NULL that everyone read in common, which meant no tenant could
+# rename a vehicle class, price its own extras, or word its own confirmation
+# email: the policy correctly refused to let anyone edit a row they did not own,
+# and nobody owned them.
+#
+# Sharing rows also created isolation bugs that cannot exist once every row has
+# an owner. A policy admitting `tenant_id IS NULL` for reads admits it for
+# DELETE as well, because DELETE is filtered by USING — which is how an unscoped
+# delete once wiped all 35 templates for every tenant at once.
+#
+# The global rows still exist as the template new tenants are built from, but
+# they are invisible under the tenant-scoped policies; only
+# clone_catalogues_for_tenant() reads them, as SECURITY DEFINER.
 
 
 @dataclass
@@ -57,6 +67,22 @@ async def provision_tenant_defaults(
     Idempotent: re-running against an already-provisioned tenant adds nothing.
     """
     result = ProvisionResult(tenant_id=tenant_id, admin_user_id=uuid.uuid4())
+
+    # ── Own copy of the catalogues ───────────────────────────────────────────
+    # Must run first: the rate schedule below prices per vehicle class, and the
+    # classes it prices have to be this tenant's own rows.
+    existing_classes = (
+        await session.execute(
+            text("SELECT count(*) FROM vehicle_classes WHERE tenant_id = :t"),
+            {"t": str(tenant_id)},
+        )
+    ).scalar() or 0
+
+    if existing_classes == 0:
+        await session.execute(
+            text("SELECT clone_catalogues_for_tenant(:t)"), {"t": str(tenant_id)}
+        )
+        result.steps.append("catalogues_cloned")
 
     # ── Starter location ─────────────────────────────────────────────────────
     # Vehicles need a home branch before any of them can be rented, so an
@@ -174,8 +200,12 @@ async def provision_tenant_defaults(
             classes = (
                 await session.execute(
                     text(
+                        # This tenant's own classes. Was "tenant_id IS NULL OR
+                        # tenant_id = :t" when catalogues were shared; since
+                        # migration 065 every tenant has its own copies and the
+                        # global templates are not visible here at all.
                         "SELECT class_id, sort_order FROM vehicle_classes "
-                        "WHERE tenant_id IS NULL OR tenant_id = :t "
+                        "WHERE tenant_id = :t "
                         "ORDER BY sort_order NULLS LAST"
                     ),
                     {"t": str(tenant_id)},

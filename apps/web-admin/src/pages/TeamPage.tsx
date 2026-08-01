@@ -33,6 +33,14 @@ interface Team {
   seats_limit: number | null
 }
 
+// Kept in step with INVITABLE_ROLES in team_router.py. The API is the
+// authority — it refuses a role the caller does not outrank — but offering a
+// role here that the caller cannot grant produces a 403 after they have filled
+// the form in, so the two lists should not drift.
+//
+// FINANCE was previously missing while FINANCE_ANALYST was offered, and
+// FINANCE_ANALYST had no permissions row at all: the one finance role a
+// customer could pick was the broken one. Both work as of migration 063.
 const ROLES = [
   ['COUNTER_AGENT', 'Counter agent'],
   ['SENIOR_AGENT', 'Senior agent'],
@@ -41,7 +49,9 @@ const ROLES = [
   ['FLEET_MANAGER', 'Fleet manager'],
   ['MAINTENANCE_TECH', 'Maintenance technician'],
   ['CLAIMS_COORDINATOR', 'Claims coordinator'],
+  ['FINANCE', 'Finance'],
   ['FINANCE_ANALYST', 'Finance analyst'],
+  ['EXECUTIVE', 'Executive'],
   ['READONLY_AUDITOR', 'Auditor (read only)'],
   ['SYSTEM_ADMIN', 'Administrator'],
 ]

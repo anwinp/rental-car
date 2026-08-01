@@ -48,6 +48,22 @@ def _hash(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
+# What each administrator role may hand out. A role must never be able to mint
+# an account that outranks it: BRANCH_MANAGER and REGIONAL_MANAGER are in
+# ADMIN_ROLES, and SYSTEM_ADMIN is in INVITABLE_ROLES, so without this a branch
+# manager could invite themselves an administrator and accept it from their own
+# inbox. Verified live before this was added: HTTP 201.
+#
+# Only a SUPER_ADMIN may create another SUPER_ADMIN.
+_GRANTABLE_ROLES: dict[str, set[str]] = {
+    "SUPER_ADMIN":      INVITABLE_ROLES | {"SUPER_ADMIN"},
+    "SYSTEM_ADMIN":     INVITABLE_ROLES,
+    "REGIONAL_MANAGER": INVITABLE_ROLES - {"SYSTEM_ADMIN", "EXECUTIVE"},
+    "BRANCH_MANAGER":   INVITABLE_ROLES - {"SYSTEM_ADMIN", "EXECUTIVE",
+                                           "REGIONAL_MANAGER"},
+}
+
+
 def _require_team_admin(claims: UserClaims) -> UserClaims:
     if claims.primary_role not in ADMIN_ROLES:
         raise HTTPException(
@@ -55,6 +71,19 @@ def _require_team_admin(claims: UserClaims) -> UserClaims:
             detail="Only administrators can manage the team.",
         )
     return claims
+
+
+def _assert_may_grant(claims: UserClaims, role: str) -> None:
+    """Refuse an invitation for a role the caller does not outrank."""
+    allowed = _GRANTABLE_ROLES.get(claims.primary_role, set())
+    if role not in allowed:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                f"A {claims.primary_role.replace('_', ' ').lower()} cannot "
+                f"invite someone as {role.replace('_', ' ').lower()}."
+            ),
+        )
 
 
 # ── Schemas ──────────────────────────────────────────────────────────────────
@@ -125,6 +154,14 @@ async def list_team(
     session: AsyncSession = Depends(get_session),
     claims: UserClaims = Depends(get_current_user),
 ) -> TeamResponse:
+    # Every authenticated staff member could read this, so a counter agent
+    # could enumerate every colleague's name, email address and role — and the
+    # pending-invitation list alongside it. Confirmed live: a COUNTER_AGENT
+    # session returned the full roster.
+    #
+    # The page this feeds is the team-management screen, which only these roles
+    # can act on anyway; there is no read-only use for it below that line.
+    _require_team_admin(claims)
     members = (
         await session.execute(
             text(
@@ -190,6 +227,7 @@ async def invite(
     claims: UserClaims = Depends(get_current_user),
 ) -> SimpleResult:
     _require_team_admin(claims)
+    _assert_may_grant(claims, body.role)
 
     existing = (
         await session.execute(

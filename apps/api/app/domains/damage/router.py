@@ -141,7 +141,7 @@ async def list_claims(
     date_to: Optional[datetime] = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
-    claims: UserClaims = Depends(require_permission("vehicles", "read")),
+    claims: UserClaims = Depends(require_permission("damage", "read")),
     session: AsyncSession = Depends(get_session),
 ) -> list[DamageClaimResponse]:
     """List damage claims with optional filters (status, vehicle, date range)."""
@@ -161,7 +161,7 @@ async def list_claims(
 @router.get("/claims/{claim_id}", response_model=DamageClaimResponse)
 async def get_claim(
     claim_id: uuid.UUID,
-    claims: UserClaims = Depends(require_permission("vehicles", "read")),
+    claims: UserClaims = Depends(require_permission("damage", "read")),
     session: AsyncSession = Depends(get_session),
 ) -> DamageClaimResponse:
     """Fetch a damage claim by ID."""
@@ -174,7 +174,7 @@ async def get_claim(
 async def transition_claim_status(
     claim_id: uuid.UUID,
     body: ClaimStatusUpdate,
-    claims: UserClaims = Depends(require_permission("vehicles", "update")),
+    claims: UserClaims = Depends(require_permission("damage", "update")),
     session: AsyncSession = Depends(get_session),
 ) -> DamageClaimResponse:
     """
@@ -204,7 +204,7 @@ async def transition_claim_status(
 @router.get("/claims/{claim_id}/lou", response_model=LOUCalculation)
 async def calculate_lou(
     claim_id: uuid.UUID,
-    claims: UserClaims = Depends(require_permission("vehicles", "read")),
+    claims: UserClaims = Depends(require_permission("damage", "read")),
     session: AsyncSession = Depends(get_session),
 ) -> LOUCalculation:
     """

@@ -1,10 +1,23 @@
 import { BrowserRouter, Routes, Route, Navigate, useNavigate } from 'react-router-dom'
-import { useState, type FormEvent } from 'react'
+import { useState, useEffect, type FormEvent } from 'react'
 import { QueryProvider } from '@rcm/ui/query'
 
-const _TENANT = '00000000-0000-0000-0000-000000000001'
-const _TENANT_HEADERS = { 'Content-Type': 'application/json', 'X-Tenant-ID': _TENANT }
+import {
+  cachedTenant, currentSlug, fetchTenantConfig, rememberSlug, setCachedTenant,
+  slugFromHostname, tenantHeaders, resolveTenant,
+} from './tenant'
+
+// The tenant is resolved at runtime (hostname, ?workspace=, or the last one
+// signed into) rather than compiled in, so one build serves every workspace.
+const _TENANT = () => cachedTenant()?.tenant_id ?? ''
+const _TENANT_HEADERS = () => tenantHeaders()
 import { AuthProvider, RouteGuard, useAuth } from '@rcm/ui/auth'
+import SignupPage from './pages/SignupPage'
+import OnboardingPage from './pages/OnboardingPage'
+import VerifyPage from './pages/VerifyPage'
+import PlatformTenantsPage from './pages/PlatformTenantsPage'
+import TeamPage from './pages/TeamPage'
+import AcceptInvitePage from './pages/AcceptInvitePage'
 import { Toaster } from '@rcm/ui'
 import { UserRole } from '@rcm/shared-types'
 import { apiClient } from '@rcm/api-client'
@@ -73,6 +86,15 @@ function LoginPage() {
   const [showPassword, setShowPassword] = useState(false)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const slugFromHost = slugFromHostname()
+  const [workspace, setWorkspace] = useState(currentSlug() ?? '')
+  const [workspaceError, setWorkspaceError] = useState('')
+
+  // Set when the password was accepted but the account has a second factor.
+  // Holds no authority on its own — it is exchanged for a session at
+  // /auth/mfa/challenge along with a code.
+  const [mfaChallenge, setMfaChallenge] = useState<string | null>(null)
+  const [mfaCode, setMfaCode] = useState('')
 
   const [loginMethod, setLoginMethod] = useState<'email' | 'phone'>('email')
   const [phone, setPhone] = useState('')
@@ -83,8 +105,8 @@ function LoginPage() {
   async function handleSendOTP() {
     setOtpError('')
     const res = await fetch('/api/v1/auth/otp/send', {
-      method: 'POST', credentials: 'include', headers: _TENANT_HEADERS,
-      body: JSON.stringify({ phone_number: phone, tenant_id: _TENANT }),
+      method: 'POST', credentials: 'include', headers: _TENANT_HEADERS(),
+      body: JSON.stringify({ phone_number: phone, tenant_id: _TENANT() }),
     })
     if (res.ok) {
       setOtpSent(true)
@@ -97,8 +119,8 @@ function LoginPage() {
   async function handleVerifyOTP() {
     setOtpError('')
     const res = await fetch('/api/v1/auth/otp/verify', {
-      method: 'POST', credentials: 'include', headers: _TENANT_HEADERS,
-      body: JSON.stringify({ phone_number: phone, code: otpCode, tenant_id: _TENANT }),
+      method: 'POST', credentials: 'include', headers: _TENANT_HEADERS(),
+      body: JSON.stringify({ phone_number: phone, code: otpCode, tenant_id: _TENANT() }),
     })
     if (res.ok) {
       const data = await res.json()
@@ -120,35 +142,126 @@ function LoginPage() {
     }
   }
 
+  /**
+   * On a generic host we do not authenticate at all — we send the browser to
+   * the workspace's own address first.
+   *
+   * The session cookie is host-only (no Domain attribute), so a cookie set on
+   * localhost is never sent to acme.localtest.me. Signing in here and then
+   * redirecting would land the user on their workspace URL with no session,
+   * i.e. instantly logged out. Moving first means the cookie is set on the
+   * host that will use it, and the address bar shows the workspace from then on.
+   */
+  async function handleWorkspaceContinue(e: FormEvent) {
+    e.preventDefault()
+    setWorkspaceError('')
+    setLoading(true)
+    try {
+      const slug = workspace.trim().toLowerCase()
+      if (!slug) {
+        setWorkspaceError('Enter your workspace address.')
+        return
+      }
+      const config = await fetchTenantConfig(slug)
+      if (!config) {
+        setWorkspaceError(`No workspace found at "${slug}".`)
+        return
+      }
+      rememberSlug(config.slug)
+      // admin_url is built server-side from the configured public host, so it
+      // is correct in both local development and production.
+      const target = config.admin_url ?? `${window.location.protocol}//${slug}.${window.location.host}`
+      window.location.href = `${target.replace(/\/$/, '')}/login`
+    } catch {
+      setWorkspaceError('Could not reach the server.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
     setError('')
+    setWorkspaceError('')
     setLoading(true)
     try {
+      // Resolve the workspace first: without a tenant the API cannot tell which
+      // organisation this email belongs to, and the same address may exist in
+      // several of them.
+      const slug = slugFromHost ?? workspace
+      if (!slug) {
+        setWorkspaceError('Enter your workspace address.')
+        return
+      }
+      if (cachedTenant()?.slug !== slug) {
+        const config = await fetchTenantConfig(slug)
+        if (!config) {
+          setWorkspaceError(`No workspace found at "${slug}".`)
+          return
+        }
+        setCachedTenant(config)
+        rememberSlug(config.slug)
+      }
       const { data, error: apiError } = await (apiClient as any).POST('/auth/login', {
         body: { email, password, app_context: 'web-admin' },
       })
       if (apiError || !data) {
+        // The password was right but the account needs a second factor. The
+        // API withholds the session and returns a challenge id instead.
+        const challenge = (apiError as any)?.challenge_id
+        if (challenge) {
+          setMfaChallenge(challenge)
+          setMfaCode('')
+          return
+        }
         setError(typeof apiError === 'string' ? apiError : 'Invalid email or password')
         return
       }
-      setUser(data)
-      switch (data.role) {
-        case 'EXECUTIVE':          navigate('/executive', { replace: true }); break
-        case 'REGIONAL_MANAGER':   navigate('/regional', { replace: true }); break
-        case 'COUNTER_AGENT':      navigate('/checkout', { replace: true }); break
-        case 'SENIOR_AGENT':       navigate('/staff', { replace: true }); break
-        case 'FLEET_MANAGER':      navigate('/back-office', { replace: true }); break
-        case 'MAINTENANCE_TECH':   navigate('/maintenance', { replace: true }); break
-        case 'FINANCE_ANALYST':    navigate('/reports', { replace: true }); break
-        case 'CLAIMS_COORDINATOR': navigate('/damage', { replace: true }); break
-        default:                   navigate('/dashboard', { replace: true }); break
-      }
+      goToLanding(data)
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Login failed. Please try again.'
       setError(msg)
     } finally {
       setLoading(false)
+    }
+  }
+
+  /** Exchange the challenge plus a code for a real session. */
+  async function handleMfaSubmit(e: FormEvent) {
+    e.preventDefault()
+    setError('')
+    setLoading(true)
+    try {
+      const { data, error: apiError } = await (apiClient as any).POST('/auth/mfa/challenge', {
+        body: { challenge_id: mfaChallenge, code: mfaCode.trim() },
+      })
+      if (apiError || !data) {
+        setError('That code was not accepted. Check your authenticator and try again.')
+        setMfaCode('')
+        return
+      }
+      setMfaChallenge(null)
+      goToLanding(data)
+    } catch {
+      setError('Could not reach the server.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  /** Where a signed-in user lands, by role. Shared by both sign-in paths. */
+  function goToLanding(data: any) {
+    setUser(data)
+    switch (data.role) {
+      case 'EXECUTIVE':          navigate('/executive', { replace: true }); break
+      case 'REGIONAL_MANAGER':   navigate('/regional', { replace: true }); break
+      case 'COUNTER_AGENT':      navigate('/checkout', { replace: true }); break
+      case 'SENIOR_AGENT':       navigate('/staff', { replace: true }); break
+      case 'FLEET_MANAGER':      navigate('/back-office', { replace: true }); break
+      case 'MAINTENANCE_TECH':   navigate('/maintenance', { replace: true }); break
+      case 'FINANCE_ANALYST':    navigate('/reports', { replace: true }); break
+      case 'CLAIMS_COORDINATOR': navigate('/damage', { replace: true }); break
+      default:                   navigate('/dashboard', { replace: true }); break
     }
   }
 
@@ -270,7 +383,109 @@ function LoginPage() {
             </div>
           )}
 
-          <form onSubmit={handleSubmit} className="space-y-5" style={{ display: loginMethod === 'phone' ? 'none' : undefined }}>
+          {/* Generic host: choose the workspace, then continue on its own
+              address. Credentials are only ever entered on the workspace host,
+              where the session cookie belongs. */}
+          {!slugFromHost && (
+            <form onSubmit={handleWorkspaceContinue} className="space-y-5">
+              <div className="space-y-1.5">
+                <label htmlFor="workspace" className="text-sm font-medium" style={{ color: 'var(--text-2)' }}>
+                  Workspace
+                </label>
+                <div className="flex items-stretch overflow-hidden rounded-lg" style={{ border: '1px solid var(--border)' }}>
+                  <input
+                    id="workspace"
+                    autoFocus
+                    required
+                    value={workspace}
+                    onChange={(e) => setWorkspace(e.target.value.trim().toLowerCase())}
+                    className="min-w-0 flex-1 bg-transparent px-3.5 py-2.5 text-sm focus:outline-none"
+                    placeholder="your-company"
+                    style={{ fontFamily: 'ui-monospace, monospace', color: 'var(--text-1)' }}
+                  />
+                </div>
+                {workspaceError && (
+                  <p style={{ color: '#da291c', fontSize: 12 }}>{workspaceError}</p>
+                )}
+                <p className="text-xs" style={{ color: 'var(--text-3)' }}>
+                  You&apos;ll sign in at your workspace&apos;s own address.
+                </p>
+              </div>
+              <button
+                type="submit"
+                disabled={loading || !workspace}
+                className="w-full rounded-lg px-4 py-3 text-sm font-semibold text-white transition disabled:opacity-50"
+                style={{ background: 'var(--accent)' }}
+              >
+                {loading ? 'Finding your workspace…' : 'Continue'}
+              </button>
+            </form>
+          )}
+
+          {/* Second factor. Replaces the credential form once the password has
+              been accepted — the session does not exist until a code is
+              verified, so there is nothing to go back to except starting over. */}
+          {mfaChallenge && (
+            <form onSubmit={handleMfaSubmit} className="space-y-5">
+              <div>
+                <h2 className="text-lg font-semibold" style={{ color: 'var(--text-1)' }}>
+                  Two-step verification
+                </h2>
+                <p className="mt-1 text-sm" style={{ color: 'var(--text-2)' }}>
+                  Enter the 6-digit code from your authenticator app. You can also
+                  use one of your backup codes.
+                </p>
+              </div>
+
+              {error && (
+                <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+                  {error}
+                </div>
+              )}
+
+              <div className="space-y-1.5">
+                <label htmlFor="mfa-code" className="text-sm font-medium" style={{ color: 'var(--text-2)' }}>
+                  Verification code
+                </label>
+                <input
+                  id="mfa-code"
+                  inputMode="text"
+                  autoComplete="one-time-code"
+                  autoFocus
+                  required
+                  value={mfaCode}
+                  onChange={(e) => setMfaCode(e.target.value)}
+                  placeholder="123456"
+                  className="w-full rounded-lg border px-3.5 py-2.5 font-mono tracking-widest"
+                  style={{ borderColor: 'var(--border)', background: 'var(--surface-2)', color: 'var(--text-1)' }}
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={loading || mfaCode.trim().length < 6}
+                className="w-full rounded-lg px-4 py-3 text-sm font-semibold text-white disabled:opacity-50"
+                style={{ background: 'var(--accent)' }}
+              >
+                {loading ? 'Verifying…' : 'Verify and sign in'}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => { setMfaChallenge(null); setMfaCode(''); setError('') }}
+                className="w-full text-sm"
+                style={{ color: 'var(--text-2)' }}
+              >
+                Start over
+              </button>
+            </form>
+          )}
+
+          <form
+            onSubmit={handleSubmit}
+            className="space-y-5"
+            style={{ display: (mfaChallenge || loginMethod === 'phone' || !slugFromHost) ? 'none' : undefined }}
+          >
             <div className="space-y-1.5">
               <label htmlFor="email" className="text-sm font-medium" style={{ color: 'var(--text-2)' }}>
                 Email address
@@ -340,9 +555,25 @@ function LoginPage() {
             </button>
           </form>
 
-          <p className="mt-8 text-center text-xs" style={{ color: 'var(--text-3)' }}>
-            Need access? Contact your system administrator.
-          </p>
+          {/* Two different audiences end up on this screen: staff of an
+              existing workspace, and someone starting a new company. The
+              second had no route forward from here at all. */}
+          <div className="mt-8 border-t pt-6 text-center" style={{ borderColor: 'var(--border)' }}>
+            <p className="text-sm" style={{ color: 'var(--text-2)' }}>
+              Don&apos;t have a workspace?{' '}
+              <button
+                type="button"
+                onClick={() => navigate('/signup')}
+                className="font-semibold underline underline-offset-4"
+                style={{ color: 'var(--accent)' }}
+              >
+                Create one
+              </button>
+            </p>
+            <p className="mt-3 text-xs" style={{ color: 'var(--text-3)' }}>
+              Staff of an existing workspace: contact your system administrator.
+            </p>
+          </div>
         </div>
       </div>
     </div>
@@ -370,6 +601,37 @@ function UnauthorizedPage() {
   )
 }
 
+/**
+ * Re-establishes the workspace before anything that needs it renders.
+ *
+ * The resolved tenant lives in memory, so a hard page load (or refresh) starts
+ * with none. Without this gate the session check goes out with no tenant,
+ * gets a 401, and bounces a signed-in user to the login screen on every
+ * refresh. Blocking for one lookup is the difference between a working app and
+ * one that appears to log you out at random.
+ */
+function TenantBoot({ children }: { children: React.ReactNode }) {
+  const [ready, setReady] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    resolveTenant().finally(() => {
+      if (!cancelled) setReady(true)
+    })
+    return () => { cancelled = true }
+  }, [])
+
+  if (!ready) {
+    return (
+      <div className="flex min-h-screen items-center justify-center" style={{ background: 'var(--page-bg)' }}>
+        <p className="text-sm" style={{ color: 'var(--text-3)' }}>Loading your workspace…</p>
+      </div>
+    )
+  }
+  return <>{children}</>
+}
+
+
 export default function App() {
   const EXEC_ROLES   = [UserRole.EXECUTIVE, UserRole.SYSTEM_ADMIN, UserRole.SUPER_ADMIN]
   const MANAGE_ROLES = [UserRole.BRANCH_MANAGER, UserRole.REGIONAL_MANAGER, UserRole.SYSTEM_ADMIN, UserRole.SUPER_ADMIN, UserRole.CLAIMS_COORDINATOR, UserRole.READONLY_AUDITOR]
@@ -380,6 +642,7 @@ export default function App() {
   const REGIONAL_ROLES = [UserRole.REGIONAL_MANAGER, UserRole.SYSTEM_ADMIN, UserRole.SUPER_ADMIN]
 
   return (
+    <TenantBoot>
     <QueryProvider>
       <AuthProvider>
         <BrowserRouter>
@@ -389,6 +652,11 @@ export default function App() {
 
           <Routes>
             <Route path="/login" element={<LoginPage />} />
+            {/* Public: no workspace exists yet, so this sits outside the guard */}
+            <Route path="/signup" element={<SignupPage />} />
+            <Route path="/verify" element={<VerifyPage />} />
+            {/* Public: the invitee has no account until they accept. */}
+            <Route path="/accept-invite" element={<AcceptInvitePage />} />
             <Route path="/unauthorized" element={<UnauthorizedPage />} />
 
             <Route
@@ -398,6 +666,11 @@ export default function App() {
                   <AdminLayout>
                     <Routes>
                       <Route path="/" element={<Navigate to="/dashboard" replace />} />
+                      <Route path="/onboarding" element={<OnboardingPage />} />
+                      {/* Access is enforced server-side by the platform-admin
+                          flag; the page renders "not found" for everyone else. */}
+                      <Route path="/platform" element={<PlatformTenantsPage />} />
+                      <Route path="/team" element={<TeamPage />} />
                       <Route path="/dashboard" element={
                         <RouteGuard roles={MANAGE_ROLES} redirectTo="/unauthorized">
                           <ManagerDashboardPage />
@@ -541,5 +814,6 @@ export default function App() {
         </BrowserRouter>
       </AuthProvider>
     </QueryProvider>
+    </TenantBoot>
   )
 }

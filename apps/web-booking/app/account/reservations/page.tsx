@@ -1,10 +1,11 @@
 'use client'
 
+import { tenantId } from '../../lib/tenant'
+
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 
-const TENANT = '00000000-0000-0000-0000-000000000001'
-const opts = { credentials: 'include' as const, headers: { 'X-Tenant-ID': TENANT } }
+const opts = { credentials: 'include' as const, headers: { 'X-Tenant-ID': tenantId() } }
 
 type ResStatus = 'ALL' | 'CONFIRMED' | 'CHECKED_OUT' | 'RETURNED' | 'CANCELLED'
 

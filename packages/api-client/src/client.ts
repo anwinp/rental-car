@@ -2,11 +2,26 @@ import createClient from 'openapi-fetch'
 import type { paths } from './schema'
 
 /**
- * Resolves the tenant identifier from env var (dev) or hostname (production).
- * e.g. acme.rcm.app → "acme"; localhost with VITE_TENANT_ID → that UUID
+ * The tenant this client speaks for.
+ *
+ * Set at runtime once the app has resolved its workspace, so one build serves
+ * every organisation. VITE_TENANT_ID remains only as a local-dev fallback for
+ * scripts and tests that never call setActiveTenant.
  */
+let activeTenantId: string | null = null
+
+/** Called by the app after resolving its workspace. */
+export function setActiveTenant(tenantId: string | null): void {
+  activeTenantId = tenantId
+}
+
+export function getActiveTenant(): string | null {
+  return activeTenantId
+}
+
 function resolveTenant(hostname: string): string {
-  // Allow override via env var — used in local dev where there's no subdomain
+  // Runtime resolution wins: it reflects the workspace actually signed into.
+  if (activeTenantId) return activeTenantId
   const envTenant = (import.meta as Record<string, any>).env?.VITE_TENANT_ID as string | undefined
   if (envTenant) return envTenant
   const parts = hostname.split('.')

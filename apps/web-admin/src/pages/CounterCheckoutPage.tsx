@@ -1,3 +1,4 @@
+import { tenantId } from '../tenant'
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useAuth } from '@rcm/ui/auth'
@@ -64,12 +65,11 @@ type CheckoutResult = {
 
 // ── API helpers ───────────────────────────────────────────────────────────────
 
-const TENANT = '00000000-0000-0000-0000-000000000001'
 
 async function fetchJSON(path: string) {
   const res = await fetch(`/api/v1${path}`, {
     credentials: 'include',
-    headers: { 'X-Tenant-ID': TENANT },
+    headers: { 'X-Tenant-ID': tenantId() },
   })
   if (!res.ok) {
     const body = await res.json().catch(() => ({}))
@@ -82,7 +82,7 @@ async function postJSON(path: string, body: unknown) {
   const res = await fetch(`/api/v1${path}`, {
     method: 'POST',
     credentials: 'include',
-    headers: { 'Content-Type': 'application/json', 'X-Tenant-ID': TENANT },
+    headers: { 'Content-Type': 'application/json', 'X-Tenant-ID': tenantId() },
     body: JSON.stringify(body),
   })
   if (!res.ok) {
@@ -100,7 +100,7 @@ function ShiftSummaryBar() {
     queryFn: async () => {
       const res = await fetch('/api/v1/reservations?status=CONFIRMED', {
         credentials: 'include',
-        headers: { 'X-Tenant-ID': TENANT },
+        headers: { 'X-Tenant-ID': tenantId() },
       })
       if (!res.ok) return []
       const d = await res.json()
@@ -115,7 +115,7 @@ function ShiftSummaryBar() {
     queryFn: async () => {
       const res = await fetch('/api/v1/reservations?status=CHECKED_OUT', {
         credentials: 'include',
-        headers: { 'X-Tenant-ID': TENANT },
+        headers: { 'X-Tenant-ID': tenantId() },
       })
       if (!res.ok) return []
       const d = await res.json()
@@ -339,7 +339,7 @@ export function CounterCheckoutPage() {
     try {
       const urlRes = await fetch('/api/v1/checkout/signature-upload-url', {
         method: 'POST', credentials: 'include',
-        headers: { 'Content-Type': 'application/json', 'X-Tenant-ID': TENANT },
+        headers: { 'Content-Type': 'application/json', 'X-Tenant-ID': tenantId() },
         body: JSON.stringify({ ra_id: raId }),
       })
       const { upload_url, s3_key } = await urlRes.json()
@@ -352,7 +352,7 @@ export function CounterCheckoutPage() {
 
       await fetch(`/api/v1/checkout/agreements/${raId}/signature`, {
         method: 'PATCH', credentials: 'include',
-        headers: { 'Content-Type': 'application/json', 'X-Tenant-ID': TENANT },
+        headers: { 'Content-Type': 'application/json', 'X-Tenant-ID': tenantId() },
         body: JSON.stringify({ s3_key, signature_hash: hashHex }),
       })
       setSigSaved(true)

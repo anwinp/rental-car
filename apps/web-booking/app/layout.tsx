@@ -20,11 +20,13 @@ export const metadata: Metadata = {
   openGraph: { type: 'website', siteName: 'RCM Rentals' },
 }
 
+import TenantBoot from './components/TenantBoot'
+
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en" className={inter.variable}>
       <body className="min-h-screen bg-background text-foreground font-sans antialiased">
-        <Providers>
+        <TenantBoot><Providers>
           <a
             href="#main-content"
             className="sr-only focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-[100] focus:rounded focus:bg-primary focus:px-4 focus:py-2 focus:text-sm focus:font-semibold focus:text-white"
@@ -43,6 +45,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           {/* Chat panel renders as fixed overlay — does not affect flex layout */}
           <AgentChatPanel />
         </Providers>
+      </TenantBoot>
       </body>
     </html>
   )

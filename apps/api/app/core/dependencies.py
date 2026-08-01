@@ -7,17 +7,34 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from app.core.database import AsyncSessionLocal, check_db_health
-from app.core.redis import check_redis_health, get_avail_redis, get_session_redis
+import structlog
+
+from app.core.redis import (
+    check_redis_health,
+    get_avail_redis,
+    get_broker_redis,
+    get_session_redis,
+)
 from app.core.security import UserClaims, get_current_user  # noqa: F401 — re-exported
 
 # ── Health router ─────────────────────────────────────────────────────────────
+
+log = structlog.get_logger()
 
 health_router = APIRouter()
 
 
 @health_router.get("/health", include_in_schema=False)
 async def health_check():
-    """ALB health check: ping DB and all Redis clusters. 503 on any failure."""
+    """Edge health check: ping the database and every Redis cluster.
+
+    Returns 503 if any dependency is down, so the proxy stops routing here.
+
+    Failure detail is deliberately NOT included in the response. This endpoint
+    is unauthenticated and published at rcm-api.ceez.ai, and interpolating the
+    driver's exception put the database host, port and username into the body
+    of a page anyone could fetch. The reason for a failure belongs in the logs.
+    """
     checks: dict[str, str] = {}
 
     # Database
@@ -26,23 +43,35 @@ async def health_check():
             await session.execute(text("SELECT 1"))
         checks["database"] = "ok"
     except Exception as exc:
-        checks["database"] = f"error: {exc}"
+        log.error("health_check_failed", component="database", error=str(exc))
+        checks["database"] = "error"
 
     # Redis availability cache
     try:
-        redis_avail = get_avail_redis()
-        await redis_avail.ping()
+        await get_avail_redis().ping()
         checks["redis_avail"] = "ok"
     except Exception as exc:
-        checks["redis_avail"] = f"error: {exc}"
+        log.error("health_check_failed", component="redis_avail", error=str(exc))
+        checks["redis_avail"] = "error"
 
     # Redis sessions
     try:
-        redis_session = get_session_redis()
-        await redis_session.ping()
+        await get_session_redis().ping()
         checks["redis_sessions"] = "ok"
     except Exception as exc:
-        checks["redis_sessions"] = f"error: {exc}"
+        log.error("health_check_failed", component="redis_sessions", error=str(exc))
+        checks["redis_sessions"] = "error"
+
+    # Redis broker. This was missing, and it is the one whose absence is
+    # invisible: the broker runs in its own container, so if it dies the API
+    # keeps answering 200, the proxy keeps routing, and every notification,
+    # report and scheduled job silently stops with nothing to alert on.
+    try:
+        await get_broker_redis().ping()
+        checks["redis_broker"] = "ok"
+    except Exception as exc:
+        log.error("health_check_failed", component="redis_broker", error=str(exc))
+        checks["redis_broker"] = "error"
 
     all_ok = all(v == "ok" for v in checks.values())
     status_code = 200 if all_ok else 503

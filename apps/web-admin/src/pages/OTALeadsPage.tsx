@@ -1,8 +1,8 @@
+import { tenantId } from '../tenant'
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 
-const TENANT = '00000000-0000-0000-0000-000000000001'
-const HEADERS = { 'Content-Type': 'application/json', 'X-Tenant-ID': TENANT }
+const HEADERS = { 'Content-Type': 'application/json', 'X-Tenant-ID': tenantId() }
 
 type OTALead = {
   lead_id: string; channel_name: string; ota_booking_ref: string

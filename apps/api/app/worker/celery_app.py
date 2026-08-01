@@ -30,6 +30,8 @@ celery_app = Celery(
         "app.worker.tasks.reporting_tasks",
         # Wave G additions
         "app.worker.tasks.channel_tasks",
+        # Tenant lifecycle housekeeping
+        "app.worker.tasks.tenant_maintenance",
         # Agent tasks (Foundation stubs — real implementations in Wave 3)
         "app.worker.tasks.agent_tasks",
     ],
@@ -144,6 +146,14 @@ celery_app.conf.update(
 
     # ── RedBeat beat schedule (8 tasks) ──────────────────────────────────────
     beat_schedule={
+        # Abandoned signup sweep — daily at 03:30 UTC. Unverified workspaces
+        # otherwise hold their address forever; only ones with no data are
+        # removed (see the task).
+        "sweep-unverified-tenants": {
+            "task": "tenants.sweep_unverified",
+            "schedule": crontab(minute=30, hour=3),
+            "options": {"queue": "batch", "expires": 3600},
+        },
         # Pre-auth renewal — every 6 hours
         "renew-expiring-preauths": {
             "task": "app.worker.tasks.rate_filing.renew_expiring_preauths",

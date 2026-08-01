@@ -1,10 +1,7 @@
+import { tenantHeaders } from '../tenant'
 import { useQuery } from '@tanstack/react-query'
 
-const TENANT_HEADERS = {
-  'Content-Type': 'application/json',
-  'X-Tenant-ID': '00000000-0000-0000-0000-000000000001',
-}
-
+const TENANT_HEADERS = () => tenantHeaders()
 interface Location {
   location_id: string
   name: string
@@ -27,14 +24,14 @@ interface Reservation {
 }
 
 async function fetchLocations(): Promise<Location[]> {
-  const res = await fetch('/api/v1/locations', { credentials: 'include', headers: TENANT_HEADERS })
+  const res = await fetch('/api/v1/locations', { credentials: 'include', headers: TENANT_HEADERS() })
   if (!res.ok) throw new Error('Failed to load locations')
   const data = await res.json()
   return Array.isArray(data) ? data : (data.locations ?? data.items ?? [])
 }
 
 async function fetchVehicles(): Promise<Vehicle[]> {
-  const res = await fetch('/api/v1/fleet/vehicles?limit=200', { credentials: 'include', headers: TENANT_HEADERS })
+  const res = await fetch('/api/v1/fleet/vehicles?limit=200', { credentials: 'include', headers: TENANT_HEADERS() })
   if (!res.ok) throw new Error('Failed to load vehicles')
   const data = await res.json()
   return Array.isArray(data) ? data : (data.vehicles ?? data.items ?? [])
@@ -45,7 +42,7 @@ async function fetchReservations(): Promise<Reservation[]> {
   const all: Reservation[] = []
   let offset = 0
   while (true) {
-    const res = await fetch(`/api/v1/reservations?limit=${PAGE}&offset=${offset}`, { credentials: 'include', headers: TENANT_HEADERS })
+    const res = await fetch(`/api/v1/reservations?limit=${PAGE}&offset=${offset}`, { credentials: 'include', headers: TENANT_HEADERS() })
     if (!res.ok) throw new Error('Failed to load reservations')
     const data = await res.json()
     const page: Reservation[] = Array.isArray(data) ? data : (data.reservations ?? data.items ?? [])

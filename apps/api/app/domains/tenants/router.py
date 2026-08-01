@@ -1,7 +1,7 @@
 """Tenant domain router — CRUD + readiness gate + ToS acceptance."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_session
@@ -189,3 +189,106 @@ async def update_llm_settings(
         key_configured=bool(key),
         key_preview=f"sk-...{key[-4:]}" if len(key) >= 4 else None,
     )
+
+
+# ── GET /tenants/onboarding/checklist ────────────────────────────────────────
+
+
+@router.get(
+    "/onboarding/checklist",
+    summary="What still stands between this workspace and its first booking",
+)
+async def onboarding_checklist(
+    session: AsyncSession = Depends(get_session),
+    claims: UserClaims = Depends(get_current_user),
+) -> dict:
+    """Drives the onboarding UI.
+
+    Scoped to the caller's own tenant via the JWT — there is deliberately no
+    tenant_id path parameter, so one workspace cannot inspect another's setup
+    progress.
+    """
+    from app.domains.tenants.provisioning import readiness_checklist
+
+    items = await readiness_checklist(session, claims.tenant_id)
+    done = sum(1 for i in items if i["done"])
+    return {
+        "tenant_id": str(claims.tenant_id),
+        "items": items,
+        "completed": done,
+        "total": len(items),
+        "ready": done == len(items),
+    }
+
+
+# ── PATCH /tenants/slug ──────────────────────────────────────────────────────
+
+
+# Path is /me/slug, not /slug: an earlier @router.patch("/{tenant_id}")
+# is declared above and FastAPI matches in order, so a bare /slug was
+# swallowed as a tenant id. /me also reads better — it is always the
+# caller's own workspace, never one named in the URL.
+@router.patch("/me/slug", summary="Change the workspace address")
+async def change_slug(
+    payload: dict,
+    session: AsyncSession = Depends(get_session),
+    claims: UserClaims = Depends(get_current_user),
+) -> dict:
+    """Rename the workspace address.
+
+    The slug is the customer-facing URL, so a typo at signup was previously
+    permanent. Renaming breaks existing links by design — there is no alias —
+    so the response says so plainly rather than pretending it is free.
+    """
+    import re
+    from sqlalchemy import text as _text
+
+    from app.core.tenancy import RESERVED_SLUGS, invalidate_slug_cache
+
+    if claims.primary_role not in ("SYSTEM_ADMIN", "SUPER_ADMIN"):
+        raise HTTPException(403, "Only administrators can change the workspace address.")
+
+    new_slug = str(payload.get("slug", "")).strip().lower()
+    # 3-40 chars: the optional middle group in the previous pattern let a
+    # single character through, which renamed a workspace to "a".
+    if not re.match(r"^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$", new_slug):
+        raise HTTPException(
+            400,
+            "Use 3-40 characters: lowercase letters, numbers and hyphens.",
+        )
+    if new_slug in RESERVED_SLUGS:
+        raise HTTPException(400, "That workspace address is reserved.")
+
+    current = (
+        await session.execute(
+            _text("SELECT slug FROM tenants WHERE tenant_id = :t"),
+            {"t": str(claims.tenant_id)},
+        )
+    ).first()
+    if current and current[0] == new_slug:
+        return {"ok": True, "slug": new_slug, "message": "That is already your address."}
+
+    taken = (
+        await session.execute(
+            _text("SELECT 1 FROM tenants WHERE slug = :s"), {"s": new_slug}
+        )
+    ).first()
+    if taken:
+        raise HTTPException(409, f"The address '{new_slug}' is already taken.")
+
+    await session.execute(
+        _text("UPDATE tenants SET slug = :s, updated_at = now() WHERE tenant_id = :t"),
+        {"s": new_slug, "t": str(claims.tenant_id)},
+    )
+    if current:
+        await invalidate_slug_cache(current[0])
+    await invalidate_slug_cache(new_slug)
+
+    return {
+        "ok": True,
+        "slug": new_slug,
+        "message": (
+            f"Your workspace address is now '{new_slug}'. Links using the old "
+            "address will stop working — update any bookmarks and shared links."
+        ),
+    }

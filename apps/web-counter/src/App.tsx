@@ -1,10 +1,11 @@
 import { BrowserRouter, Routes, Route, Navigate, NavLink, useNavigate } from 'react-router-dom'
-import { useState, FormEvent } from 'react'
+import { useState, useEffect, FormEvent } from 'react'
 import { RouteGuard, useAuth } from '@rcm/ui/auth'
 import { QueryProvider } from '@rcm/ui/query'
 import { AuthProvider } from '@rcm/ui/auth'
 import { UserRole } from '@rcm/shared-types'
 import { apiClient } from '@rcm/api-client'
+import { resolveTenant } from './tenant'
 import { OfflineBanner } from './components/OfflineBanner'
 import { CheckoutPage } from './pages/CheckoutPage'
 import { CheckInPage } from './pages/CheckInPage'
@@ -12,7 +13,6 @@ import { ShiftPage } from './pages/ShiftPage'
 import { OverduePage } from './pages/OverduePage'
 import { useCounterStore, selectOfflineQueueCount } from './store/counterStore'
 
-const _TENANT = '00000000-0000-0000-0000-000000000001'
 
 const COUNTER_ROLES = [
   UserRole.COUNTER_AGENT,
@@ -30,6 +30,9 @@ function LoginPage() {
   const [showPassword, setShowPassword] = useState(false)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  // Held when the password was accepted but the account has a second factor.
+  const [mfaChallenge, setMfaChallenge] = useState<string | null>(null)
+  const [mfaCode, setMfaCode] = useState('')
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
@@ -40,6 +43,14 @@ function LoginPage() {
         body: { email, password, app_context: 'web-counter' },
       })
       if (apiError || !data) {
+        // Password accepted, second factor still owed: no session is issued
+        // until the code is verified.
+        const challenge = (apiError as any)?.challenge_id
+        if (challenge) {
+          setMfaChallenge(challenge)
+          setMfaCode('')
+          return
+        }
         setError(typeof apiError === 'string' ? apiError : 'Invalid email or password')
         return
       }
@@ -47,6 +58,29 @@ function LoginPage() {
       navigate('/', { replace: true })
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Login failed. Please try again.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function handleMfaSubmit(e: FormEvent) {
+    e.preventDefault()
+    setError('')
+    setLoading(true)
+    try {
+      const { data, error: apiError } = await (apiClient as any).POST('/auth/mfa/challenge', {
+        body: { challenge_id: mfaChallenge, code: mfaCode.trim() },
+      })
+      if (apiError || !data) {
+        setError('That code was not accepted. Try again.')
+        setMfaCode('')
+        return
+      }
+      setMfaChallenge(null)
+      setUser(data)
+      navigate('/', { replace: true })
+    } catch {
+      setError('Could not reach the server.')
     } finally {
       setLoading(false)
     }
@@ -180,7 +214,64 @@ function LoginPage() {
             Enter your credentials to access counter operations.
           </p>
 
-          <form onSubmit={handleSubmit}>
+          {/* Second factor. Shown instead of the credential form once the
+              password is accepted; there is no session yet, so the only way
+              back is to start over. */}
+          {mfaChallenge && (
+            <form onSubmit={handleMfaSubmit}>
+              <div style={{ marginBottom: 24 }}>
+                <label style={{ ...capUp, display: 'block', marginBottom: 8 }}>
+                  Verification code
+                </label>
+                <input
+                  inputMode="text"
+                  autoComplete="one-time-code"
+                  autoFocus
+                  placeholder="123456"
+                  value={mfaCode}
+                  onChange={(e) => setMfaCode(e.target.value)}
+                  style={{
+                    width: '100%', padding: '14px 16px', fontSize: 15,
+                    fontFamily: 'ui-monospace, monospace', letterSpacing: '0.2em',
+                    background: C.canvasElevated, color: C.ink,
+                    border: `1px solid ${C.hairline}`, borderRadius: 4,
+                  }}
+                />
+                <p style={{ marginTop: 8, fontSize: 13, color: C.body }}>
+                  From your authenticator app, or one of your backup codes.
+                </p>
+              </div>
+
+              {error && (
+                <p style={{ marginBottom: 16, fontSize: 14, color: C.warning }}>{error}</p>
+              )}
+
+              <button
+                type="submit"
+                disabled={loading || mfaCode.trim().length < 6}
+                style={{
+                  width: '100%', padding: '14px 16px', fontSize: 15, fontWeight: 600,
+                  background: C.primary, color: C.ink, border: 'none', borderRadius: 4,
+                  cursor: loading ? 'default' : 'pointer', opacity: loading ? 0.6 : 1,
+                }}
+              >
+                {loading ? 'Verifying…' : 'Verify and sign in'}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => { setMfaChallenge(null); setMfaCode(''); setError('') }}
+                style={{
+                  width: '100%', marginTop: 12, padding: 8, fontSize: 14,
+                  background: 'none', color: C.body, border: 'none', cursor: 'pointer',
+                }}
+              >
+                Start over
+              </button>
+            </form>
+          )}
+
+          <form onSubmit={handleSubmit} style={{ display: mfaChallenge ? 'none' : undefined }}>
 
             {/* Email */}
             <div style={{ marginBottom: 24 }}>
@@ -486,8 +577,34 @@ function AppLayout({ children }: { children: React.ReactNode }) {
   )
 }
 
+/**
+ * Re-establishes the workspace before anything that needs it renders.
+ *
+ * The resolved tenant lives in memory, so a hard load starts with none —
+ * without this the session check goes out untenanted, 401s, and bounces a
+ * signed-in agent back to the login screen on every refresh.
+ */
+function TenantBoot({ children }: { children: React.ReactNode }) {
+  const [ready, setReady] = useState(false)
+  useEffect(() => {
+    let cancelled = false
+    resolveTenant().finally(() => { if (!cancelled) setReady(true) })
+    return () => { cancelled = true }
+  }, [])
+  if (!ready) {
+    return (
+      <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', color: '#888' }}>
+        Loading your workspace…
+      </div>
+    )
+  }
+  return <>{children}</>
+}
+
+
 export default function App() {
   return (
+    <TenantBoot>
     <QueryProvider>
       <AuthProvider>
         <BrowserRouter>
@@ -514,5 +631,6 @@ export default function App() {
         </BrowserRouter>
       </AuthProvider>
     </QueryProvider>
+    </TenantBoot>
   )
 }

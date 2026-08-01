@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_session
+from app.core.tenancy import require_tenant
 from app.core.redis import get_avail_redis
 from app.core.rbac import require_permission
 from app.core.security import UserClaims, get_current_user
@@ -46,17 +47,11 @@ def _get_service(
 def _get_service_public(
     request: Request,
     session: AsyncSession = Depends(get_session),
+    tenant_id: UUID = Depends(require_tenant),
 ) -> PricingService:
     """For the public quote endpoint — no auth required."""
-    # Use a sentinel UUID for unauthenticated callers; RLS is bypassed for
-    # quotes because rate codes can be public. Tenant is extracted from the
-    # request payload (location_id → tenant lookup) in a real implementation.
-    # For now we accept tenant_id from a custom header X-Tenant-ID (no JWT).
-    tenant_id_str = request.headers.get("X-Tenant-ID", "00000000-0000-0000-0000-000000000000")
-    try:
-        tenant_id = UUID(tenant_id_str)
-    except ValueError:
-        tenant_id = UUID("00000000-0000-0000-0000-000000000000")
+    # Tenant is resolved from the signed session or the hostname — never from a
+    # caller-supplied header alone, and never defaulted.
     repo = PricingRepository(session=session, tenant_id=tenant_id)
     redis = get_avail_redis()
     return PricingService(repo=repo, redis=redis, tenant_id=tenant_id)

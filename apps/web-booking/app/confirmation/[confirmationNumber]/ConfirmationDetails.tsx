@@ -1,8 +1,9 @@
 'use client'
 
+import { tenantId } from '../../lib/tenant'
+
 import { useEffect, useState } from 'react'
 
-const TENANT = '00000000-0000-0000-0000-000000000001'
 
 interface ConfirmationDetailsProps {
   confirmationNumber: string
@@ -27,7 +28,7 @@ export function ConfirmationDetails({ confirmationNumber }: ConfirmationDetailsP
   useEffect(() => {
     fetch(`/api/v1/reservations/public/${confirmationNumber}`, {
       credentials: 'include',
-      headers: { 'X-Tenant-ID': TENANT },
+      headers: { 'X-Tenant-ID': tenantId() },
     })
       .then(r => { if (!r.ok) throw new Error(); return r.json() })
       .then(d => setRes(d))

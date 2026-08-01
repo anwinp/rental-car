@@ -58,14 +58,18 @@ class LocationRepository(BaseRepository[Location]):
 
         result = await self.session.execute(
             text(
+                # MT-02: explicit tenant predicate. RLS also constrains this,
+                # but a destructive/gating check should not depend on a single
+                # layer — a location is only "in use" by its OWN tenant.
                 "SELECT EXISTS ("
                 "  SELECT 1 FROM reservations"
                 "  WHERE pickup_location_id = :lid"
+                "    AND tenant_id = :tid"
                 "    AND status IN ('PENDING','CONFIRMED','CHECKED_OUT','EXTENDING')"
                 "    AND deleted_at IS NULL"
                 ")"
             ),
-            {"lid": location_id},
+            {"lid": location_id, "tid": str(self.tenant_id)},
         )
         return bool(result.scalar())
 

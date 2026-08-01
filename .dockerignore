@@ -1,0 +1,23 @@
+# Keep Docker build context small & reproducible
+**/node_modules
+**/.venv
+.venv
+**/.next
+**/dist
+**/build
+**/coverage
+**/.pytest_cache
+.git
+.github
+test-results
+.claude
+design
+infra
+*.log
+
+# macOS AppleDouble resource forks. `tar` on macOS emits a `._<name>` companion
+# for every file carrying xattrs; `._foo.py` ends in .py, so tools that glob for
+# source (alembic's migration loader, for one) try to parse it and choke on its
+# binary contents.
+._*
+.DS_Store

@@ -55,6 +55,10 @@ class StaffUser(Base):
 
     # ── Security ──────────────────────────────────────────────────────────────
     failed_login_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    # Raised whenever the credential changes hands: password change, password
+    # reset, or detected refresh-token reuse. Every token carries the epoch it
+    # was minted under and stops validating once this moves past it.
+    token_epoch: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     locked_until: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # ── Timestamps ────────────────────────────────────────────────────────────

@@ -1,5 +1,7 @@
 'use client'
 
+import { tenantId } from '../lib/tenant'
+
 import { Suspense, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
 
@@ -104,7 +106,6 @@ function FieldGroup({ label, children }: { label: string; children: React.ReactN
   )
 }
 
-const TENANT = '00000000-0000-0000-0000-000000000001'
 
 const OAUTH_ERROR_MESSAGES: Record<string, string> = {
   oauth_cancelled: 'Google sign-in was cancelled.',
@@ -128,6 +129,9 @@ function LoginContent() {
   const [busy, setBusy] = useState(false)
   const [googleBusy, setGoogleBusy] = useState(false)
   const [googleError, setGoogleError] = useState<string | null>(null)
+  // Set when the password was accepted but a second factor is owed.
+  const [mfaChallenge, setMfaChallenge] = useState<string | null>(null)
+  const [mfaCode, setMfaCode] = useState('')
 
   async function handlePasswordLogin(e: React.FormEvent) {
     e.preventDefault()
@@ -140,12 +144,20 @@ function LoginContent() {
         credentials: 'include',
         headers: {
           'Content-Type': 'application/json',
-          'X-Tenant-ID': TENANT,
+          'X-Tenant-ID': tenantId(),
         },
         body: JSON.stringify({ email, password, app_context: 'web' }),
       })
       if (!res.ok) {
         const d = await res.json().catch(() => ({}))
+        // The password was correct but the account has a second factor. No
+        // session is issued until a code is verified.
+        const challenge = (d as { challenge_id?: string }).challenge_id
+        if (challenge) {
+          setMfaChallenge(challenge)
+          setMfaCode('')
+          return
+        }
         throw new Error((d as { detail?: string }).detail ?? 'Invalid email or password.')
       }
       window.location.href = '/'
@@ -156,14 +168,40 @@ function LoginContent() {
     }
   }
 
+  async function handleMfaSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    setLoginError(null)
+    setBusy(true)
+    try {
+      const res = await fetch('/api/v1/auth/mfa/challenge', {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Tenant-ID': tenantId(),
+        },
+        body: JSON.stringify({ challenge_id: mfaChallenge, code: mfaCode.trim() }),
+      })
+      if (!res.ok) {
+        setMfaCode('')
+        throw new Error('That code was not accepted. Try again.')
+      }
+      window.location.href = '/'
+    } catch (err) {
+      setLoginError(err instanceof Error ? err.message : 'Could not verify that code.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   async function handleGoogleSignIn() {
     setGoogleError(null)
     setGoogleBusy(true)
     try {
-      const res = await fetch(`/api/v1/auth/google?tenant_id=${TENANT}`, { redirect: 'manual' })
+      const res = await fetch(`/api/v1/auth/google?tenant_id=${tenantId()}`, { redirect: 'manual' })
       // opaqueredirect (status 0) = FastAPI issued a 302 to Google — proceed
       if (res.type === 'opaqueredirect' || res.status === 0) {
-        window.location.href = `/api/v1/auth/google?tenant_id=${TENANT}`
+        window.location.href = `/api/v1/auth/google?tenant_id=${tenantId()}`
         return
       }
       const d = await res.json().catch(() => ({}))
@@ -294,7 +332,49 @@ function LoginContent() {
 
         {/* Password form */}
         {activeTab === 'password' && (
-          <form onSubmit={handlePasswordLogin} noValidate style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+          <>
+          {/* Second factor. Replaces the credential form once the password is
+              accepted — no session exists until a code is verified. */}
+          {mfaChallenge && (
+            <form onSubmit={handleMfaSubmit} noValidate style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+              <p style={{ fontSize: 13, color: '#969696', lineHeight: 1.5, margin: 0 }}>
+                Enter the 6-digit code from your authenticator app, or one of
+                your backup codes.
+              </p>
+
+              <FieldGroup label="Verification code">
+                <input
+                  inputMode="text"
+                  autoComplete="one-time-code"
+                  autoFocus
+                  value={mfaCode}
+                  onChange={(e) => setMfaCode(e.target.value)}
+                  placeholder="123456"
+                  style={{ ...$.input, fontFamily: 'ui-monospace, monospace', letterSpacing: '0.2em' }}
+                />
+              </FieldGroup>
+
+              {loginError && <div style={$.error}>{loginError}</div>}
+
+              <button type="submit" disabled={busy || mfaCode.trim().length < 6} style={$.btnPrimary(busy)}>
+                {busy ? 'Verifying…' : 'Verify and sign in'}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => { setMfaChallenge(null); setMfaCode(''); setLoginError(null) }}
+                style={{ background: 'none', border: 'none', color: '#666666', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}
+              >
+                Start over
+              </button>
+            </form>
+          )}
+
+          <form
+            onSubmit={handlePasswordLogin}
+            noValidate
+            style={{ display: mfaChallenge ? 'none' : 'flex', flexDirection: 'column', gap: 20 }}
+          >
             <FieldGroup label="Email Address">
               <input
                 type="email"
@@ -346,6 +426,7 @@ function LoginContent() {
               {busy ? 'Signing in…' : 'Sign In'}
             </button>
           </form>
+          </>
         )}
 
         {/* Magic link form */}

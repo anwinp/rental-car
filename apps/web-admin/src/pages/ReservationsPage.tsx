@@ -1,11 +1,7 @@
+import { tenantHeaders } from '../tenant'
 import { useState, type FormEvent } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 
-const TENANT_ID = import.meta.env.VITE_TENANT_ID as string | undefined
-
-function tenantHeaders(): Record<string, string> {
-  return TENANT_ID ? { 'X-Tenant-ID': TENANT_ID } : {}
-}
 
 type Reservation = {
   reservation_id: string; confirmation_number: string; customer_name: string

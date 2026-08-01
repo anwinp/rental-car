@@ -1,17 +1,18 @@
 'use client'
 
+import { tenantId } from '../lib/tenant'
+
 import { useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 
-const TENANT = '00000000-0000-0000-0000-000000000001'
 
 async function apiPost(path: string, body: unknown) {
   const res = await fetch(`/api/v1${path}`, {
     method: 'POST',
     credentials: 'include',
-    headers: { 'Content-Type': 'application/json', 'X-Tenant-ID': TENANT },
+    headers: { 'Content-Type': 'application/json', 'X-Tenant-ID': tenantId() },
     body: JSON.stringify(body),
   })
   if (!res.ok) {
@@ -94,7 +95,7 @@ const s = {
   },
 }
 
-function Field({ label, error, children }: { label: string; error?: string; children: React.ReactNode }) {
+function Field({ label, error, children }: { label: React.ReactNode; error?: string; children: React.ReactNode }) {
   return (
     <div>
       <label style={s.label}>{label}</label>
@@ -136,7 +137,7 @@ export default function SignupPage() {
     setIsSubmitting(true)
     try {
       await apiPost('/customers', {
-        tenant_id: TENANT,
+        tenant_id: tenantId(),
         first_name: data.first_name,
         last_name: data.last_name,
         email: data.email,

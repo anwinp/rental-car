@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_session
+from app.core.tenancy import require_tenant
 from app.core.rbac import require_permission
 from app.core.security import UserClaims, get_current_user
 from app.domains.locations.schemas import (
@@ -44,13 +45,13 @@ class PublicLocation(BaseModel):
 async def list_locations_public(
     request: Request,
     session: AsyncSession = Depends(get_session),
+    tenant_id: UUID = Depends(require_tenant),
 ) -> list[PublicLocation]:
-    """Returns active locations for the public booking site — no authentication required."""
-    tenant_id_str = request.headers.get("X-Tenant-ID", "00000000-0000-0000-0000-000000000001")
-    try:
-        tenant_id = UUID(tenant_id_str)
-    except ValueError:
-        tenant_id = UUID("00000000-0000-0000-0000-000000000001")
+    """Active locations for the public booking site — no authentication required.
+
+    The tenant comes from the hostname (or a signed session). There is no
+    fallback: an unresolvable tenant is a 400, not somebody else's catalogue.
+    """
 
     locations = await _svc.list_locations(session, tenant_id, is_active=True, limit=200, offset=0)
     return [

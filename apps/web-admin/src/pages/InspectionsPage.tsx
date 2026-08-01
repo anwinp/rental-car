@@ -1,3 +1,4 @@
+import { tenantId } from '../tenant'
 import { useState, useMemo } from 'react'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import { useAuth } from '@rcm/ui/auth'
@@ -5,7 +6,6 @@ import imageCompression from 'browser-image-compression'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-const TENANT = import.meta.env.VITE_TENANT_ID ?? 'dev'
 
 type InspectionType = 'PRE' | 'POST'
 
@@ -116,7 +116,7 @@ const CONDITIONS: ZoneCondition[] = ['GOOD', 'SCRATCHED', 'DENTED', 'CRACKED', '
 async function fetchJSON(path: string) {
   const res = await fetch(`/api/v1${path}`, {
     credentials: 'include',
-    headers: { 'X-Tenant-ID': TENANT },
+    headers: { 'X-Tenant-ID': tenantId() },
   })
   if (!res.ok) {
     const body = await res.json().catch(() => ({}))
@@ -129,7 +129,7 @@ async function postJSON(path: string, body: unknown) {
   const res = await fetch(`/api/v1${path}`, {
     method: 'POST',
     credentials: 'include',
-    headers: { 'Content-Type': 'application/json', 'X-Tenant-ID': TENANT },
+    headers: { 'Content-Type': 'application/json', 'X-Tenant-ID': tenantId() },
     body: JSON.stringify(body),
   })
   if (!res.ok) {
@@ -406,7 +406,7 @@ export function InspectionsPage() {
       const currentRaId = ra?.ra_id ?? ''
       const uploadRes = await fetch('/api/v1/damage/photo-upload-url', {
         method: 'POST', credentials: 'include',
-        headers: { 'Content-Type': 'application/json', 'X-Tenant-ID': TENANT },
+        headers: { 'Content-Type': 'application/json', 'X-Tenant-ID': tenantId() },
         body: JSON.stringify({ zone_id: zoneId, ra_id: currentRaId || undefined }),
       })
       const { upload_url, s3_key } = await uploadRes.json()

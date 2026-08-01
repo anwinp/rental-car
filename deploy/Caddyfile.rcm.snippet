@@ -1,0 +1,125 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# RCM — append to /root/ceez_ai_beta_launch/ceez-ai-main/Caddyfile on the VM.
+#
+# Hyphenated single-label hosts (rcm-admin.ceez.ai), matching the existing
+# netpulse-staging / ingest-staging convention, rather than nested
+# admin.rcm.ceez.ai. One flat A record each, and HTTP-01 issuance works without
+# the wildcard/DNS-01 complication a nested scheme would invite.
+#
+# Upstreams resolve by container name because workforce-caddy is connected to
+# the rcm_internal network:
+#     docker network connect rcm_internal workforce-caddy
+#
+# NOTE ON RELOADING (important on this host): /etc/caddy/Caddyfile inside
+# workforce-caddy is a single-file bind mount that has gone stale — the host
+# file was replaced, so the container still holds the old, unlinked inode and
+# does NOT see edits to the host file. Until the container is recreated, apply
+# config by copying it in and reloading from that path:
+#     docker cp <file> workforce-caddy:/tmp/Caddyfile
+#     docker exec workforce-caddy caddy validate --config /tmp/Caddyfile
+#     docker exec workforce-caddy caddy reload   --config /tmp/Caddyfile
+#
+# PREREQUISITE: each name must resolve to this VM's public IP before its block
+# is added. Caddy requests a Let's Encrypt cert on first request per host, and
+# repeated failures for a non-resolving name count against LE rate limits.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PER-TENANT SUBDOMAINS — required for hostname-based tenant resolution
+#
+# app/core/tenancy.py resolves an anonymous request's tenant from the FIRST
+# LABEL of the Host header, and registration hands customers
+# https://{slug}.rcm.ceez.ai. With only the flat hosts below, that never works:
+# on rcm-admin.ceez.ai the derived slug is "rcm-admin" (no such tenant), and on
+# rcm.ceez.ai it is "rcm", which tenancy.py lists in RESERVED_SLUGS. The whole
+# anonymous resolution path is inert without the two blocks here.
+#
+# TWO THINGS MUST BE DONE OUTSIDE THIS FILE FIRST — Caddy cannot do either:
+#
+#   1. DNS: wildcard A records
+#        *.rcm.ceez.ai        -> 63.250.55.137
+#        *.rcm-admin.ceez.ai  -> 63.250.55.137
+#
+#   2. A DNS-01 issuer. Let's Encrypt does not issue wildcard certificates over
+#      HTTP-01, so the standard Caddy binary cannot obtain these. Build Caddy
+#      with the DNS plugin for the zone's provider, e.g.
+#        xcaddy build --with github.com/caddy-dns/cloudflare
+#      and supply an API token scoped to ceez.ai.
+#
+# Until both are in place, leave these blocks commented out: Caddy retries
+# failing certificate orders, and repeated failures for a name that does not
+# resolve count against Let's Encrypt rate limits for the whole zone.
+#
+# tls directives assume Cloudflare; swap the provider to match the real one.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# *.rcm.ceez.ai {
+# 	tls {
+# 		dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+# 	}
+# 	reverse_proxy rcm-booking:3000
+# 	encode zstd gzip
+# }
+
+# *.rcm-admin.ceez.ai {
+# 	tls {
+# 		dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+# 	}
+# 	handle /api/v1/* {
+# 		reverse_proxy rcm-api:8000
+# 	}
+# 	handle {
+# 		reverse_proxy rcm-admin:80
+# 	}
+# 	encode zstd gzip
+# }
+
+# Customer booking — Next.js SSR. Next handles its own /api/v1 + /api/auth.
+# Note this is the APEX host: its first label is "rcm", a reserved slug, so no
+# tenant resolves here. That is intentional — this is the marketing/entry host,
+# and tenant traffic arrives on the wildcard above.
+rcm.ceez.ai {
+	reverse_proxy rcm-booking:3000
+	encode zstd gzip
+}
+
+# Back-office admin — Vite SPA. Same-origin /api/v1 must reach the API so the
+# session cookie stays first-party (@rcm/api-client calls the relative /api/v1).
+rcm-admin.ceez.ai {
+	handle /api/v1/* {
+		reverse_proxy rcm-api:8000
+	}
+	handle {
+		reverse_proxy rcm-admin:80
+	}
+	encode zstd gzip
+}
+
+# Counter PWA — Vite SPA. Same pattern.
+rcm-counter.ceez.ai {
+	handle /api/v1/* {
+		reverse_proxy rcm-api:8000
+	}
+	handle {
+		reverse_proxy rcm-counter:80
+	}
+	encode zstd gzip
+}
+
+# Direct API surface — Stripe/Twilio/SendGrid webhooks, OpenAPI at /api/docs,
+# and /health.
+rcm-api.ceez.ai {
+	reverse_proxy rcm-api:8000
+	encode zstd gzip
+}
+
+# Public endpoint for RCM's OWN MinIO — browser presigned uploads/downloads.
+# The shared workforce-minio is untouched. Presigned URLs are signed against
+# this exact host (S3_PUBLIC_ENDPOINT). No compression: object bodies are
+# already-compressed binaries and Caddy must not alter them mid-transfer.
+rcm-files.ceez.ai {
+	request_body {
+		max_size 100MB
+	}
+	reverse_proxy rcm-minio:9000
+}

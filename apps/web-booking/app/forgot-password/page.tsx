@@ -1,11 +1,12 @@
 'use client'
 
+import { tenantId } from '../lib/tenant'
+
 import { useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 
-const TENANT = '00000000-0000-0000-0000-000000000001'
 
 const schema = z.object({
   email: z.string().email('Please enter a valid email address'),
@@ -41,7 +42,7 @@ export default function ForgotPasswordPage() {
       await fetch(`/api/v1/auth/request-password-reset`, {
         method: 'POST',
         credentials: 'include',
-        headers: { 'Content-Type': 'application/json', 'X-Tenant-ID': TENANT },
+        headers: { 'Content-Type': 'application/json', 'X-Tenant-ID': tenantId() },
         body: JSON.stringify({ email: data.email }),
       })
     } finally {

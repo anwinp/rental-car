@@ -13,6 +13,7 @@ from sqlalchemy import text as sqlt
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import AsyncSessionLocal, get_session
+from app.core.tenancy import require_tenant
 from app.core.redis import get_avail_redis
 
 log = logging.getLogger(__name__)
@@ -135,13 +136,9 @@ async def create_guest_reservation(
     request: Request,
     background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_session),
+    tenant_id: UUID = Depends(require_tenant),
 ) -> GuestBookingResponse:
     """One-shot guest booking: resolves location, generates quote token, creates reservation."""
-    tenant_id_str = request.headers.get("X-Tenant-ID", "00000000-0000-0000-0000-000000000000")
-    try:
-        tenant_id = UUID(tenant_id_str)
-    except ValueError:
-        tenant_id = UUID("00000000-0000-0000-0000-000000000000")
 
     # ── 1. Resolve location string(s) → UUID ──────────────────────────────
     async def _resolve_location(value: str) -> UUID:
@@ -513,6 +510,44 @@ class PublicConfirmationResponse(BaseModel):
     rate_summary: _PublicRateSummary
 
 
+_PUBLIC_LOOKUP_LIMIT = 20      # per address
+_PUBLIC_LOOKUP_WINDOW = 300    # seconds
+
+
+async def _enforce_public_lookup_limit(request: Request) -> None:
+    """Cap confirmation lookups per source address.
+
+    Generous enough that a customer refreshing their booking never notices, low
+    enough that walking the confirmation-number space is not practical.
+
+    Fails OPEN if Redis is down: a cache outage must not stop customers seeing
+    their own bookings. That is acceptable only because this is a rate limit on
+    an already tenant-scoped read, not the isolation control itself.
+    """
+    client_ip = request.client.host if request.client else "unknown"
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        client_ip = forwarded.split(",")[0].strip()
+
+    try:
+        from app.core.redis import get_session_redis
+
+        redis = get_session_redis()
+        key = f"pubconf_rate:{client_ip}"
+        count = await redis.incr(key)
+        if count == 1:
+            await redis.expire(key, _PUBLIC_LOOKUP_WINDOW)
+        if count > _PUBLIC_LOOKUP_LIMIT:
+            raise HTTPException(
+                status_code=429,
+                detail="Too many lookups from this address. Try again shortly.",
+            )
+    except HTTPException:
+        raise
+    except Exception:  # noqa: BLE001 — see docstring: fail open
+        return
+
+
 @router.get(
     "/public/{confirmation_number}",
     response_model=PublicConfirmationResponse,
@@ -521,8 +556,22 @@ class PublicConfirmationResponse(BaseModel):
 )
 async def get_public_confirmation(
     confirmation_number: str,
+    request: Request,
     session: AsyncSession = Depends(get_session),
 ) -> PublicConfirmationResponse:
+    # Cross-tenant isolation on this route holds: the tenant is resolved before
+    # the query and RLS filters `reservations`, so a caller naming another
+    # tenant gets a 404 (verified against every tenant in the local stack).
+    #
+    # What it does NOT have is a second factor. A confirmation number is the
+    # only thing needed to read a customer's name, email and total, and the
+    # format is RCM-YYYYMMDD-XXXXXX under a globally unique index — enumerable
+    # within a tenant given enough attempts. Both callers of this endpoint (the
+    # post-booking confirmation page and the manage-booking link) pass only the
+    # number, so requiring a surname here would break a live flow; the control
+    # that fits without that change is to make enumeration expensive.
+    await _enforce_public_lookup_limit(request)
+
     row = await session.execute(
         sqlt("""
             SELECT
@@ -542,6 +591,12 @@ async def get_public_confirmation(
             LEFT JOIN customers c ON c.customer_id = r.customer_id
             WHERE r.confirmation_number = :cn
               AND r.deleted_at IS NULL
+              -- Explicit, in addition to RLS. Defence in depth: if this route is
+              -- ever reached on a session without the tenant GUC bound, the
+              -- predicate is false rather than unconstrained.
+              AND r.tenant_id = NULLIF(
+                    current_setting('app.current_tenant_id', true), ''
+                  )::uuid
             LIMIT 1
         """),
         {"cn": confirmation_number},

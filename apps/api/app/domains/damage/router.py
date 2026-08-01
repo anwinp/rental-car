@@ -43,8 +43,8 @@ async def get_photo_upload_url(
     from app.core.config import settings
     s3_key = f"inspections/{claims.tenant_id}/{body.ra_id or 'general'}/{body.zone_id}/{_uuid.uuid4()}.jpg"
     try:
-        import boto3
-        s3 = boto3.client("s3", region_name=getattr(settings, "aws_region", "us-east-1"))
+        from app.core.s3 import get_presign_client
+        s3 = get_presign_client()
         url = s3.generate_presigned_url(
             "put_object",
             Params={

@@ -1,0 +1,246 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# RCM — production stack for rcm.ceez.ai (single-VM, behind shared Caddy)
+#
+#   - Everything lives on ONE private network, `rcm_internal`. workforce-caddy
+#     is connected to it so it can reverse-proxy to rcm-* containers by name —
+#     the same pattern it already uses for ceezstg_internal / ceez-staging_internal.
+#   - NOTHING publishes a host port. Only workforce-caddy (in the other stack)
+#     is exposed on 80/443. ufw stays unchanged.
+#
+#   Bring up:   docker compose -f deploy/docker-compose.prod.yml --env-file deploy/.env.prod up -d --build
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: rcm
+
+networks:
+  # Named `internal` so the compose project prefix yields `rcm_internal`,
+  # matching the existing ceezstg_internal / ceez-staging_internal convention.
+  # workforce-caddy is connected to this network to reach the edge services.
+  internal:
+    driver: bridge
+
+volumes:
+  rcm_pgdata:
+  rcm_miniodata:
+
+services:
+  # ── Postgres 16 with pg_cron + pg_partman (custom image) ───────────────────
+  postgres:
+    build:
+      context: ../docker/postgres
+      dockerfile: Dockerfile
+    container_name: rcm-postgres
+    restart: unless-stopped
+    command: >
+      postgres
+      -c shared_preload_libraries='pg_cron,pg_partman_bgw'
+      -c cron.database_name=${POSTGRES_DB}
+      -c pg_partman_bgw.dbname=${POSTGRES_DB}
+      -c pg_partman_bgw.interval=3600
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - rcm_pgdata:/var/lib/postgresql/data
+    networks: [internal]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ── pgbouncer (transaction pooling for the app; migrations bypass this) ────
+  pgbouncer:
+    # NB: `pgbouncer/pgbouncer` does not exist on Docker Hub. edoburu is the
+    # maintained image and parses DATABASE_URL into its generated config.
+    image: edoburu/pgbouncer:v1.23.1-p2
+    container_name: rcm-pgbouncer
+    restart: unless-stopped
+    environment:
+      # Point the pool at the RUNTIME role, not the owner. The owner bypasses
+      # RLS, so pooling as `rcm` would defeat every tenant-isolation policy
+      # regardless of what the application sends.
+      #
+      # This image derives its userlist from these credentials, so clients
+      # authenticating as app_user with this password succeed and no other role
+      # can connect through the pooler at all. Migrations do not come through
+      # here — they use DIRECT_DATABASE_URL straight to postgres:5432.
+      DATABASE_URL: "postgres://${APP_DB_USER}:${APP_DB_PASSWORD}@postgres:5432/${POSTGRES_DB}"
+      # Postgres 16 stores passwords as scram-sha-256; the image defaults to
+      # md5, which cannot authenticate against them. Must match the server.
+      AUTH_TYPE: scram-sha-256
+      POOL_MODE: transaction
+      MAX_CLIENT_CONN: 400
+      DEFAULT_POOL_SIZE: 25
+      LISTEN_PORT: 5433
+    networks: [internal]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # ── Redis: availability cache / Celery broker / sessions ───────────────────
+  redis-avail:
+    image: redis:7-alpine
+    container_name: rcm-redis-avail
+    restart: unless-stopped
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru --port 6379
+    networks: [internal]
+    healthcheck: { test: ["CMD", "redis-cli", "ping"], interval: 10s }
+
+  redis-broker:
+    image: redis:7-alpine
+    container_name: rcm-redis-broker
+    restart: unless-stopped
+    command: redis-server --maxmemory 512mb --maxmemory-policy noeviction --port 6380
+    networks: [internal]
+    healthcheck: { test: ["CMD", "redis-cli", "-p", "6380", "ping"], interval: 10s }
+
+  redis-sessions:
+    image: redis:7-alpine
+    container_name: rcm-redis-sessions
+    restart: unless-stopped
+    command: redis-server --maxmemory 256mb --maxmemory-policy volatile-lru --port 6381
+    networks: [internal]
+    healthcheck: { test: ["CMD", "redis-cli", "-p", "6381", "ping"], interval: 10s }
+
+  # ── MinIO (S3-compatible object storage, dedicated to RCM) ────────────────
+  # Deliberately NOT the shared workforce-minio: own container, own volume, own
+  # credentials, so nothing is changed on storage the other apps depend on.
+  # Reachable internally as rcm-minio:9000; published to the browser only via
+  # Caddy at files.rcm.ceez.ai (needed for presigned upload/download URLs).
+  minio:
+    image: minio/minio:latest
+    container_name: rcm-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${AWS_ACCESS_KEY_ID}
+      MINIO_ROOT_PASSWORD: ${AWS_SECRET_ACCESS_KEY}
+    volumes:
+      - rcm_miniodata:/data
+    networks: [internal]
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # ── FastAPI ────────────────────────────────────────────────────────────────
+  api:
+    build:
+      context: ../apps/api
+      dockerfile: Dockerfile
+      target: runtime
+    container_name: rcm-api
+    restart: unless-stopped
+    env_file: [.env.prod]
+    environment:
+      ENV: production
+      DATABASE_URL: postgresql+asyncpg://${APP_DB_USER}:${APP_DB_PASSWORD}@pgbouncer:5433/${POSTGRES_DB}
+      DB_VIA_PGBOUNCER: "true"   # asyncpg statement cache must be off — see app/core/database.py
+      REDIS_AVAIL_URL: redis://redis-avail:6379/0
+      REDIS_BROKER_URL: redis://redis-broker:6380/0
+      REDIS_SESSION_URL: redis://redis-sessions:6381/0
+      PORT: "8000"
+      WORKER_COUNT: "4"
+    networks: [internal]
+    depends_on:
+      pgbouncer: { condition: service_started }
+      redis-broker: { condition: service_healthy }
+      minio: { condition: service_healthy }
+
+  # ── Celery workers + beat (Dockerfile.worker) ──────────────────────────────
+  worker-notifications:
+    build: { context: ../apps/api, dockerfile: Dockerfile.worker, target: runtime }
+    container_name: rcm-worker-notifications
+    restart: unless-stopped
+    env_file: [.env.prod]
+    environment:
+      ENV: production
+      DATABASE_URL: postgresql+asyncpg://${APP_DB_USER}:${APP_DB_PASSWORD}@pgbouncer:5433/${POSTGRES_DB}
+      DB_VIA_PGBOUNCER: "true"   # asyncpg statement cache must be off — see app/core/database.py
+      REDIS_BROKER_URL: redis://redis-broker:6380/0
+      REDIS_AVAIL_URL: redis://redis-avail:6379/0
+      REDIS_SESSION_URL: redis://redis-sessions:6381/0
+      WORKER_QUEUES: notifications
+      WORKER_CONCURRENCY: "2"
+    networks: [internal]
+    depends_on: [redis-broker, postgres]
+
+  worker-reports:
+    build: { context: ../apps/api, dockerfile: Dockerfile.worker, target: runtime }
+    container_name: rcm-worker-reports
+    restart: unless-stopped
+    env_file: [.env.prod]
+    environment:
+      ENV: production
+      DATABASE_URL: postgresql+asyncpg://${APP_DB_USER}:${APP_DB_PASSWORD}@pgbouncer:5433/${POSTGRES_DB}
+      DB_VIA_PGBOUNCER: "true"   # asyncpg statement cache must be off — see app/core/database.py
+      REDIS_BROKER_URL: redis://redis-broker:6380/0
+      REDIS_AVAIL_URL: redis://redis-avail:6379/0
+      REDIS_SESSION_URL: redis://redis-sessions:6381/0
+      WORKER_QUEUES: reports,batch
+      WORKER_CONCURRENCY: "1"
+    networks: [internal]
+    depends_on: [redis-broker, postgres, minio]
+
+  beat:
+    build: { context: ../apps/api, dockerfile: Dockerfile.worker, target: runtime }
+    container_name: rcm-beat
+    restart: unless-stopped
+    env_file: [.env.prod]
+    environment:
+      ENV: production
+      # beat inherits DATABASE_URL from .env.prod (which points at pgbouncer)
+      # but was the only service not setting DB_VIA_PGBOUNCER, so it built a
+      # QueuePool engine with asyncpg prepared-statement caching ON against a
+      # transaction-pooled pgbouncer — the exact combination app/core/database.py
+      # documents as broken. Harmless while RedBeat only touches Redis; a fault
+      # waiting for the first scheduled task that reads the database.
+      DATABASE_URL: postgresql+asyncpg://${APP_DB_USER}:${APP_DB_PASSWORD}@pgbouncer:5433/${POSTGRES_DB}
+      DB_VIA_PGBOUNCER: "true"
+      REDIS_BROKER_URL: redis://redis-broker:6380/0
+      BEAT: "true"
+    networks: [internal]
+    depends_on: [redis-broker, pgbouncer]
+
+  # ── Frontends ──────────────────────────────────────────────────────────────
+  # Next.js SSR — served at rcm.ceez.ai. Proxies /api/v1 -> rcm-api internally.
+  web-booking:
+    build:
+      context: ..
+      dockerfile: apps/web-booking/Dockerfile
+      args:
+        NEXT_PUBLIC_API_BASE_URL: http://rcm-api:8000
+        NEXT_PUBLIC_APP_URL: https://rcm.ceez.ai
+        NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: ${NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY}
+        NEXT_PUBLIC_TENANT_ID: ${TENANT_ID}
+    container_name: rcm-booking
+    restart: unless-stopped
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: http://rcm-api:8000   # used by server-side rewrites
+    networks: [internal]
+    depends_on: [api]
+
+  # Vite SPA (static, nginx) — admin.rcm.ceez.ai
+  web-admin:
+    build:
+      context: ..
+      dockerfile: apps/web-admin/Dockerfile
+      args:
+        VITE_TENANT_ID: ${TENANT_ID}
+    container_name: rcm-admin
+    restart: unless-stopped
+    networks: [internal]
+
+  # Vite PWA (static, nginx) — counter.rcm.ceez.ai
+  web-counter:
+    build:
+      context: ..
+      dockerfile: apps/web-counter/Dockerfile
+      args:
+        VITE_TENANT_ID: ${TENANT_ID}
+    container_name: rcm-counter
+    restart: unless-stopped
+    networks: [internal]

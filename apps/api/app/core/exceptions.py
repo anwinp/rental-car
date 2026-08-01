@@ -153,6 +153,25 @@ class AccountLockedError(AuthenticationError):
         self.extra = {"unlock_at": unlock_at}
 
 
+class MFARequiredError(AuthenticationError):
+    """The password was correct but the account has a second factor enabled.
+
+    Carries a challenge id rather than any part of a session: nothing issued
+    here grants access. The client exchanges it at /auth/mfa/challenge along
+    with a TOTP or backup code to obtain real cookies.
+    """
+
+    type_path = "mfa-required"
+
+    def __init__(self, challenge_id: str, expires_in: int) -> None:
+        super().__init__("A verification code is required to finish signing in.")
+        self.extra = {
+            "mfa_required": True,
+            "challenge_id": challenge_id,
+            "expires_in": expires_in,
+        }
+
+
 class DNRBlockError(PermissionDeniedError):
     type_path = "do-not-rent"
 

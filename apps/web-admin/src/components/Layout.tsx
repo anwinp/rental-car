@@ -1,3 +1,4 @@
+import { tenantId } from '../tenant'
 import { type ReactNode, useState, useRef, useEffect } from 'react'
 import { useAdminStore } from '../store/adminStore'
 import { Sidebar } from './Sidebar'
@@ -23,8 +24,7 @@ const NOTIFS = [
   { id: '3', color: '#fbbf24', title: 'Fleet utilization alert',   body: 'Airport location crossed 85% utilization',       time: '1h ago',  unread: false },
 ]
 
-const ALERT_TENANT = '00000000-0000-0000-0000-000000000001'
-const ALERT_HEADERS = { 'X-Tenant-ID': ALERT_TENANT }
+const ALERT_HEADERS = { 'X-Tenant-ID': tenantId() }
 
 function RoleAlertStrip() {
   const { user } = useAuth()

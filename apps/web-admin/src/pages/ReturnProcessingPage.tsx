@@ -1,9 +1,9 @@
+import { tenantId } from '../tenant'
 import { useState, useMemo, type FormEvent } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
-const TENANT = '00000000-0000-0000-0000-000000000001'
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -50,7 +50,7 @@ type Step = 1 | 2 | 3 | 4
 
 const HEADERS = {
   'Content-Type': 'application/json',
-  'X-Tenant-ID': TENANT,
+  'X-Tenant-ID': tenantId(),
 }
 
 async function fetchActiveRentals(): Promise<ActiveRental[]> {

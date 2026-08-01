@@ -1,9 +1,9 @@
+import { tenantId } from '../tenant'
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useAuth } from '@rcm/ui/auth'
 
-const TENANT = '00000000-0000-0000-0000-000000000001'
-const HEADERS = { 'Content-Type': 'application/json', 'X-Tenant-ID': TENANT }
+const HEADERS = { 'Content-Type': 'application/json', 'X-Tenant-ID': tenantId() }
 
 type Task = {
   task_id: string; task_type: string; title: string; notes: string | null

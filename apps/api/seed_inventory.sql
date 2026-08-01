@@ -37,7 +37,23 @@ INSERT INTO locations (
   ('00000000-0000-0000-0002-000000000006', '00000000-0000-0000-0000-000000000001',
    'DFW01', 'Dallas/Fort Worth International Airport', 'AIRPORT',
    '2400 Aviation Dr', 'Dallas', 'TX', 'US', '75261',
-   'DFW', '+19725551234', 'America/Chicago', 'USD', '{}', '[]')
+   'DFW', '+19725551234', 'America/Chicago', 'USD', '{}', '[]'),
+
+  -- LAX predates this file: it was created ad hoc in the original dev database,
+  -- so it carries a random UUID rather than the 0000…0002-00000000000N pattern.
+  -- The vehicles INSERT below references that exact id as home_location_id, so
+  -- it must be recreated verbatim or this seed breaks on a fresh database.
+  ('d3e140bb-29f0-453a-b5af-a989d7d40844', '00000000-0000-0000-0000-000000000001',
+   'LAX01', 'Los Angeles International Airport', 'AIRPORT',
+   '1 World Way', 'Los Angeles', 'CA', 'US', '90045',
+   'LAX', '+13105551234', 'America/Los_Angeles', 'USD', '{}', '[]'),
+
+  -- SJC, same story as LAX: ad-hoc id, referenced by seed_realistic.py's
+  -- LOCATION map, so staff_users.home_location_id fails without it.
+  ('6861120d-857a-4003-824b-2256a2088b86', '00000000-0000-0000-0000-000000000001',
+   'SJC', 'San Jose International Airport', 'AIRPORT',
+   '1701 Airport Blvd,', 'San Jose', 'CA', 'US', '909990',
+   'SJC', NULL, 'America/New_York', 'USD', '{}', '[]')
 ON CONFLICT (tenant_id, short_code) DO NOTHING;
 
 -- Fix the existing LAX Camry to AVAILABLE
@@ -243,6 +259,22 @@ INSERT INTO vehicles (
 ('00000000-0000-0000-0000-000000000001','SEDLAX1200000001','Lamborghini','Urus','S',2024,'AUTOMATIC','GASOLINE',4,5,'00000000-0000-0000-0001-000000000012','d3e140bb-29f0-453a-b5af-a989d7d40844','d3e140bb-29f0-453a-b5af-a989d7d40844','AVAILABLE',3500,100,'LAX-X-001')
 
 ON CONFLICT (tenant_id, vin) DO NOTHING;
+
+-- ── Rate code ─────────────────────────────────────────────────
+-- Like LAX above, the RACK rate code was created ad hoc in the original dev
+-- database, so it has a random UUID. rate_schedule_items below refer to it by
+-- that id, so it must exist before them on a fresh database.
+INSERT INTO rate_codes (
+  rate_code_id, tenant_id, code, description, rate_type, currency, status,
+  valid_from, valid_until, location_scope, vehicle_class_scope,
+  min_rental_days, prepay_required, refundable, is_combinable, uses_count,
+  gds_eligible
+) VALUES (
+  '81c00ac4-4a20-4b13-9b16-c96133bd3a78', '00000000-0000-0000-0000-000000000001',
+  'RACK', 'Standard Walk-up Rate', 'RACK', 'USD', 'ACTIVE',
+  '2024-01-01', '2030-12-31', 'ALL', 'ALL',
+  1, false, true, false, 0, false
+) ON CONFLICT (rate_code_id) DO NOTHING;
 
 -- ── Rate schedule items for all remaining classes ─────────────
 -- Rate code: 81c00ac4-4a20-4b13-9b16-c96133bd3a78 (RACK)

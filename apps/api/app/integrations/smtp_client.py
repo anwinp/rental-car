@@ -32,12 +32,18 @@ async def send_email_smtp(
     msg["To"] = to_email
     msg.attach(MIMEText(html_body, "html"))
 
-    await aiosmtplib.send(
-        msg,
-        hostname=settings.smtp_host,
-        port=settings.smtp_port,
-        username=settings.smtp_user,
-        password=settings.smtp_password.get_secret_value(),
-        start_tls=True,
-    )
+    # STARTTLS is right for real relays (587) and wrong for a local mail
+    # catcher, which offers no TLS at all — hardcoding it made local mail
+    # untestable. Auth is likewise skipped when no user is configured, since
+    # aiosmtplib would otherwise attempt AUTH against a server that has none.
+    kwargs: dict = {
+        "hostname": settings.smtp_host,
+        "port": settings.smtp_port,
+        "start_tls": settings.smtp_start_tls,
+    }
+    if settings.smtp_user:
+        kwargs["username"] = settings.smtp_user
+        kwargs["password"] = settings.smtp_password.get_secret_value()
+
+    await aiosmtplib.send(msg, **kwargs)
     log.info("smtp_email_sent to=%s subject=%s", to_email, subject)

@@ -227,6 +227,7 @@ async def change_password(
 @router.post("/request-password-reset", status_code=status.HTTP_202_ACCEPTED)
 async def request_password_reset(
     payload: PasswordResetRequest,
+    request: Request,
     service: AuthService = Depends(_get_auth_service),
 ) -> dict:
     """
@@ -234,7 +235,12 @@ async def request_password_reset(
     Always returns 202 regardless of whether the email is registered
     (prevents email enumeration).
     """
-    await service.request_password_reset(payload.email, str(payload.tenant_id))
+    # The reset link must point back at the workspace host the request came
+    # from, so the user lands where their session cookie will be set.
+    origin = request.headers.get("origin") or f"http://{request.headers.get('host', 'localhost')}"
+    await service.request_password_reset(
+        payload.email, str(payload.tenant_id), reset_base_url=origin
+    )
     return {"message": "If the email exists, a reset link has been sent."}
 
 
@@ -268,9 +274,42 @@ async def mfa_verify(
     claims: UserClaims = Depends(get_current_user),
     service: AuthService = Depends(_get_auth_service),
 ) -> dict:
-    """Verify a TOTP code to complete enrollment or validate a second factor."""
+    """Confirm enrollment by proving the authenticator works.
+
+    This requires an existing session, so it can only ever finish enrollment —
+    it is not the sign-in second factor. That is /mfa/challenge below.
+    """
     valid = await service.verify_mfa(str(claims.user_id), payload.totp_code)
     return {"verified": valid}
+
+
+class MFAChallengeRequest(BaseModel):
+    challenge_id: str
+    code: str
+
+
+@router.post("/mfa/challenge", response_model=UserProfile)
+async def mfa_challenge(
+    payload: MFAChallengeRequest,
+    response: Response,
+    service: AuthService = Depends(_get_auth_service),
+) -> UserProfile:
+    """Second stage of sign-in for accounts with MFA enabled.
+
+    Unauthenticated by design: the caller has passed the password check but
+    holds no session yet. Authority comes from the challenge id, which is
+    single-use, expires in five minutes, and is destroyed after five wrong
+    codes. Accepts a TOTP code or a single-use backup code.
+    """
+    access_token, _ = await service.complete_mfa_login(
+        challenge_id=payload.challenge_id,
+        code=payload.code,
+        response=response,
+    )
+    from app.core.security import decode_token
+
+    claims = decode_token(access_token)
+    return await service.get_me(str(claims.user_id), str(claims.tenant_id))
 
 
 # ── OTP Authentication ────────────────────────────────────────────────────────

@@ -20,6 +20,9 @@ class Settings(BaseSettings):
 
     # ── PostgreSQL (asyncpg dialect) ────────────────────────────────────────────
     database_url: SecretStr
+    # True when DATABASE_URL points at PgBouncer in transaction-pooling mode.
+    # Disables asyncpg's prepared-statement cache — see app/core/database.py.
+    db_via_pgbouncer: bool = False
 
     # ── Redis (three separate clusters in prod; one in dev) ────────────────────
     redis_session_url: SecretStr
@@ -68,6 +71,8 @@ class Settings(BaseSettings):
     smtp_user: str = ""
     smtp_password: SecretStr = SecretStr("")
     smtp_from_email: str = ""
+    # False for a local mail catcher (MailHog/Mailpit), True for a real relay.
+    smtp_start_tls: bool = True
     smtp_from_name: str = "Rental Car Manager"
 
     # ── AWS ────────────────────────────────────────────────────────────────────
@@ -75,6 +80,11 @@ class Settings(BaseSettings):
     s3_documents_bucket: str
     s3_photos_bucket: str
     s3_reports_bucket: str
+    # Set for S3-compatible storage (MinIO). Empty = real AWS S3.
+    # Internal endpoint used for server-side calls from the API/worker containers.
+    s3_endpoint_url: str = ""
+    # Public endpoint that browser-facing presigned URLs are signed against.
+    s3_public_endpoint: str = ""
 
     # ── Google OAuth ───────────────────────────────────────────────────────────
     google_client_id: str = ""
@@ -99,6 +109,17 @@ class Settings(BaseSettings):
     agent_token_ttl_seconds: int = 7776000        # 90 days
     agent_goodwill_cap_usd: float = 75.0          # max goodwill per customer per window
     agent_goodwill_window_days: int = 90          # rolling window for cap enforcement
+
+    # ── Public surfaces ────────────────────────────────────────────────────────
+    # Each tenant is reached at {slug}.{host} on two separate surfaces: the
+    # customer booking site and the back-office admin app. Held as host:port so
+    # local development (different ports) and production (different subdomains
+    # on 443) use the same construction.
+    # *.localtest.me resolves to 127.0.0.1 publicly, so tenant subdomains work
+    # locally with no hosts-file editing.
+    public_booking_host: str = "localtest.me:3400"
+    public_admin_host: str = "localtest.me:3002"
+    public_url_scheme: str = "http"
 
     # ── Application ────────────────────────────────────────────────────────────
     sentry_dsn: str = ""

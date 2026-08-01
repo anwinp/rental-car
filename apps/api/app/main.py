@@ -105,6 +105,10 @@ def create_app() -> FastAPI:
     # ── Router registration ───────────────────────────────────────────────────
     from app.domains.auth.router         import router as auth_router
     from app.domains.tenants.router      import router as tenants_router
+    from app.domains.tenants.public_router import router as public_router
+    from app.domains.platform.router       import router as platform_router
+    from app.domains.tenants.team_router   import router as team_router
+    from app.domains.tenants.team_router   import public_router as invite_public_router
     from app.domains.locations.router    import router as locations_router
     from app.domains.fleet.router        import router as fleet_router
     from app.domains.reservations.router import router as res_router
@@ -126,6 +130,17 @@ def create_app() -> FastAPI:
 
     PREFIX = "/api/v1"
     app.include_router(auth_router,           prefix=f"{PREFIX}/auth",          tags=["auth"])
+    # Anonymous surface: sign-up and runtime config. Kept in its own
+    # namespace so it is obvious in review which handlers may not trust
+    # their input, and so the proxy can rate-limit it separately.
+    app.include_router(public_router,         prefix=f"{PREFIX}/public",        tags=["public"])
+    # Cross-tenant administration. Gated on staff_users.is_platform_admin,
+    # which no tenant-facing endpoint can set — see the router docstring.
+    app.include_router(platform_router,       prefix=f"{PREFIX}/platform",      tags=["platform"])
+    # Team management for a workspace, and the public half of the invite flow
+    # (accepting a link, before the invitee has any session).
+    app.include_router(team_router,           prefix=f"{PREFIX}/team",          tags=["team"])
+    app.include_router(invite_public_router,  prefix=f"{PREFIX}/public",        tags=["public"])
     app.include_router(tenants_router,        prefix=f"{PREFIX}/tenants",       tags=["tenants"])
     app.include_router(locations_router,      prefix=f"{PREFIX}/locations",     tags=["locations"])
     app.include_router(fleet_router,          prefix=f"{PREFIX}/fleet",         tags=["fleet"])

@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.exceptions import (
     AccountLockedError,
+    MFARequiredError,
     AuthenticationError,
     InvalidCredentialsError,
     ResourceNotFoundError,
@@ -28,13 +29,18 @@ from app.core.exceptions import (
     ValidationError,
 )
 from app.core.redis import (
+    MFA_ATTEMPT_KEY,
+    MFA_PENDING_KEY,
     REFRESH_TOKEN_KEY,
     REVOKED_TOKENS_SET,
     SESSION_KEY,
     get_session_redis,
 )
+from sqlalchemy import text as _text
+
 from app.core.security import (
     _build_access_token_claims,
+    bump_epoch,
     create_access_token,
     create_refresh_token,
     hash_password,
@@ -59,7 +65,15 @@ MFA_BACKUP_KEY = "mfa_backup:{user_id}"
 USER_SESSIONS_KEY = "user_sessions:{user_id}"
 
 _LOCKOUT_THRESHOLD = 5
+# An MFA challenge is a short-lived stand-in for a completed password check.
+_MFA_CHALLENGE_TTL = 300      # seconds
+_MFA_MAX_ATTEMPTS = 5         # per challenge, then it is destroyed
 _LOCKOUT_DURATION = timedelta(minutes=15)
+
+
+# A real bcrypt hash of a value nobody can supply. Used only to spend the same
+# work as a genuine password check when the account does not exist.
+_DUMMY_HASH = "$2b$12$iqwcNBJwCgPbaA9tMO5R.uJeNQvsbBkIKbiDhH20Nym.KFmJogkCy"
 
 
 class AuthService:
@@ -72,6 +86,42 @@ class AuthService:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
         self._repo = AuthRepository(session)
+
+    # ── Tenant standing ───────────────────────────────────────────────────────
+
+    async def _assert_tenant_active(self, tenant_id: str) -> None:
+        """Refuse authentication for a tenant that is not in good standing.
+
+        `tenants` carries no RLS (it is the registry the resolver reads before
+        any tenant context exists), so this is a plain lookup.
+        """
+        from sqlalchemy import text
+
+        row = (
+            await self._session.execute(
+                text(
+                    "SELECT status FROM tenants "
+                    "WHERE tenant_id = :tid AND deleted_at IS NULL"
+                ),
+                {"tid": str(tenant_id)},
+            )
+        ).first()
+
+        if row is None:
+            # Do not disclose whether the tenant exists.
+            raise InvalidCredentialsError()
+
+        status = (row[0] or "").upper()
+        if status == "SUSPENDED":
+            raise AuthenticationError(
+                "This workspace is suspended. Contact your administrator."
+            )
+        if status in ("CANCELLED", "DELETED"):
+            raise AuthenticationError("This workspace is no longer active.")
+        if status == "PENDING_VERIFICATION":
+            raise AuthenticationError(
+                "Confirm your email address to activate this workspace."
+            )
 
     # ── Login ─────────────────────────────────────────────────────────────────
 
@@ -88,10 +138,23 @@ class AuthService:
         Authenticate a user and issue tokens.
         Returns (access_token, refresh_token) — callers use these to set cookies.
         """
+        # MT-07: the organisation's own standing gates every sign-in. Checked
+        # before credentials so a suspended tenant cannot be probed for valid
+        # passwords, and re-checked on refresh so suspension takes effect within
+        # one token lifetime rather than at next sign-in.
+        await self._assert_tenant_active(tenant_id)
+
         user = await self._repo.get_by_email_and_tenant(email, tenant_id)
         if user is None:
-            # Constant-time response regardless of existence
-            verify_password("dummy_plaintext", "$2b$12$aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+            # Burn roughly the same time as a real verify so response latency
+            # does not reveal whether the account exists.
+            #
+            # The previous placeholder was not a valid bcrypt hash (its checksum
+            # was short), so passlib raised ValueError and this path returned
+            # 500 instead of 401 — which leaked existence far more loudly than
+            # timing ever would: 401 meant "real user, wrong password" and 500
+            # meant "no such user".
+            verify_password("dummy_plaintext", _DUMMY_HASH)
             raise InvalidCredentialsError()
 
         if not user.is_active:
@@ -115,11 +178,41 @@ class AuthService:
 
         # Success path
         await self._repo.reset_login_failures(user.user_id)
+
+        # Second factor. Until now `is_mfa_enabled` was written by enrollment
+        # and read by nothing on this path, so a user who had carefully set up
+        # an authenticator still got a full-privilege session from the password
+        # alone — the control existed in the UI and in the column, and nowhere
+        # in between.
+        #
+        # Everything below this point issues a session, so the challenge has to
+        # interrupt here. What goes back to the caller is an opaque id with no
+        # authority of its own; the session is minted in complete_mfa_login.
+        if user.is_mfa_enabled and user.mfa_secret:
+            challenge_id = secrets.token_urlsafe(32)
+            redis = get_session_redis()
+            await redis.setex(
+                MFA_PENDING_KEY.format(challenge_id=challenge_id),
+                _MFA_CHALLENGE_TTL,
+                json.dumps(
+                    {
+                        "user_id": str(user.user_id),
+                        "tenant_id": str(user.tenant_id),
+                        "app_context": app_context,
+                        "ip": ip,
+                    }
+                ),
+            )
+            await self._session.commit()
+            log.info("mfa_challenge_issued", user_id=user.user_id, tenant_id=tenant_id)
+            raise MFARequiredError(challenge_id, _MFA_CHALLENGE_TTL)
+
         await self._repo.update_last_login(user.user_id)
 
         # Build tokens
         access_jti = str(uuid.uuid4())
         refresh_jti = str(uuid.uuid4())
+        user_epoch = int(getattr(user, "token_epoch", 0) or 0)
         location_ids = [UUID(lid) for lid in (user.location_ids or [])]
         roles = [user.role]
 
@@ -131,12 +224,14 @@ class AuthService:
             location_ids=location_ids,
             jti=access_jti,
             app_context=app_context,
+            epoch=user_epoch,
         )
         refresh_token = create_refresh_token(
             user_id=user.user_id,
             jti=refresh_jti,
             access_jti=access_jti,
             tenant_id=user.tenant_id,
+            epoch=user_epoch,
         )
 
         # Store session in Redis
@@ -159,6 +254,147 @@ class AuthService:
         await self._session.commit()
 
         log.info("user_login", user_id=user.user_id, tenant_id=tenant_id, ip=ip)
+        return access_token, refresh_token
+
+    async def complete_mfa_login(
+        self,
+        challenge_id: str,
+        code: str,
+        response: Response,
+    ) -> tuple[str, str]:
+        """Exchange an MFA challenge plus a valid code for a real session.
+
+        Accepts either a TOTP code or one of the enrollment backup codes. Backup
+        codes are single-use and consumed here — they were generated with a
+        24-hour TTL and read by nothing, so anyone who actually lost their
+        authenticator was locked out permanently despite holding ten valid codes.
+        """
+        redis = get_session_redis()
+        key = MFA_PENDING_KEY.format(challenge_id=challenge_id)
+        raw = await redis.get(key)
+        if not raw:
+            raise TokenInvalidError()
+
+        # Brute force is the obvious attack on a 6-digit code, and pyotp's
+        # valid_window=1 means roughly three codes are live at any moment.
+        attempts = await redis.incr(MFA_ATTEMPT_KEY.format(challenge_id=challenge_id))
+        if attempts == 1:
+            await redis.expire(
+                MFA_ATTEMPT_KEY.format(challenge_id=challenge_id), _MFA_CHALLENGE_TTL
+            )
+        if attempts > _MFA_MAX_ATTEMPTS:
+            await redis.delete(key)
+            log.warning("mfa_challenge_exhausted", challenge_id=challenge_id[:8])
+            raise TokenInvalidError()
+
+        pending = json.loads(raw)
+        user_id = pending["user_id"]
+        app_context = pending.get("app_context", "web")
+
+        await self._session.execute(
+            _text("SELECT set_config('app.current_tenant_id', :t, true)"),
+            {"t": str(pending["tenant_id"])},
+        )
+        user = await self._repo.get_by_id(user_id)
+        if user is None or not user.is_active or not user.mfa_secret:
+            raise TokenInvalidError()
+
+        # Re-check the workspace: a suspension between the two steps must land.
+        await self._assert_tenant_active(user.tenant_id)
+
+        code = (code or "").strip().replace(" ", "")
+        verified = pyotp.TOTP(user.mfa_secret).verify(code, valid_window=1)
+
+        if not verified:
+            verified = await self._consume_backup_code(user_id, code)
+
+        if not verified:
+            raise InvalidCredentialsError()
+
+        # One challenge, one session.
+        await redis.delete(key)
+        await redis.delete(MFA_ATTEMPT_KEY.format(challenge_id=challenge_id))
+
+        await self._repo.update_last_login(user_id)
+        return await self._issue_session(user, app_context, response)
+
+    async def _consume_backup_code(self, user_id: str, code: str) -> bool:
+        """Spend a single-use backup code. Returns True if one matched."""
+        raw = await get_session_redis().get(MFA_BACKUP_KEY.format(user_id=user_id))
+        if not raw:
+            return False
+        try:
+            codes = json.loads(raw)
+        except (TypeError, ValueError):
+            return False
+
+        upper = code.upper()
+        match = None
+        for stored in codes:
+            # Codes are stored hashed; compare in constant time.
+            if hmac.compare_digest(
+                hashlib.sha256(upper.encode()).hexdigest(), stored
+            ):
+                match = stored
+                break
+        if match is None:
+            return False
+
+        codes.remove(match)
+        await get_session_redis().set(
+            MFA_BACKUP_KEY.format(user_id=user_id), json.dumps(codes)
+        )
+        log.info("mfa_backup_code_used", user_id=user_id, remaining=len(codes))
+        return True
+
+    async def _issue_session(
+        self, user: StaffUser, app_context: str, response: Response
+    ) -> tuple[str, str]:
+        """Mint the token pair, register it in Redis, and set cookies.
+
+        Extracted so the password-only path and the MFA path cannot drift apart
+        — the second factor must not accidentally produce a session built
+        differently from the first.
+        """
+        access_jti = str(uuid.uuid4())
+        refresh_jti = str(uuid.uuid4())
+        user_epoch = int(getattr(user, "token_epoch", 0) or 0)
+        location_ids = [UUID(lid) for lid in (user.location_ids or [])]
+
+        access_token = create_access_token(
+            user_id=UUID(user.user_id),
+            tenant_id=UUID(user.tenant_id),
+            roles=[user.role],
+            primary_role=user.role,
+            location_ids=location_ids,
+            jti=access_jti,
+            app_context=app_context,
+            epoch=user_epoch,
+        )
+        refresh_token = create_refresh_token(
+            user_id=user.user_id,
+            jti=refresh_jti,
+            access_jti=access_jti,
+            tenant_id=user.tenant_id,
+            epoch=user_epoch,
+        )
+
+        redis = get_session_redis()
+        access_ttl = (
+            settings.jwt_access_token_ttl_counter_seconds
+            if app_context == "counter"
+            else settings.jwt_access_token_ttl_web_seconds
+        )
+        await redis.setex(SESSION_KEY.format(jti=access_jti), access_ttl, user.user_id)
+        await redis.setex(
+            REFRESH_TOKEN_KEY.format(jti=refresh_jti),
+            settings.jwt_refresh_token_ttl_seconds,
+            user.user_id,
+        )
+        await redis.sadd(USER_SESSIONS_KEY.format(user_id=user.user_id), access_jti)
+
+        set_auth_cookies(response, access_token, refresh_token, app_context)
+        await self._session.commit()
         return access_token, refresh_token
 
     # ── Token Refresh ─────────────────────────────────────────────────────────
@@ -188,10 +424,39 @@ class AuthService:
         old_refresh_jti = payload["jti"]
         old_access_jti = payload.get("access_jti", "")
 
-        # Theft detection: if already revoked, revoke all sessions for user
+        # Theft detection. A replayed refresh token means the token family is
+        # compromised: either the attacker or the legitimate user is presenting
+        # one that was already rotated away.
+        #
+        # This previously deleted user_sessions:{uid} — the INDEX of the live
+        # sessions, not the sessions themselves — so the alarm fired while every
+        # stolen token kept working. Worse, that index is the input to the
+        # password-reset cleanup below, so replaying a token pre-emptively
+        # disabled the victim's own recovery path.
+        #
+        # Bumping the epoch is what actually ends it: every token for this user,
+        # of either kind, issued or not yet seen, stops validating on the next
+        # request.
         if await redis.sismember(REVOKED_TOKENS_SET, old_refresh_jti):
             user_id = payload.get("sub", "")
-            await redis.delete(USER_SESSIONS_KEY.format(user_id=user_id))
+            tenant_id = payload.get("tenant_id", "")
+            if user_id:
+                await self._session.execute(
+                    _text("SELECT set_config('app.current_tenant_id', :t, true)"),
+                    {"t": str(tenant_id)},
+                )
+                await bump_epoch(self._session, user_id)
+                await self._session.commit()
+                jtis = await redis.smembers(USER_SESSIONS_KEY.format(user_id=user_id))
+                if jtis:
+                    await redis.sadd(REVOKED_TOKENS_SET, *jtis)
+                await redis.delete(USER_SESSIONS_KEY.format(user_id=user_id))
+            log.warning(
+                "refresh_token_reuse_detected",
+                user_id=user_id,
+                tenant_id=tenant_id,
+                jti=old_refresh_jti,
+            )
             raise TokenRevokedError()
 
         # Invalidate old tokens
@@ -209,6 +474,20 @@ class AuthService:
         if user is None or not user.is_active:
             raise TokenRevokedError()
 
+        # A refresh token that predates a password change must not rotate. This
+        # is the check that closes the 30-day window a stolen token used to keep
+        # after the victim reset their password.
+        token_epoch = int(payload.get("epoch", 0))
+        user_epoch = int(getattr(user, "token_epoch", 0) or 0)
+        if token_epoch < user_epoch:
+            raise TokenRevokedError()
+
+        # MT-07: the workspace's standing is re-checked on every rotation, not
+        # just at sign-in. Without this a suspended organisation keeps working
+        # until its refresh token expires — up to 30 days — because rotation
+        # would happily mint new access tokens for it.
+        await self._assert_tenant_active(user.tenant_id)
+
         # Issue new tokens
         new_access_jti = str(uuid.uuid4())
         new_refresh_jti = str(uuid.uuid4())
@@ -222,12 +501,14 @@ class AuthService:
             location_ids=location_ids,
             jti=new_access_jti,
             app_context=app_context,
+            epoch=user_epoch,
         )
         refresh_token = create_refresh_token(
             user_id=user.user_id,
             jti=new_refresh_jti,
             access_jti=new_access_jti,
             tenant_id=user.tenant_id,
+            epoch=user_epoch,
         )
 
         access_ttl = (
@@ -423,15 +704,40 @@ class AuthService:
             raise InvalidCredentialsError()
         new_hash = hash_password(data.new_password)
         await self._repo.update_password(user_id, new_hash)
+
+        # Changing your password ends every session, everywhere. This revoked
+        # nothing at all before, so the usual reaction to "I think someone is in
+        # my account" left the intruder exactly where they were.
+        await bump_epoch(self._session, user_id)
+        redis = get_session_redis()
+        jtis = await redis.smembers(USER_SESSIONS_KEY.format(user_id=user_id))
+        if jtis:
+            await redis.sadd(REVOKED_TOKENS_SET, *jtis)
+        await redis.delete(USER_SESSIONS_KEY.format(user_id=user_id))
         await self._session.commit()
 
     # ── Password Reset ────────────────────────────────────────────────────────
 
-    async def request_password_reset(self, email: str, tenant_id: str) -> None:
+    async def request_password_reset(
+        self, email: str, tenant_id: str, reset_base_url: str = ""
+    ) -> None:
         """
         Generate a 24-hour signed reset token and dispatch email.
         Always returns successfully (prevents email enumeration).
         """
+        # staff_users is RLS-protected. This endpoint is reachable without a
+        # session and callers do not always send a tenant header, so bind the
+        # tenant named in the request before looking anyone up — otherwise the
+        # lookup silently returns nothing and no reset email is ever sent,
+        # which is indistinguishable from "no such user" and impossible to
+        # diagnose from the caller's side.
+        from sqlalchemy import text as _text
+
+        await self._session.execute(
+            _text("SELECT set_config('app.current_tenant_id', :t, true)"),
+            {"t": str(tenant_id)},
+        )
+
         user = await self._repo.get_by_email_and_tenant(email, tenant_id)
         if user is None:
             return  # Silently succeed — do not leak existence
@@ -445,16 +751,36 @@ class AuthService:
             user.user_id,
         )
 
-        # Dispatch email notification (fire-and-forget via notification service)
-        # The notification service is injected via the router; here we just log
+        # Actually send it. This previously only logged a comment saying
+        # production "should" dispatch a notification — which meant the sole
+        # administrator of a newly registered workspace had no way back in
+        # after forgetting their password. For a single-user tenant that is
+        # not an inconvenience, it is permanent loss of the workspace.
+        from app.core.mailer import send_email, wrap_html
+
+        reset_link = f"{reset_base_url.rstrip('/')}/reset-password?token={raw_token}"
+        transport = await send_email(
+            to_email=user.email,
+            subject="Reset your RCM password",
+            html=wrap_html(
+                "Reset your password",
+                "<p>We received a request to reset the password for your RCM "
+                "account. This link expires in 24 hours and can be used once.</p>"
+                "<p>If you did not request this, you can ignore this email — "
+                "your password will not change.</p>",
+                cta_text="Choose a new password",
+                cta_url=reset_link,
+            ),
+            kind="password_reset",
+        )
+
         log.info(
             "password_reset_requested",
             user_id=user.user_id,
             tenant_id=tenant_id,
-            # raw_token NOT logged; only hash for audit
+            transport=transport,
+            # raw_token is never logged; only the hash is stored, above.
         )
-        # In production, route to NotificationService.dispatch_notification with
-        # event_code=PASSWORD_RESET_REQUESTED and merge_vars={"reset_link": url}
 
     async def reset_password(self, token: str, new_password: str) -> None:
         """Validate reset token, update password, revoke all sessions."""
@@ -471,7 +797,16 @@ class AuthService:
         new_hash = hash_password(new_password)
         await self._repo.update_password(user_id, new_hash)
 
-        # Revoke all active sessions for this user
+        # Raise the credential epoch FIRST. The JTI sweep below only ever held
+        # access tokens; refresh JTIs were never added to that index and
+        # refresh:{jti} keys were never deleted, so a stolen refresh token used
+        # to survive the reset and keep minting sessions for another 30 days.
+        # The epoch invalidates both kinds at once, including tokens this
+        # process has no way to enumerate.
+        await bump_epoch(self._session, str(user_id))
+
+        # Still sweep the known JTIs: it makes the revocation immediate rather
+        # than waiting out the 5-minute epoch cache.
         session_jtis = await redis.smembers(USER_SESSIONS_KEY.format(user_id=user_id))
         if session_jtis:
             await redis.sadd(REVOKED_TOKENS_SET, *session_jtis)
@@ -503,9 +838,11 @@ class AuthService:
 
         # Store hashed backup codes in Redis (24h TTL during enrollment)
         redis = get_session_redis()
-        await redis.setex(
+        # No TTL. These previously expired 24 hours after enrollment, so the
+        # ten codes a user is told to keep somewhere safe were dead long before
+        # the day they lost their phone — which is the only day they matter.
+        await redis.set(
             MFA_BACKUP_KEY.format(user_id=user_id),
-            86400,
             json.dumps(
                 [hashlib.sha256(c.encode()).hexdigest() for c in backup_codes]
             ),

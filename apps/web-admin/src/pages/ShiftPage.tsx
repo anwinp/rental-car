@@ -1,3 +1,4 @@
+import { tenantId } from '../tenant'
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 
@@ -33,13 +34,12 @@ type ShiftReport = {
 
 // ── fetchJSON helper ──────────────────────────────────────────────────────────
 
-const TENANT = '00000000-0000-0000-0000-000000000001'
 
 async function fetchJSON(path: string, opts?: RequestInit) {
   const res = await fetch(`/api/v1${path}`, {
     credentials: 'include',
     headers: {
-      'X-Tenant-ID': TENANT,
+      'X-Tenant-ID': tenantId(),
       'Content-Type': 'application/json',
       ...(opts?.headers ?? {}),
     },

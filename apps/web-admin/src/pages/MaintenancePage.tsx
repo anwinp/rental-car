@@ -1,9 +1,9 @@
+import { tenantId } from '../tenant'
 import { useState, useMemo, type FormEvent } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const TENANT = import.meta.env.VITE_TENANT_ID ?? '00000000-0000-0000-0000-000000000001'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -175,7 +175,7 @@ async function fetchJSON(path: string, opts?: RequestInit): Promise<unknown> {
   const res = await fetch(`/api/v1${path}`, {
     credentials: 'include',
     headers: {
-      'X-Tenant-ID': TENANT,
+      'X-Tenant-ID': tenantId(),
       'Content-Type': 'application/json',
       ...(opts?.headers ?? {}),
     },

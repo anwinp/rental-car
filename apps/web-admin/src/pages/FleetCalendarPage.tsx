@@ -1,3 +1,4 @@
+import { tenantHeaders } from '../tenant'
 import { useState, useRef, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { DndContext, pointerWithin, useDraggable, useDroppable } from '@dnd-kit/core'
@@ -351,7 +352,7 @@ export function FleetCalendarPage() {
     mutationFn: async ({ blockId, targetVehicleId }: { blockId: string; targetVehicleId: string }) => {
       const res = await fetch(`/api/v1/fleet/blocks/${blockId}/reallocate`, {
         method: 'POST', credentials: 'include',
-        headers: { 'Content-Type': 'application/json', 'X-Tenant-ID': '00000000-0000-0000-0000-000000000001' },
+        headers: tenantHeaders(),
         body: JSON.stringify({ target_vehicle_id: targetVehicleId, notify_customer: notifyCustomer }),
       })
       if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.detail ?? 'Failed') }

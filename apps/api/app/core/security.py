@@ -11,7 +11,7 @@ from jose import JWTError, jwt
 from passlib.context import CryptContext
 
 from app.core.config import settings
-from app.core.redis import get_session_redis, REVOKED_TOKENS_SET
+from app.core.redis import get_session_redis, REVOKED_TOKENS_SET, USER_EPOCH_KEY
 
 _pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -34,6 +34,7 @@ class UserClaims:
     exp: int               # Expiry epoch (standard JWT claim)
     iat: int               # Issued-at epoch (standard JWT claim)
     app_context: str       # "counter" | "web" | "admin"
+    epoch: int = 0         # credential epoch this token was minted under
 
 
 def _build_access_token_claims(
@@ -44,6 +45,7 @@ def _build_access_token_claims(
     location_ids: list[uuid.UUID],
     jti: str,
     app_context: str,
+    epoch: int = 0,
 ) -> dict:
     """Build the claim dictionary written into a JWT access token."""
     now = datetime.now(timezone.utc)
@@ -63,6 +65,10 @@ def _build_access_token_claims(
         "primary_role": primary_role,
         "location_ids": [str(lid) for lid in location_ids],
         "app_context":  app_context,
+        # Credential epoch this token was minted under. Raising the user's
+        # epoch invalidates every token bearing a lower one, which is how a
+        # password change ends sessions it has no way to enumerate.
+        "epoch":        epoch,
     }
 
 
@@ -74,6 +80,7 @@ def create_access_token(
     location_ids: list[uuid.UUID],
     jti: str,
     app_context: str = "web",
+    epoch: int = 0,
 ) -> str:
     """Encode and return a signed JWT access token."""
     claims = _build_access_token_claims(
@@ -84,6 +91,7 @@ def create_access_token(
         location_ids=location_ids,
         jti=jti,
         app_context=app_context,
+        epoch=epoch,
     )
     return jwt.encode(
         claims,
@@ -92,7 +100,9 @@ def create_access_token(
     )
 
 
-def create_refresh_token(user_id: str, jti: str, access_jti: str, tenant_id: str) -> str:
+def create_refresh_token(
+    user_id: str, jti: str, access_jti: str, tenant_id: str, epoch: int = 0
+) -> str:
     """Encode and return a signed JWT refresh token (30-day expiry, minimal claims)."""
     now = datetime.now(timezone.utc)
     claims = {
@@ -105,6 +115,9 @@ def create_refresh_token(user_id: str, jti: str, access_jti: str, tenant_id: str
         ),
         "type":       "refresh",
         "access_jti": access_jti,
+        # A refresh token outlives its access token by 30 days, so this is the
+        # claim that actually matters — see create_access_token.
+        "epoch":      epoch,
     }
     return jwt.encode(
         claims,
@@ -143,12 +156,97 @@ def decode_token(token: str) -> UserClaims:
             exp=payload["exp"],
             iat=payload["iat"],
             app_context=payload.get("app_context", "web"),
+            # Tokens minted before migration 061 carry no epoch. Treating that
+            # as 0 keeps them valid until they expire naturally, which is the
+            # right trade: bumping everyone to 1 would log out every existing
+            # session on deploy.
+            epoch=int(payload.get("epoch", 0)),
         )
     except (KeyError, ValueError):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Not authenticated",
         )
+
+
+async def current_epoch(user_id: str, tenant_id: str) -> int:
+    """The credential epoch a user's tokens must match to still be valid.
+
+    Postgres holds the durable value; Redis caches it for 5 minutes so the hot
+    auth path stays a single round trip. A cache miss falls back to the row
+    rather than failing open — losing the session cluster must not silently
+    re-validate tokens a password change was meant to kill.
+
+    The tenant must be bound before reading: staff_users is under FORCE ROW
+    LEVEL SECURITY, so an unscoped read returns no row and would report epoch 0
+    for everyone — locking out exactly the users who had just changed their
+    password, and only them. It comes from the token's own claim, which the
+    signature already vouches for.
+    """
+    redis = get_session_redis()
+    key = USER_EPOCH_KEY.format(user_id=user_id)
+    try:
+        cached = await redis.get(key)
+        if cached is not None:
+            return int(cached)
+    except Exception:  # noqa: BLE001 — cache unavailable, fall through to the row
+        pass
+
+    from sqlalchemy import text as _text
+
+    from app.core.database import AsyncSessionLocal
+
+    async with AsyncSessionLocal() as session:
+        await session.execute(
+            _text("SELECT set_config('app.current_tenant_id', :t, true)"),
+            {"t": str(tenant_id)},
+        )
+        row = await session.execute(
+            _text(
+                "SELECT token_epoch FROM staff_users WHERE user_id = :uid "
+                "UNION ALL "
+                "SELECT token_epoch FROM customers WHERE customer_id = :uid "
+                "LIMIT 1"
+            ),
+            {"uid": user_id},
+        )
+        value = row.scalar()
+
+    epoch = int(value or 0)
+    try:
+        await redis.setex(key, 300, epoch)
+    except Exception:  # noqa: BLE001
+        pass
+    return epoch
+
+
+async def bump_epoch(session, user_id: str, table: str = "staff_users") -> int:
+    """Invalidate every token this user holds, of any kind, in one write.
+
+    Called on password change, password reset, and refresh-token reuse. Returns
+    the new epoch so the caller can mint a replacement session without a
+    second read.
+    """
+    from sqlalchemy import text as _text
+
+    pk = "user_id" if table == "staff_users" else "customer_id"
+    result = await session.execute(
+        _text(
+            f"UPDATE {table} SET token_epoch = token_epoch + 1 "  # noqa: S608
+            f"WHERE {pk} = :uid RETURNING token_epoch"
+        ),
+        {"uid": user_id},
+    )
+    new_epoch = int(result.scalar() or 0)
+
+    # Write through rather than deleting, so a concurrent request cannot repopulate
+    # the cache from a row this transaction has not committed yet.
+    try:
+        redis = get_session_redis()
+        await redis.setex(USER_EPOCH_KEY.format(user_id=user_id), 300, new_epoch)
+    except Exception:  # noqa: BLE001
+        pass
+    return new_epoch
 
 
 def hash_password(password: str) -> str:
@@ -221,6 +319,15 @@ async def get_current_user(
             detail="Not authenticated",
         )
 
+    # A token whose epoch is behind the user's current one was minted before a
+    # password change, reset, or reuse-detection event. Reject it whatever its
+    # jti says — this is what makes those actions actually end a session.
+    if claims.epoch < await current_epoch(str(claims.user_id), str(claims.tenant_id)):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+        )
+
     return claims
 
 
@@ -234,6 +341,8 @@ async def get_optional_current_user(
         claims = decode_token(access_token)
         redis = get_session_redis()
         if await redis.sismember(REVOKED_TOKENS_SET, claims.jti):
+            return None
+        if claims.epoch < await current_epoch(str(claims.user_id), str(claims.tenant_id)):
             return None
         return claims
     except HTTPException:
@@ -257,6 +366,8 @@ async def get_current_user_or_bearer(
     claims = decode_token(token)
     redis = get_session_redis()
     if await redis.sismember(REVOKED_TOKENS_SET, claims.jti):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+    if claims.epoch < await current_epoch(str(claims.user_id), str(claims.tenant_id)):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
     return claims
 

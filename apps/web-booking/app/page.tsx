@@ -1,10 +1,11 @@
 'use client'
 
+import { tenantId } from './lib/tenant'
+
 import { useState, useEffect, useRef } from 'react'
 
 const RED = '#da291c'
 const RED_ACTIVE = '#b01e0a'
-const TENANT_ID = '00000000-0000-0000-0000-000000000001'
 
 interface PromoVehicle {
   vehicle_id: string
@@ -357,7 +358,7 @@ export default function HomePage() {
 
   useEffect(() => {
     let cancelled = false
-    fetch('/api/v1/fleet/promo', { headers: { 'X-Tenant-ID': TENANT_ID } })
+    fetch('/api/v1/fleet/promo', { headers: { 'X-Tenant-ID': tenantId() } })
       .then(r => r.ok ? r.json() : Promise.reject(r.status))
       .then((data: PromoVehicle[]) => { if (!cancelled) { setPromoVehicles(data); setLoadingPromo(false) } })
       .catch(() => { if (!cancelled) setLoadingPromo(false) })
@@ -366,7 +367,7 @@ export default function HomePage() {
 
   useEffect(() => {
     let cancelled = false
-    fetch('/api/v1/locations/public', { headers: { 'X-Tenant-ID': TENANT_ID } })
+    fetch('/api/v1/locations/public', { headers: { 'X-Tenant-ID': tenantId() } })
       .then(r => r.ok ? r.json() : Promise.reject(r.status))
       .then((data: PublicLocation[]) => { if (!cancelled) { setLocations(data); setLoadingLoc(false) } })
       .catch(() => { if (!cancelled) setLoadingLoc(false) })

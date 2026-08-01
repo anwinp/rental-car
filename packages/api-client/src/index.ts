@@ -1,4 +1,4 @@
-export { apiClient } from './client'
+export { apiClient, setActiveTenant, getActiveTenant } from './client'
 export type { paths, components } from './schema'
 export {
   queryKeys,

@@ -1,9 +1,10 @@
 'use client'
 
+import { tenantId } from '../lib/tenant'
+
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 
-const TENANT = '00000000-0000-0000-0000-000000000001'
 
 const NAV_LINKS = [
   { label: 'Reserve',    href: '/search' },
@@ -26,7 +27,7 @@ export function Navbar() {
   useEffect(() => {
     fetch('/api/v1/auth/me', {
       credentials: 'include',
-      headers: { 'X-Tenant-ID': TENANT },
+      headers: { 'X-Tenant-ID': tenantId() },
     })
       .then(r => r.ok ? r.json() : null)
       .then(d => setUser(d))
@@ -37,7 +38,7 @@ export function Navbar() {
     await fetch('/api/v1/auth/logout', {
       method: 'POST',
       credentials: 'include',
-      headers: { 'X-Tenant-ID': TENANT },
+      headers: { 'X-Tenant-ID': tenantId() },
     }).catch(() => {})
     setUser(null)
     window.location.href = '/'

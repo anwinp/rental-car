@@ -1,9 +1,9 @@
+import { tenantId } from '../tenant'
 import { useState, useMemo, type FormEvent } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-const TENANT = import.meta.env.VITE_TENANT_ID ?? ''
 
 type ClaimStatus =
   | 'OPEN'
@@ -156,7 +156,7 @@ const ZONE_CONDITIONS = ['GOOD', 'SCRATCHED', 'DENTED', 'CRACKED', 'MISSING', 'B
 async function apiFetch(path: string): Promise<unknown> {
   const res = await fetch(`/api/v1${path}`, {
     credentials: 'include',
-    headers: { 'X-Tenant-ID': TENANT },
+    headers: { 'X-Tenant-ID': tenantId() },
   })
   if (!res.ok) {
     const body = await res.json().catch(() => ({})) as Record<string, unknown>
@@ -169,7 +169,7 @@ async function apiPost(path: string, body: unknown): Promise<unknown> {
   const res = await fetch(`/api/v1${path}`, {
     method: 'POST',
     credentials: 'include',
-    headers: { 'Content-Type': 'application/json', 'X-Tenant-ID': TENANT },
+    headers: { 'Content-Type': 'application/json', 'X-Tenant-ID': tenantId() },
     body: JSON.stringify(body),
   })
   if (!res.ok) {

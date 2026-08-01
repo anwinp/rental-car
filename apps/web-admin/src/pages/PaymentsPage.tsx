@@ -1,3 +1,4 @@
+import { tenantId } from '../tenant'
 import { useState, useMemo, type FormEvent } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 
@@ -74,14 +75,13 @@ type Step = 1 | 2 | 3
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const TENANT = import.meta.env.VITE_TENANT_ID ?? ''
 
 // ── API helpers ───────────────────────────────────────────────────────────────
 
 async function getJSON(path: string) {
   const res = await fetch(`/api/v1${path}`, {
     credentials: 'include',
-    headers: { 'X-Tenant-ID': TENANT },
+    headers: { 'X-Tenant-ID': tenantId() },
   })
   if (!res.ok) {
     const body = await res.json().catch(() => ({}))
@@ -94,7 +94,7 @@ async function postJSON(path: string, body: unknown) {
   const res = await fetch(`/api/v1${path}`, {
     method: 'POST',
     credentials: 'include',
-    headers: { 'Content-Type': 'application/json', 'X-Tenant-ID': TENANT },
+    headers: { 'Content-Type': 'application/json', 'X-Tenant-ID': tenantId() },
     body: JSON.stringify(body),
   })
   if (!res.ok) {

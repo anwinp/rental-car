@@ -22,6 +22,14 @@ WS_TOKEN_KEY = "ws_token:{token}"                 # TTL=60s
 OTP_KEY = "otp:{customer_id}"                     # TTL=600s
 PREAUTH_LOCK_KEY = "preauth_lock:{reservation_id}" # TTL=120s
 LOGIN_FAIL_KEY = "login_fail:{email}"             # TTL=lockout window
+# Cache of staff_users.token_epoch / customers.token_epoch. Postgres is the
+# source of truth; this only saves a read per request. A miss re-reads the row,
+# so losing this cluster costs latency, not correctness.
+USER_EPOCH_KEY = "user_epoch:{user_id}"           # TTL=300s
+# Short-lived token issued after a password check when the account has MFA on.
+# Carries no privileges — it can only be exchanged for a real session.
+MFA_PENDING_KEY = "mfa_pending:{challenge_id}"    # TTL=300s
+MFA_ATTEMPT_KEY = "mfa_attempt:{challenge_id}"    # TTL=300s
 TELEMATICS_DEDUP_KEY = "telematics:dedup:{device_id}:{timestamp}"  # TTL=300s
 RATE_LIMIT_PARTNER_KEY = "ratelimit:partner:{key_id}:{window}"     # TTL=60s
 DEDUP_KEY = "dedup:{hash}"                        # TTL=300s

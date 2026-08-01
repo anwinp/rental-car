@@ -1,3 +1,4 @@
+import { tenantId } from '../tenant'
 import { useEffect, useRef, useState } from 'react'
 
 interface Suggestion {
@@ -22,7 +23,6 @@ const T = {
   hairline:       '#303030',
 }
 
-const TENANT = '00000000-0000-0000-0000-000000000001'
 
 const TYPE_COLORS: Record<string, { dot: string; border: string; bg: string }> = {
   alert: { dot: '#f47272', border: 'rgba(244,114,114,0.2)', bg: 'rgba(244,114,114,0.05)' },
@@ -40,7 +40,7 @@ export function AgentSuggestionPanel({ checkoutSessionId }: Props) {
     try {
       const url = `/api/v1/agents/counter-suggestions${checkoutSessionId ? `?session=${checkoutSessionId}` : ''}`
       const res = await fetch(url, {
-        headers: { 'X-Tenant-ID': TENANT },
+        headers: { 'X-Tenant-ID': tenantId() },
         credentials: 'include',
       })
       if (res.ok) {

@@ -651,11 +651,14 @@ class CheckoutService:
         from sqlalchemy import text
         result = await self._session.execute(
             text(
+                # MT-02: explicit tenant predicate alongside RLS. This value
+                # feeds a customer charge, so it must not be able to read a
+                # reservation belonging to another workspace.
                 "SELECT return_datetime, base_rate_daily "
                 "FROM reservations "
-                "WHERE reservation_id = :rid"
+                "WHERE reservation_id = :rid AND tenant_id = :tid"
             ),
-            {"rid": ra.reservation_id},
+            {"rid": ra.reservation_id, "tid": str(ra.tenant_id)},
         )
         row = result.mappings().first()
         if row is None or row["return_datetime"] is None:

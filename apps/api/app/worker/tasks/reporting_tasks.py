@@ -187,14 +187,15 @@ async def _generate_daily_revenue_report_async(tenant_id: str, date: str) -> dic
     # Upload to S3 (if boto3 available; skip gracefully in test/dev)
     s3_uri = f"s3://{settings.s3_reports_bucket}/tenants/{tenant_id}/revenue/{date}/daily_revenue.csv"
     try:
-        import boto3  # type: ignore[import-not-found]
-        s3 = boto3.client("s3", region_name=settings.aws_region)
+        from app.core.s3 import get_s3_client, supports_sse
+        s3 = get_s3_client()
+        extra = {"ServerSideEncryption": "AES256"} if supports_sse() else {}
         s3.put_object(
             Bucket=settings.s3_reports_bucket,
             Key=f"tenants/{tenant_id}/revenue/{date}/daily_revenue.csv",
             Body=csv_content.encode("utf-8"),
             ContentType="text/csv",
-            ServerSideEncryption="AES256",
+            **extra,
         )
         log.info("daily_revenue_report_uploaded", s3_uri=s3_uri)
     except ImportError:

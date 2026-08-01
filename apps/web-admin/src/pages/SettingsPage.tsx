@@ -1,8 +1,8 @@
+import { tenantId } from '../tenant'
 import { useState, useEffect } from 'react'
 import { useAuth } from '@rcm/ui/auth'
 import type { ReactNode } from 'react'
 
-const TENANT_ID = '00000000-0000-0000-0000-000000000001'
 
 function LLMSettingsSection() {
   const [provider, setProvider] = useState('anthropic')
@@ -15,9 +15,9 @@ function LLMSettingsSection() {
   const [testResult, setTestResult] = useState<{ type: 'success' | 'error'; msg: string } | null>(null)
 
   useEffect(() => {
-    fetch(`/api/v1/tenants/${TENANT_ID}/llm-settings`, {
+    fetch(`/api/v1/tenants/${tenantId()}/llm-settings`, {
       credentials: 'include',
-      headers: { 'X-Tenant-ID': TENANT_ID },
+      headers: { 'X-Tenant-ID': tenantId() },
     })
       .then(r => r.ok ? r.json() : null)
       .then(d => {
@@ -35,10 +35,10 @@ function LLMSettingsSection() {
     setSaving(true)
     setStatus(null)
     try {
-      const res = await fetch(`/api/v1/tenants/${TENANT_ID}/llm-settings`, {
+      const res = await fetch(`/api/v1/tenants/${tenantId()}/llm-settings`, {
         method: 'PUT',
         credentials: 'include',
-        headers: { 'Content-Type': 'application/json', 'X-Tenant-ID': TENANT_ID },
+        headers: { 'Content-Type': 'application/json', 'X-Tenant-ID': tenantId() },
         body: JSON.stringify({ provider, api_key: apiKey }),
       })
       if (res.ok) {
@@ -64,7 +64,7 @@ function LLMSettingsSection() {
     try {
       const res = await fetch('/api/v1/agents/health', {
         credentials: 'include',
-        headers: { 'X-Tenant-ID': TENANT_ID },
+        headers: { 'X-Tenant-ID': tenantId() },
       })
       if (res.ok) {
         const d = await res.json()

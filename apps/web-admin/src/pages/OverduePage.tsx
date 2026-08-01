@@ -1,3 +1,4 @@
+import { tenantId } from '../tenant'
 import { useState, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 
@@ -50,13 +51,12 @@ type SortKey = 'ra_number' | 'customerName' | 'expectedReturn' | 'daysOverdue'
 
 // ── fetchJSON helper ──────────────────────────────────────────────────────────
 
-const TENANT = '00000000-0000-0000-0000-000000000001'
 
 async function fetchJSON<T>(path: string, opts?: RequestInit): Promise<T> {
   const res = await fetch(`/api/v1${path}`, {
     credentials: 'include',
     headers: {
-      'X-Tenant-ID': TENANT,
+      'X-Tenant-ID': tenantId(),
       'Content-Type': 'application/json',
       ...((opts?.headers ?? {}) as Record<string, string>),
     },

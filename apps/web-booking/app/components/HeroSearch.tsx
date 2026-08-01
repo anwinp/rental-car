@@ -1,5 +1,7 @@
 'use client'
 
+import { resolveTenant, tenantHeaders } from '../lib/tenant'
+
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 
@@ -25,7 +27,8 @@ const TIMES = [
   '6:00 PM','7:00 PM','8:00 PM','9:00 PM','10:00 PM','11:00 PM',
 ]
 
-const TENANT_ID = process.env.NEXT_PUBLIC_TENANT_ID ?? '00000000-0000-0000-0000-000000000001'
+// Tenant is resolved at runtime from the hostname — see app/lib/tenant.ts.
+// A build-time constant here meant one deployment per organisation.
 
 const fieldStyle: React.CSSProperties = {
   width: '100%', padding: '13px 16px', fontSize: 14,
@@ -301,14 +304,24 @@ export function HeroSearch() {
   const [errors, setErrors] = useState<Partial<Record<ErrKey, string>>>({})
   const [locations, setLocations] = useState<PublicLocation[]>([])
   const [loadingLoc, setLoadingLoc] = useState(true)
+  const [tenantMissing, setTenantMissing] = useState(false)
 
   useEffect(() => {
     let cancelled = false
-    fetch('/api/v1/locations/public', {
-      headers: { 'X-Tenant-ID': TENANT_ID },
-    })
-      .then(r => r.ok ? r.json() : Promise.reject(r.status))
-      .then((data: PublicLocation[]) => { if (!cancelled) { setLocations(data); setLoadingLoc(false) } })
+    // Resolve the workspace first: the API refuses anonymous requests that
+    // carry no tenant rather than defaulting to somebody else's catalogue.
+    resolveTenant()
+      .then((tenant) => {
+        if (!tenant) {
+          if (!cancelled) { setLoadingLoc(false); setTenantMissing(true) }
+          return null
+        }
+        return fetch('/api/v1/locations/public', { headers: tenantHeaders() })
+      })
+      .then(r => (r ? (r.ok ? r.json() : Promise.reject(r.status)) : null))
+      .then((data: PublicLocation[] | null) => {
+        if (!cancelled && data) { setLocations(data); setLoadingLoc(false) }
+      })
       .catch(() => { if (!cancelled) setLoadingLoc(false) })
     return () => { cancelled = true }
   }, [])
@@ -396,6 +409,15 @@ export function HeroSearch() {
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
               Drop-off location
             </label>
+            {tenantMissing && (
+              <p style={{
+                gridColumn: '1 / -1', margin: '0 0 8px', padding: '10px 14px',
+                borderRadius: 6, background: 'rgba(218,41,28,0.12)',
+                color: '#f3b6b0', fontSize: 13,
+              }}>
+                No workspace found at this address. Check the link you were given.
+              </p>
+            )}
             <LocationCombobox
               id="hs-dropoff"
               value={form.dropoff}

@@ -49,6 +49,8 @@ coverage.xml
 .env.test.local
 .env.production.local
 .env.staging
+.env.prod
+deploy/.env.prod
 
 # Docker
 .docker/
@@ -98,3 +100,10 @@ temp/
 # Local Claude Code config & build artifacts
 .claude/
 apps/web-counter/dev-dist/
+
+# Backup copies of env files — these carry live secrets and must never
+# be committed. A stray .env.bak-* was caught by an audit; this closes it.
+*.bak
+*.bak-*
+.env.bak*
+**/.env.bak*

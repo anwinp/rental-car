@@ -1,3 +1,4 @@
+import { tenantId } from '../tenant'
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
@@ -11,7 +12,6 @@ interface Suggestion {
   action?: string
 }
 
-const TENANT_ID = '00000000-0000-0000-0000-000000000001'
 
 const PLACEHOLDER_SUGGESTIONS: Suggestion[] = [
   { id: 's1', type: 'alert', title: 'Overdue rentals', body: 'Check active rentals dashboard for vehicles past return time.', action: 'View rentals' },
@@ -83,7 +83,7 @@ export function AdminIntelligencePanel() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'X-Tenant-ID': TENANT_ID,
+          'X-Tenant-ID': tenantId(),
         },
         credentials: 'include',
         body: JSON.stringify({ message: text, session_id: sessionRef.current }),

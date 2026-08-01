@@ -10,6 +10,11 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    // Bind all interfaces and accept tenant subdomains. Each workspace is
+    // reached at {slug}.localtest.me:3002 locally, which Vite would otherwise
+    // reject as an unrecognised Host.
+    host: true,
+    allowedHosts: ['.localtest.me', 'localhost', '127.0.0.1'],
     proxy: {
       '/api': {
         // 127.0.0.1 (not localhost) so it never resolves to an IPv6 listener

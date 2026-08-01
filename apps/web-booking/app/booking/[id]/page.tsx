@@ -1,5 +1,7 @@
 'use client'
 
+import { tenantId } from '../../lib/tenant'
+
 import type React from 'react'
 import { useState, useEffect } from 'react'
 import { useForm } from 'react-hook-form'
@@ -19,7 +21,6 @@ import {
 import { useBookingDraft } from '../../lib/bookingDraftStore'
 import type { DriverData } from '../../lib/bookingDraftStore'
 
-const TENANT = '00000000-0000-0000-0000-000000000001'
 
 const driverSchema = z.object({
   first_name: z.string().min(1, 'Required'),
@@ -168,7 +169,7 @@ export default function BookingPage({ params, searchParams }: BookingPageProps) 
     try {
       const res = await fetch('/api/v1/pricing/quote', {
         method: 'POST', credentials: 'include',
-        headers: { 'Content-Type': 'application/json', 'X-Tenant-ID': TENANT },
+        headers: { 'Content-Type': 'application/json', 'X-Tenant-ID': tenantId() },
         body: JSON.stringify({
           pickup_location_id: pickup,
           vehicle_class_id: classId,
@@ -222,7 +223,7 @@ export default function BookingPage({ params, searchParams }: BookingPageProps) 
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'X-Tenant-ID': TENANT,
+          'X-Tenant-ID': tenantId(),
         },
         body: JSON.stringify({
           pickup_location: pickup,

@@ -1,10 +1,11 @@
 'use client'
 
+import { tenantId } from '../lib/tenant'
+
 import { useEffect, useState, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { SearchSkeleton } from './SearchSkeleton'
 
-const TENANT  = '00000000-0000-0000-0000-000000000001'
 const RED     = '#da291c'
 const RED_ACT = '#b01e0a'
 
@@ -109,7 +110,7 @@ export function SearchResults({
       })
       const r = await fetch(`/api/v1/fleet/search?${p}`, {
         credentials: 'include',
-        headers: { 'X-Tenant-ID': TENANT },
+        headers: { 'X-Tenant-ID': tenantId() },
       })
       if (!r.ok) throw new Error(`${r.status}`)
       const data = await r.json() as { classes?: VehicleClass[]; error?: string }

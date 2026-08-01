@@ -57,3 +57,4 @@ twilio==9.3.7
 
 # AI agents — OpenAI-compatible LLM client (NVIDIA NIM / OpenAI)
 openai==2.44.0
+aiosmtplib==5.1.1          # SMTP transport for transactional email

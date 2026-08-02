@@ -414,11 +414,12 @@ async def _calculate_fleet_utilization_async(
                 SELECT COUNT(*) AS vehicle_count
                 FROM vehicles
                 WHERE tenant_id = :tid
-                  -- vehicles has no is_active column; the vocabulary is
-                  -- `status`. A retired or sold car is not part of the
-                  -- operating fleet and must not sit in a utilisation
-                  -- denominator, which is what this count is.
-                  AND status NOT IN ('RETIRED', 'SOLD')
+                  -- vehicles has no is_active column; the vocabulary is the
+                  -- vehicle_status enum. Only DISPOSED is excluded: the car is
+                  -- gone. PENDING_DISPOSAL stays in the denominator on purpose
+                  -- — it is still owned and still not earning, which is exactly
+                  -- what a utilisation figure is supposed to show.
+                  AND status <> 'DISPOSED'
                   AND deleted_at IS NULL
             """),
             {"tid": tenant_id},
@@ -476,7 +477,7 @@ async def _calculate_fleet_utilization_async(
                     AND ra.created_at < :end_dt
                     AND (ra.actual_return_datetime IS NULL OR ra.actual_return_datetime > :start_dt)
                   WHERE v.tenant_id = :tid
-                  AND v.status NOT IN ('RETIRED', 'SOLD')
+                  AND v.status <> 'DISPOSED'
                   AND v.deleted_at IS NULL
                 GROUP BY vc.class_id, vc.name
                 ORDER BY vc.name
@@ -517,7 +518,7 @@ async def _calculate_fleet_utilization_async(
                     AND ra.created_at < :end_dt
                     AND (ra.actual_return_datetime IS NULL OR ra.actual_return_datetime > :start_dt)
                   WHERE v.tenant_id = :tid
-                  AND v.status NOT IN ('RETIRED', 'SOLD')
+                  AND v.status <> 'DISPOSED'
                   AND v.deleted_at IS NULL
                 GROUP BY l.location_id, l.name
                 ORDER BY l.name

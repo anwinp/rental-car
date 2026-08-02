@@ -297,12 +297,18 @@ async def list_extras_public(
     fallback, because an unresolvable tenant must be an error rather than some
     other company's price list.
     """
+    # Priced extras only. The seeded catalogue ships every extra with a NULL
+    # default_price, and the quote engine cannot charge for one — so listing it
+    # would show a customer "$0.00 /day" against Collision Damage Waiver and
+    # take the booking without ever billing it. An extra a workspace has not
+    # priced is not yet for sale; it appears here the moment a price is set.
     rows = (
         await session.execute(
             text(
                 "SELECT extra_id, code, name, pricing_type, default_price "
                 "  FROM extras_catalog "
                 " WHERE tenant_id = :t AND is_active "
+                "   AND default_price IS NOT NULL AND default_price > 0 "
                 " ORDER BY name"
             ),
             {"t": str(tenant_id)},

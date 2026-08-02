@@ -580,7 +580,7 @@ async def _calculate_fleet_utilization_async(
     w.writerow(["Vehicles", total_vehicles])
     w.writerow(["Fleet days available", round(total_fleet_days, 2)])
     w.writerow(["Vehicle days rented", round(total_vehicle_days_rented, 2)])
-    w.writerow(["Utilisation %", overall_utilization_pct])
+    w.writerow(["Utilisation %", round(overall_pct, 2)])
     w.writerow([])
     w.writerow(["By vehicle class"])
     w.writerow(["Class", "Vehicles", "Days rented", "Utilisation %"])

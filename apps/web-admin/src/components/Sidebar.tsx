@@ -188,6 +188,7 @@ const GROUPS = [
     { label: 'Corporate',    href: '/corporate',    roles: [...MANAGE, UserRole.EXECUTIVE], icon: <Ic.Building /> },
     { label: 'OTA Leads',    href: '/ota-leads',    roles: [UserRole.REGIONAL_MANAGER, ...ADMIN], icon: <Ic.Calendar /> },
     { label: 'Pricing',      href: '/pricing',      roles: ADMIN,   icon: <Ic.Tag /> },
+    { label: 'Catalogue',    href: '/catalogue',    roles: ADMIN,   icon: <Ic.Clipboard /> },
     { label: 'Reports',      href: '/reports',      roles: REPORT,  icon: <Ic.Chart /> },
   ]},
   { label: 'System', items: [

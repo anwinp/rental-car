@@ -36,6 +36,7 @@ import { StaffDashboardPage } from './pages/StaffDashboardPage'
 import { BackOfficeDashboardPage } from './pages/BackOfficeDashboardPage'
 import { TaskBoardPage } from './pages/TaskBoardPage'
 import StaffDailyTaskListPage from './pages/StaffDailyTaskListPage'
+import { CataloguePage } from './pages/CataloguePage'
 import { PlanUsagePage } from './pages/PlanUsagePage'
 import { SettingsPage } from './pages/SettingsPage'
 import { ReturnProcessingPage } from './pages/ReturnProcessingPage'
@@ -889,6 +890,11 @@ export default function App() {
                           that explains the refusal is on their own
                           workspace. */}
                       <Route path="/plan" element={<PlanUsagePage />} />
+                      <Route path="/catalogue" element={
+                        <RouteGuard roles={ADMIN_ROLES} redirectTo="/unauthorized">
+                          <CataloguePage />
+                        </RouteGuard>
+                      } />
                       <Route
                         path="/settings"
                         element={

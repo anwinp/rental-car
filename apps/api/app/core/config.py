@@ -3,7 +3,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import SecretStr, field_validator
+from pydantic import SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -117,6 +117,14 @@ class Settings(BaseSettings):
     # on 443) use the same construction.
     # *.localtest.me resolves to 127.0.0.1 publicly, so tenant subdomains work
     # locally with no hosts-file editing.
+    #
+    # These defaults are DEVELOPMENT values, and they fail quietly if they
+    # survive into production: the platform label is what strips the "-rcm"
+    # suffix from <slug>-rcm.ceez.ai, so with "localtest.me" configured, the
+    # slug for test-rental-co-rcm.ceez.ai comes out as "test-rental-co-rcm",
+    # matches no workspace, and every tenant hostname is rejected — including
+    # by the on-demand TLS gate, so no certificate is ever issued. Production
+    # must set PUBLIC_BOOKING_HOST/PUBLIC_ADMIN_HOST; see the validator below.
     public_booking_host: str = "localtest.me:3400"
     public_admin_host: str = "localtest.me:3002"
     public_url_scheme: str = "http"
@@ -140,6 +148,36 @@ class Settings(BaseSettings):
         if isinstance(v, str) and v.startswith("postgresql://"):
             return v.replace("postgresql://", "postgresql+asyncpg://", 1)
         return v
+
+    @model_validator(mode="after")
+    def warn_on_dev_public_hosts(self) -> "Settings":
+        """Say so, loudly, if production is still on the localtest defaults.
+
+        This was found in production: both hosts were unset, so every
+        <slug>-rcm.ceez.ai resolved to no workspace and the TLS gate refused a
+        certificate for every tenant. Nothing logged a complaint — the feature
+        simply did not work. A warning is enough; raising here would take the
+        API down over a setting that only affects per-tenant hostnames.
+        """
+        if self.env == "production":
+            stale = [
+                name
+                for name, value in (
+                    ("PUBLIC_BOOKING_HOST", self.public_booking_host),
+                    ("PUBLIC_ADMIN_HOST", self.public_admin_host),
+                )
+                if "localtest.me" in (value or "")
+            ]
+            if stale:
+                import warnings
+
+                warnings.warn(
+                    f"{', '.join(stale)} still set to the localtest.me development "
+                    "default in production. Per-tenant hostnames will not resolve "
+                    "and on-demand TLS will refuse every certificate.",
+                    stacklevel=2,
+                )
+        return self
 
 
 @lru_cache

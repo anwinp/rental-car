@@ -142,6 +142,16 @@ services:
       REDIS_AVAIL_URL: redis://redis-avail:6379/0
       REDIS_BROKER_URL: redis://redis-broker:6380/0
       REDIS_SESSION_URL: redis://redis-sessions:6381/0
+      # Per-tenant hostnames are <slug>-rcm.ceez.ai and <slug>-rcm-admin.ceez.ai.
+      # These two values are what strip the platform suffix back off to recover
+      # the slug. They were never set here, so the API fell back to its
+      # localtest.me development defaults and every tenant hostname resolved to
+      # no workspace — including at the on-demand TLS gate, which then refused a
+      # certificate for every tenant. Kept in the compose rather than .env.prod
+      # because they are not secrets and must not drift again.
+      PUBLIC_BOOKING_HOST: rcm.ceez.ai
+      PUBLIC_ADMIN_HOST: rcm-admin.ceez.ai
+      PUBLIC_URL_SCHEME: https
       PORT: "8000"
       WORKER_COUNT: "4"
     networks: [internal]

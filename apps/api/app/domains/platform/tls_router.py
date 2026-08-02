@@ -31,6 +31,23 @@ log = structlog.get_logger()
 router = APIRouter()
 
 
+def _served_suffix() -> str:
+    """The domain tenant hostnames must sit under, e.g. ".ceez.ai".
+
+    Derived from the configured booking host by dropping its first label:
+    rcm.ceez.ai -> .ceez.ai, and tenant hosts are <slug>-rcm.ceez.ai. Returns ""
+    when the host is not configured deeply enough to infer one, in which case
+    the caller skips the check rather than refusing everything.
+    """
+    from app.core.config import settings
+
+    host = (settings.public_booking_host or "").split(":")[0].strip().lower()
+    parts = [p for p in host.split(".") if p]
+    if len(parts) < 3:
+        return ""
+    return "." + ".".join(parts[1:])
+
+
 @router.get(
     "/tls-allowed",
     include_in_schema=False,
@@ -47,6 +64,17 @@ async def tls_allowed(
     """
     host = (domain or "").strip().lower()
     if not host:
+        return Response(status_code=status.HTTP_404_NOT_FOUND)
+
+    # The hostname must sit under the domain we actually operate. Without this
+    # the gate answered on shape alone: "evil.example.com" yields the slug
+    # "evil", so the moment any workspace registered that slug we would approve
+    # a certificate order for a domain we do not own. Caddy would then fail
+    # validation and burn Let's Encrypt rate limit against ceez.ai — precisely
+    # the exhaustion this endpoint exists to prevent.
+    suffix = _served_suffix()
+    if suffix and not host.endswith(suffix):
+        log.info("tls_refused", host=host, reason="foreign_domain", expected=suffix)
         return Response(status_code=status.HTTP_404_NOT_FOUND)
 
     slug = extract_slug(host)

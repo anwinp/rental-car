@@ -9,9 +9,14 @@ import { useEffect, useState } from 'react'
  * it was right — showing an operator fabricated customers and fabricated debts
  * is worse than showing nothing.
  *
- * This is driven entirely by /corporate/accounts. Invoicing is deliberately
- * absent rather than mocked: statements are real work and were scoped out of
- * this cut, so the page does not pretend otherwise.
+ * This is driven entirely by /corporate/accounts and /corporate/invoices.
+ *
+ * The invoice controls are shaped by one rule from the API: an issued invoice
+ * is immutable. So the buttons offered change with status rather than the same
+ * row always offering the same actions — a draft can be regenerated or thrown
+ * away, an issued invoice can only be paid or voided, and a mistake after issue
+ * becomes a void with a stated reason. The UI does not offer an edit that the
+ * server would refuse.
  */
 
 interface Account {
@@ -41,6 +46,40 @@ interface Booker {
   created_at: string
 }
 
+interface InvoiceLine {
+  line_id: string
+  description: string
+  reference: string | null
+  line_date: string | null
+  quantity: number
+  unit_cents: number
+  amount_cents: number
+}
+
+interface Invoice {
+  invoice_id: string
+  corporate_account_id: string
+  account_name: string | null
+  invoice_number: string
+  status: 'DRAFT' | 'ISSUED' | 'PAID' | 'VOID'
+  period_start: string
+  period_end: string
+  issued_at: string | null
+  due_at: string | null
+  paid_at: string | null
+  voided_at: string | null
+  void_reason: string | null
+  subtotal_cents: number
+  tax_cents: number
+  total_cents: number
+  currency: string
+  line_count: number
+  has_pdf: boolean
+  notes: string | null
+  created_at: string
+  lines?: InvoiceLine[]
+}
+
 const API = '/api/v1/corporate'
 
 const BLANK = {
@@ -53,6 +92,33 @@ function money(cents: number | null, currency: string): string {
   return (cents / 100).toLocaleString(undefined, {
     style: 'currency', currency: currency || 'USD', maximumFractionDigits: 0,
   })
+}
+
+function exact(cents: number, currency: string): string {
+  return (cents / 100).toLocaleString(undefined, {
+    style: 'currency', currency: currency || 'USD',
+  })
+}
+
+function day(iso: string | null): string {
+  return iso ? new Date(iso).toLocaleDateString() : '—'
+}
+
+/** The previous whole calendar month — what a billing run almost always means. */
+function lastMonth(): { start: string; end: string } {
+  const now = new Date()
+  const start = new Date(now.getFullYear(), now.getMonth() - 1, 1)
+  const end = new Date(now.getFullYear(), now.getMonth(), 0)
+  const fmt = (d: Date) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  return { start: fmt(start), end: fmt(end) }
+}
+
+const STATUS_STYLE: Record<Invoice['status'], { bg: string; fg: string }> = {
+  DRAFT: { bg: 'rgba(148,163,184,0.16)', fg: '#94a3b8' },
+  ISSUED: { bg: 'rgba(59,130,246,0.16)', fg: '#60a5fa' },
+  PAID: { bg: 'rgba(16,185,129,0.16)', fg: '#34d399' },
+  VOID: { bg: 'rgba(176,52,31,0.18)', fg: '#f87171' },
 }
 
 export function CorporatePage() {
@@ -68,6 +134,11 @@ export function CorporatePage() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+  const [invoices, setInvoices] = useState<Invoice[]>([])
+  const [expandedInvoice, setExpandedInvoice] = useState<Invoice | null>(null)
+  const [billing, setBilling] = useState(false)
+  const [period, setPeriod] = useState(lastMonth())
+  const [invoiceNote, setInvoiceNote] = useState('')
 
   async function load() {
     try {
@@ -150,9 +221,103 @@ export function CorporatePage() {
     })
   }
 
+  async function loadInvoices(id: string) {
+    const r = await fetch(`${API}/invoices?account_id=${id}`, { credentials: 'include' })
+      .then((x) => (x.ok ? x.json() : []))
+      .catch(() => [])
+    setInvoices(r)
+  }
+
   async function open(a: Account) {
     setSelected(a); setEditing(false); setAdding(false)
-    await loadBookers(a.corporate_account_id)
+    setExpandedInvoice(null); setBilling(false)
+    await Promise.all([loadBookers(a.corporate_account_id), loadInvoices(a.corporate_account_id)])
+  }
+
+  async function generate(e: React.FormEvent) {
+    e.preventDefault()
+    if (!selected) return
+    const r = await call('/invoices', {
+      method: 'POST',
+      body: JSON.stringify({
+        corporate_account_id: selected.corporate_account_id,
+        period_start: period.start,
+        period_end: period.end,
+        notes: invoiceNote.trim() || null,
+      }),
+    }, 'Draft invoice created.') as Invoice | null
+    if (r) {
+      setBilling(false); setInvoiceNote('')
+      setExpandedInvoice(r)
+      // An empty draft is the common and confusing outcome: it means every
+      // rental in the window was already billed, or none were placed on the
+      // account. Say which rather than showing a zero and leaving them to guess.
+      if (r.line_count === 0) {
+        setNotice(
+          `${r.invoice_number} is empty — no unbilled rentals were placed on ` +
+          'this account in that period.'
+        )
+      }
+      await loadInvoices(selected.corporate_account_id)
+    }
+  }
+
+  async function issue(inv: Invoice) {
+    if (!window.confirm(
+      `Issue ${inv.invoice_number} for ${exact(inv.total_cents, inv.currency)}?\n\n` +
+      'It becomes final: the amounts and line items are frozen, the PDF is ' +
+      'generated, and the only correction after this is a void.'
+    )) return
+    const r = await call(`/invoices/${inv.invoice_id}/issue`, { method: 'POST' },
+      'Invoice issued.') as Invoice | null
+    if (r && selected) { setExpandedInvoice(r); await loadInvoices(selected.corporate_account_id) }
+  }
+
+  async function markPaid(inv: Invoice) {
+    const r = await call(`/invoices/${inv.invoice_id}/paid`, { method: 'POST' },
+      'Marked paid.') as Invoice | null
+    if (r && selected) { setExpandedInvoice(r); await loadInvoices(selected.corporate_account_id) }
+  }
+
+  async function voidInvoice(inv: Invoice) {
+    const reason = window.prompt(
+      `Void ${inv.invoice_number}? The reason is kept on the invoice and its ` +
+      'rentals become billable again.\n\nReason:'
+    )
+    if (!reason || reason.trim().length < 3) return
+    const r = await call(`/invoices/${inv.invoice_id}/void`,
+      { method: 'POST', body: JSON.stringify({ reason: reason.trim() }) },
+      'Invoice voided.') as Invoice | null
+    if (r && selected) { setExpandedInvoice(r); await loadInvoices(selected.corporate_account_id) }
+  }
+
+  async function openInvoice(inv: Invoice) {
+    if (expandedInvoice?.invoice_id === inv.invoice_id) { setExpandedInvoice(null); return }
+    const full = await fetch(`${API}/invoices/${inv.invoice_id}`, { credentials: 'include' })
+      .then((x) => (x.ok ? x.json() : null))
+      .catch(() => null)
+    setExpandedInvoice(full ?? inv)
+  }
+
+  async function downloadPdf(inv: Invoice) {
+    // The tab is opened synchronously on the click, before the await — a
+    // popup blocker will not allow window.open once the fetch has resolved.
+    const tab = window.open('', '_blank', 'noopener')
+    setError('')
+    try {
+      const res = await fetch(`${API}/invoices/${inv.invoice_id}/pdf`, { credentials: 'include' })
+      const body = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        tab?.close()
+        setError(String(body.detail ?? 'The PDF could not be fetched.'))
+        return
+      }
+      if (tab) tab.location.href = body.url
+      else window.location.href = body.url  // blocked: navigate here instead
+    } catch {
+      tab?.close()
+      setError('Could not reach the server.')
+    }
   }
 
   async function addBooker(e: React.FormEvent) {
@@ -387,6 +552,165 @@ export function CorporatePage() {
                           className="rounded-lg px-3 py-2 text-xs font-semibold text-white disabled:opacity-50"
                           style={{ background: 'var(--accent)' }}>Add booker</button>
                 </form>
+
+                <div className="mt-5 flex flex-wrap items-center justify-between gap-2 border-t pt-3"
+                     style={{ borderColor: 'var(--border)' }}>
+                  <p className="text-xs font-semibold uppercase tracking-wider"
+                     style={{ color: 'var(--text-3)' }}>Invoices</p>
+                  <button onClick={() => { setBilling((v) => !v); setPeriod(lastMonth()) }}
+                          disabled={busy || a.status === 'CLOSED'}
+                          className="rounded-lg px-2.5 py-1 text-xs disabled:opacity-40"
+                          style={{ border: '1px solid var(--border)', color: 'var(--text-2)' }}>
+                    {billing ? 'Cancel' : 'Bill a period'}
+                  </button>
+                </div>
+
+                {billing && (
+                  <form onSubmit={generate} className="mt-2 flex flex-wrap items-end gap-2">
+                    <label className="text-[11px]" style={lblS}>
+                      From
+                      <input required type="date" value={period.start}
+                             onChange={(e) => setPeriod({ ...period, start: e.target.value })}
+                             className={`${field} mt-0.5`} style={fs} />
+                    </label>
+                    <label className="text-[11px]" style={lblS}>
+                      To
+                      <input required type="date" value={period.end}
+                             onChange={(e) => setPeriod({ ...period, end: e.target.value })}
+                             className={`${field} mt-0.5`} style={fs} />
+                    </label>
+                    <input placeholder="Note on the invoice (optional)" value={invoiceNote}
+                           onChange={(e) => setInvoiceNote(e.target.value)}
+                           className={`${field} max-w-[240px]`} style={fs} />
+                    <button type="submit" disabled={busy}
+                            className="rounded-lg px-3 py-2 text-xs font-semibold text-white disabled:opacity-50"
+                            style={{ background: 'var(--accent)' }}>Create draft</button>
+                  </form>
+                )}
+
+                <div className="mt-2 space-y-1.5">
+                  {invoices.length === 0 && (
+                    <p className="text-xs" style={{ color: 'var(--text-3)' }}>
+                      Nothing billed yet.
+                    </p>
+                  )}
+                  {invoices.map((inv) => {
+                    const open2 = expandedInvoice?.invoice_id === inv.invoice_id
+                    const shown = open2 ? expandedInvoice! : inv
+                    const st = STATUS_STYLE[shown.status]
+                    return (
+                      <div key={inv.invoice_id} className="rounded-lg p-2.5"
+                           style={{ border: '1px solid var(--border)' }}>
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <button onClick={() => void openInvoice(inv)}
+                                  className="flex flex-wrap items-center gap-2 text-left">
+                            <span className="font-mono text-xs font-semibold"
+                                  style={{ color: 'var(--text-1)' }}>{shown.invoice_number}</span>
+                            <span className="rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider"
+                                  style={{ background: st.bg, color: st.fg }}>{shown.status}</span>
+                            <span className="text-[11px]" style={{ color: 'var(--text-3)' }}>
+                              {shown.period_start} → {shown.period_end} ·{' '}
+                              {shown.line_count} line{shown.line_count === 1 ? '' : 's'}
+                              {shown.status === 'ISSUED' && shown.due_at
+                                ? ` · due ${day(shown.due_at)}` : ''}
+                              {shown.status === 'PAID' ? ` · paid ${day(shown.paid_at)}` : ''}
+                            </span>
+                          </button>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-semibold tabular-nums"
+                                  style={{ color: 'var(--text-1)',
+                                           textDecoration: shown.status === 'VOID' ? 'line-through' : 'none' }}>
+                              {exact(shown.total_cents, shown.currency)}
+                            </span>
+                            {shown.status === 'DRAFT' && shown.line_count > 0 && (
+                              <button onClick={() => void issue(shown)} disabled={busy}
+                                      className="rounded-lg px-2.5 py-1 text-xs font-semibold text-white disabled:opacity-40"
+                                      style={{ background: 'var(--accent)' }}>Issue</button>
+                            )}
+                            {shown.has_pdf && (
+                              <button onClick={() => void downloadPdf(shown)} disabled={busy}
+                                      className="rounded-lg px-2.5 py-1 text-xs disabled:opacity-40"
+                                      style={{ border: '1px solid var(--border)', color: 'var(--text-2)' }}>
+                                PDF
+                              </button>
+                            )}
+                            {shown.status === 'ISSUED' && (
+                              <button onClick={() => void markPaid(shown)} disabled={busy}
+                                      className="rounded-lg px-2.5 py-1 text-xs text-emerald-300 disabled:opacity-40"
+                                      style={{ border: '1px solid rgba(16,185,129,0.4)' }}>Mark paid</button>
+                            )}
+                            {shown.status !== 'VOID' && shown.status !== 'PAID' && (
+                              <button onClick={() => void voidInvoice(shown)} disabled={busy}
+                                      className="rounded-lg px-2.5 py-1 text-xs text-red-300 disabled:opacity-40"
+                                      style={{ border: '1px solid rgba(176,52,31,0.5)' }}>Void</button>
+                            )}
+                          </div>
+                        </div>
+
+                        {open2 && (
+                          <div className="mt-3 border-t pt-2" style={{ borderColor: 'var(--border)' }}>
+                            {(shown.lines ?? []).length === 0 ? (
+                              <p className="text-[11px]" style={{ color: 'var(--text-3)' }}>
+                                {shown.status === 'VOID'
+                                  ? 'The charges were released when this was voided, so those ' +
+                                    'rentals can be billed again. The issued PDF is kept.'
+                                  : 'No charges on this invoice.'}
+                              </p>
+                            ) : (
+                              <table className="w-full text-[11px]">
+                                <tbody>
+                                  {(shown.lines ?? []).map((l) => (
+                                    <tr key={l.line_id}>
+                                      <td className="py-0.5 pr-2" style={{ color: 'var(--text-2)' }}>
+                                        {l.description}
+                                        {l.reference && (
+                                          <span className="ml-1.5 font-mono"
+                                                style={{ color: 'var(--text-3)' }}>{l.reference}</span>
+                                        )}
+                                      </td>
+                                      <td className="py-0.5 pr-2 whitespace-nowrap"
+                                          style={{ color: 'var(--text-3)' }}>{l.line_date ?? ''}</td>
+                                      <td className="py-0.5 text-right tabular-nums whitespace-nowrap"
+                                          style={{ color: 'var(--text-2)' }}>
+                                        {exact(l.amount_cents, shown.currency)}
+                                      </td>
+                                    </tr>
+                                  ))}
+                                  <tr>
+                                    <td colSpan={2} className="pt-1.5 text-right"
+                                        style={{ color: 'var(--text-3)' }}>Tax</td>
+                                    <td className="pt-1.5 text-right tabular-nums"
+                                        style={{ color: 'var(--text-3)' }}>
+                                      {exact(shown.tax_cents, shown.currency)}
+                                    </td>
+                                  </tr>
+                                  <tr>
+                                    <td colSpan={2} className="pt-1 text-right font-semibold"
+                                        style={{ color: 'var(--text-2)' }}>Total</td>
+                                    <td className="pt-1 text-right font-semibold tabular-nums"
+                                        style={{ color: 'var(--text-1)' }}>
+                                      {exact(shown.total_cents, shown.currency)}
+                                    </td>
+                                  </tr>
+                                </tbody>
+                              </table>
+                            )}
+                            {shown.notes && (
+                              <p className="mt-2 text-[11px]" style={{ color: 'var(--text-3)' }}>
+                                {shown.notes}
+                              </p>
+                            )}
+                            {shown.void_reason && (
+                              <p className="mt-2 text-[11px] text-red-300">
+                                Voided {day(shown.voided_at)} — {shown.void_reason}
+                              </p>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
               </div>
             )}
           </div>

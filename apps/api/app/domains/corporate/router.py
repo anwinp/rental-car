@@ -446,6 +446,7 @@ class Invoice(BaseModel):
     due_at: datetime | None = None
     paid_at: datetime | None = None
     voided_at: datetime | None = None
+    void_reason: str | None = None
     subtotal_cents: int
     tax_cents: int
     total_cents: int
@@ -474,7 +475,8 @@ class VoidIn(BaseModel):
 _INVOICE_SELECT = (
     "SELECT i.invoice_id, i.corporate_account_id, a.name AS account_name, "
     "       i.invoice_number, i.status, i.period_start, i.period_end, "
-    "       i.issued_at, i.due_at, i.paid_at, i.voided_at, i.subtotal_cents, "
+    "       i.issued_at, i.due_at, i.paid_at, i.voided_at, i.void_reason, "
+    "       i.subtotal_cents, "
     "       i.tax_cents, i.total_cents, i.currency, i.notes, i.created_at, "
     "       (SELECT count(*) FROM corporate_invoice_lines l "
     "         WHERE l.invoice_id = i.invoice_id) AS line_count, "

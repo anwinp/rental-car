@@ -839,7 +839,7 @@ export default function App() {
                       } />
                       <Route path="/corporate" element={
                         <RouteGuard roles={[...MANAGE_ROLES, UserRole.EXECUTIVE]} redirectTo="/unauthorized">
-                          <Unbuilt><CorporatePage /></Unbuilt>
+                          <CorporatePage />
                         </RouteGuard>
                       } />
                       <Route path="/executive" element={

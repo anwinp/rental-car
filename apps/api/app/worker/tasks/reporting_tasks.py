@@ -22,6 +22,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 
+import json as _json
 import structlog
 
 from app.worker.celery_app import celery_app
@@ -32,6 +33,58 @@ log = structlog.get_logger()
 # ---------------------------------------------------------------------------
 # Daily Revenue Report
 # ---------------------------------------------------------------------------
+
+
+
+# ── Recording what was produced ──────────────────────────────────────────────
+#
+# Both tasks already computed a report and uploaded a CSV. Neither wrote down
+# that it had happened, so the file sat at a key nobody had recorded and no
+# endpoint could find it. This is what closes that loop.
+#
+# report_id is optional throughout: these tasks are also on the beat schedule
+# and run with nobody waiting, and a scheduled run with no row to update is not
+# an error.
+
+async def _mark(report_id: str | None, tenant_id: str, **fields: Any) -> None:
+    """Update the generated_reports row, if there is one."""
+    if not report_id:
+        return
+    from sqlalchemy import text as _t
+
+    from app.core.database import AsyncSessionLocal
+
+    sets, params = [], {"r": report_id, "t": tenant_id}
+    for key, value in fields.items():
+        if key == "summary":
+            sets.append("summary = CAST(:summary AS jsonb)")
+            params["summary"] = _json.dumps(value, default=str)
+        else:
+            sets.append(f"{key} = :{key}")
+            params[key] = value
+    if not sets:
+        return
+
+    try:
+        async with AsyncSessionLocal() as session:
+            # generated_reports is under RLS and a worker carries no request
+            # context, so the tenant is bound explicitly.
+            await session.execute(
+                _t("SELECT set_config('app.current_tenant_id', :t, true)"),
+                {"t": tenant_id},
+            )
+            await session.execute(
+                _t(
+                    f"UPDATE generated_reports SET {', '.join(sets)} "
+                    " WHERE report_id = CAST(:r AS uuid) AND tenant_id = CAST(:t AS uuid)"
+                ),
+                params,
+            )
+            await session.commit()
+    except Exception:  # noqa: BLE001
+        # A bookkeeping failure must not lose a report that was computed and
+        # uploaded successfully. Loud, because the row is how anyone finds it.
+        log.error("report_status_write_failed", report_id=report_id, exc_info=True)
 
 
 @celery_app.task(
@@ -47,6 +100,7 @@ def generate_daily_revenue_report(
     self: Any,  # type: ignore[type-arg]
     tenant_id: str,
     date: str,  # YYYY-MM-DD
+    report_id: str | None = None,
 ) -> dict:
     """
     Generate a daily revenue report for a specific tenant and date.
@@ -69,7 +123,21 @@ def generate_daily_revenue_report(
         date:      Report date as YYYY-MM-DD string (UTC).
     """
     try:
+        asyncio.run(_mark(report_id, tenant_id, status="RUNNING"))
         result = asyncio.run(_generate_daily_revenue_report_async(tenant_id, date))
+        asyncio.run(_mark(
+            report_id, tenant_id,
+            status="READY",
+            object_key=f"tenants/{tenant_id}/revenue/{date}/daily_revenue.csv",
+            row_count=result.get("transaction_count"),
+            summary={
+                "net_revenue": result.get("net_revenue"),
+                "total_revenue": result.get("total_revenue"),
+                "total_refunded": result.get("total_refunded"),
+                "transactions": result.get("transaction_count"),
+            },
+            completed_at=datetime.now(timezone.utc),
+        ))
         log.info(
             "daily_revenue_report_generated",
             tenant_id=tenant_id,
@@ -85,6 +153,15 @@ def generate_daily_revenue_report(
             date=date,
             error=str(exc),
         )
+        # Marked FAILED only once retries are exhausted. Flagging it on the
+        # first attempt would show a failure to the customer that the next
+        # retry quietly fixes.
+        if self.request.retries >= self.max_retries:
+            asyncio.run(_mark(
+                report_id, tenant_id, status="FAILED",
+                error=str(exc)[:400],
+                completed_at=datetime.now(timezone.utc),
+            ))
         raise self.retry(exc=exc, countdown=60) from exc
 
 
@@ -238,6 +315,7 @@ def calculate_fleet_utilization(
     tenant_id: str,
     period_start: str,  # YYYY-MM-DD
     period_end: str,    # YYYY-MM-DD (inclusive)
+    report_id: str | None = None,
 ) -> dict:
     """
     Calculate fleet utilization percentage for a tenant over a given period.
@@ -256,9 +334,22 @@ def calculate_fleet_utilization(
         Dict with overall_utilization_pct, by_class, by_location, period details.
     """
     try:
+        asyncio.run(_mark(report_id, tenant_id, status="RUNNING"))
         result = asyncio.run(
             _calculate_fleet_utilization_async(tenant_id, period_start, period_end)
         )
+        asyncio.run(_mark(
+            report_id, tenant_id,
+            status="READY",
+            object_key=f"tenants/{tenant_id}/utilization/{period_start}_{period_end}/fleet_utilization.csv",
+            row_count=result.get("vehicle_count"),
+            summary={
+                "utilization_pct": result.get("utilization_pct"),
+                "vehicles": result.get("vehicle_count"),
+                "period": f"{period_start} to {period_end}",
+            },
+            completed_at=datetime.now(timezone.utc),
+        ))
         log.info(
             "fleet_utilization_calculated",
             tenant_id=tenant_id,
@@ -275,6 +366,12 @@ def calculate_fleet_utilization(
             period_end=period_end,
             error=str(exc),
         )
+        if self.request.retries >= self.max_retries:
+            asyncio.run(_mark(
+                report_id, tenant_id, status="FAILED",
+                error=str(exc)[:400],
+                completed_at=datetime.now(timezone.utc),
+            ))
         raise self.retry(exc=exc, countdown=60) from exc
 
 

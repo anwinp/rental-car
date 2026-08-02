@@ -156,7 +156,10 @@ const RETURNS  = [...ADMIN, UserRole.BRANCH_MANAGER, UserRole.REGIONAL_MANAGER, 
 // Screens that render invented data are hidden from navigation unless the
 // demo flag is set — see src/unbuilt.tsx.
 /** Routes whose pages render placeholder data rather than the tenant's own. */
-const UNBUILT_HREFS = new Set(['/corporate', '/reports'])
+const // /reports was a chart of invented constants; it is now driven by the
+// reporting API and every figure belongs to the workspace reading it.
+// /corporate stays hidden: its router still holds only a health check.
+UNBUILT_HREFS = new Set(['/corporate'])
 
 const GROUPS = [
   { label: 'Dashboards', items: [

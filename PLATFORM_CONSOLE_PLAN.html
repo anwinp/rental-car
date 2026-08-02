@@ -1,0 +1,412 @@
+<title>RCM — Platform console plan</title>
+
+<style>
+  :root {
+    --ink:        #16181d;
+    --ink-2:      #4a5260;
+    --ink-3:      #767f8f;
+    --ground:     #f7f7f5;
+    --card:       #ffffff;
+    --rule:       #e3e3de;
+    --rule-soft:  #eeeeea;
+    --accent:     #b3452f;
+    --accent-dim: #f0e0da;
+    --now:        #b3452f;
+    --next:       #9a6b1f;
+    --never:      #4a6b58;
+    --done:       #3f7d5c;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ink: #ecedef; --ink-2: #a6adba; --ink-3: #767f8f;
+      --ground: #131417; --card: #1a1c21; --rule: #2b2e35; --rule-soft: #23262c;
+      --accent: #e2765c; --accent-dim: #3a231d;
+      --now: #e2765c; --next: #d9a441; --never: #7fb094; --done: #6fbb92;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ink: #ecedef; --ink-2: #a6adba; --ink-3: #767f8f;
+    --ground: #131417; --card: #1a1c21; --rule: #2b2e35; --rule-soft: #23262c;
+    --accent: #e2765c; --accent-dim: #3a231d;
+    --now: #e2765c; --next: #d9a441; --never: #7fb094; --done: #6fbb92;
+  }
+  :root[data-theme="light"] {
+    --ink: #16181d; --ink-2: #4a5260; --ink-3: #767f8f;
+    --ground: #f7f7f5; --card: #ffffff; --rule: #e3e3de; --rule-soft: #eeeeea;
+    --accent: #b3452f; --accent-dim: #f0e0da;
+    --now: #b3452f; --next: #9a6b1f; --never: #4a6b58; --done: #3f7d5c;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--ground); color: var(--ink);
+    font-family: var(--sans); font-size: 15px; line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 56px 24px 96px; }
+
+  header { border-bottom: 2px solid var(--ink); padding-bottom: 22px; }
+  .eyebrow {
+    font-family: var(--mono); font-size: 11px; letter-spacing: .14em;
+    text-transform: uppercase; color: var(--accent); margin: 0 0 10px;
+  }
+  h1 { margin: 0; font-size: clamp(30px, 5vw, 44px); line-height: 1.05; letter-spacing: -.022em; text-wrap: balance; }
+  .lede { margin: 14px 0 0; max-width: 66ch; color: var(--ink-2); font-size: 16px; }
+
+  .meta { display: flex; flex-wrap: wrap; gap: 0; margin: 26px 0 40px; border: 1px solid var(--rule); background: var(--card); }
+  .meta div { flex: 1 1 150px; padding: 14px 18px; border-right: 1px solid var(--rule); }
+  .meta div:last-child { border-right: 0; }
+  .meta dt { font-family: var(--mono); font-size: 10.5px; letter-spacing: .11em; text-transform: uppercase; color: var(--ink-3); margin: 0 0 5px; }
+  .meta dd { margin: 0; font-size: 21px; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
+
+  h2 {
+    margin: 46px 0 6px; font-size: 13px; font-family: var(--mono);
+    letter-spacing: .12em; text-transform: uppercase; color: var(--ink);
+    display: flex; align-items: baseline; gap: 12px;
+  }
+  h2::after { content: ""; flex: 1; height: 1px; background: var(--rule); }
+  .h2note { margin: 0 0 20px; color: var(--ink-3); font-size: 13.5px; max-width: 70ch; }
+
+  .item {
+    background: var(--card); border: 1px solid var(--rule);
+    border-left: 3px solid var(--tone, var(--rule));
+    padding: 18px 20px; margin-bottom: 10px;
+  }
+  .item.now   { --tone: var(--now); }
+  .item.next  { --tone: var(--next); }
+  .item.never { --tone: var(--never); }
+  .item.done  { --tone: var(--done); }
+  .item.done .title { text-decoration: line-through; text-decoration-thickness: 1px; color: var(--ink-3); }
+
+  .row { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  .num {
+    font-family: var(--mono); font-size: 12px; color: var(--ink-3);
+    min-width: 2ch; font-variant-numeric: tabular-nums;
+  }
+  .title { font-weight: 600; font-size: 15.5px; letter-spacing: -.005em; }
+  .tag {
+    font-family: var(--mono); font-size: 10px; letter-spacing: .09em;
+    text-transform: uppercase; padding: 3px 7px; border: 1px solid var(--rule);
+    color: var(--ink-3); white-space: nowrap;
+  }
+  .tag.verified { border-color: var(--done); color: var(--done); }
+  .tag.mine { border-color: var(--accent); color: var(--accent); }
+  .why { margin: 9px 0 0; color: var(--ink-2); font-size: 14px; max-width: 78ch; }
+  .why strong { color: var(--ink); font-weight: 600; }
+  .ev {
+    margin: 11px 0 0; padding: 9px 12px; background: var(--ground);
+    border: 1px solid var(--rule-soft); font-family: var(--mono);
+    font-size: 12px; color: var(--ink-2); overflow-x: auto; white-space: pre;
+  }
+
+  .callout {
+    border: 1px solid var(--accent); background: var(--accent-dim);
+    padding: 16px 20px; margin: 0;
+  }
+  .callout p { margin: 0; font-size: 14px; color: var(--ink); max-width: 76ch; }
+  .callout p + p { margin-top: 9px; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  .tablewrap { overflow-x: auto; border: 1px solid var(--rule); background: var(--card); }
+  th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--rule-soft); vertical-align: top; }
+  th { font-family: var(--mono); font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3); font-weight: 600; }
+  tr:last-child td { border-bottom: 0; }
+  td.state { white-space: nowrap; font-family: var(--mono); font-size: 12px; }
+  .yes { color: var(--done); }
+  .part { color: var(--next); }
+  .no { color: var(--now); }
+
+  footer { margin-top: 56px; padding-top: 18px; border-top: 1px solid var(--rule); color: var(--ink-3); font-size: 13px; }
+  code { font-family: var(--mono); font-size: .9em; }
+</style>
+
+<div class="wrap">
+
+  <header>
+    <p class="eyebrow">Rental Car Manager · Platform operator console</p>
+    <h1>What the people who run the platform need</h1>
+    <p class="lede">
+      Not the rental company's back office — the console <em>you</em> use to run every
+      workspace on the installation. Every claim below was checked against the running
+      code today; where something is asserted, the evidence is the actual output.
+    </p>
+  </header>
+
+  <dl class="meta">
+    <div><dt>Endpoints today</dt><dd>7</dd></div>
+    <div><dt>Console pages</dt><dd>1</dd></div>
+    <div><dt>Reachable from the UI</dt><dd>4 of 7</dd></div>
+    <div><dt>Build now</dt><dd>6</dd></div>
+    <div><dt>Deliberately not building</dt><dd>8</dd></div>
+  </dl>
+
+  <div class="callout">
+    <p>
+      <b>The console is one page and a list.</b> It can create, suspend, reactivate and
+      delete a workspace. You cannot click into one. There is no way to change a
+      customer's plan anywhere in the product, so an operator who upgrades and pays
+      stays capped on Starter forever.
+    </p>
+    <p>
+      Two of the three endpoints added today — restore and purge — have no UI at all,
+      and the delete dialog still tells you deletion is permanent. It stopped being
+      permanent this morning.
+    </p>
+  </div>
+
+  <h2>What exists today</h2>
+  <p class="h2note">
+    Access is gated on <code>staff_users.is_platform_admin</code>, re-read from the
+    database on every request, answering 404 rather than 403 so the console does not
+    advertise itself. That part is well built and is not being touched.
+  </p>
+
+  <div class="tablewrap">
+    <table>
+      <thead>
+        <tr><th>Capability</th><th>API</th><th>UI</th><th>Note</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>List workspaces</td><td class="state yes">yes</td><td class="state yes">yes</td><td>Counts per tenant; hides deleted ones</td></tr>
+        <tr><td>Create workspace</td><td class="state yes">yes</td><td class="state yes">yes</td><td>Hardcodes the Starter plan</td></tr>
+        <tr><td>Suspend / reactivate</td><td class="state yes">yes</td><td class="state yes">yes</td><td>Now signs staff out immediately</td></tr>
+        <tr><td>Delete (recoverable)</td><td class="state yes">yes</td><td class="state part">wrong</td><td>Dialog says it is permanent — it is not</td></tr>
+        <tr><td>Restore a deletion</td><td class="state yes">yes</td><td class="state no">none</td><td>Unreachable: deleted tenants are hidden</td></tr>
+        <tr><td>Purge after grace</td><td class="state yes">yes</td><td class="state no">none</td><td>Unreachable for the same reason</td></tr>
+        <tr><td>Open one workspace</td><td class="state no">none</td><td class="state no">none</td><td>No detail endpoint exists</td></tr>
+        <tr><td>Change a plan</td><td class="state no">none</td><td class="state no">none</td><td>Nothing in the product can do this</td></tr>
+        <tr><td>See who did what</td><td class="state no">none</td><td class="state no">none</td><td>Audit rows have no actor — see item 4</td></tr>
+        <tr><td>Support access</td><td class="state no">none</td><td class="state no">none</td><td>Not started; prerequisites first</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2>Build now</h2>
+  <p class="h2note">
+    Ordered by how often you would reach for it, multiplied by how much it hurts when
+    it is missing. Items 1 and 2 are the ones you would hit on your first support
+    ticket.
+  </p>
+
+  <div class="item now">
+    <div class="row">
+      <span class="num">01</span>
+      <span class="title">Open a workspace and see everything about it</span>
+      <span class="tag">api + ui</span>
+    </div>
+    <p class="why">
+      Today the console is a list you cannot click. A support email arrives and there is
+      nowhere to look. This is the page every other button lives on, so it comes first.
+      It shows the three live URLs, plan and usage against caps, onboarding progress,
+      configuration health as booleans (never secrets), the staff roster with last-login
+      and lockout state, recent operational shape, and the danger zone.
+    </p>
+    <div class="ev">GET /api/v1/platform/tenants/{id}   — does not exist today
+Detail page + "why can't they take a booking" answered at a glance</div>
+  </div>
+
+  <div class="item now">
+    <div class="row">
+      <span class="num">02</span>
+      <span class="title">Make deletion tell the truth, and make restore reachable</span>
+      <span class="tag mine">my bug</span>
+      <span class="tag verified">verified</span>
+    </div>
+    <p class="why">
+      I made deletion recoverable this morning and did not update the interface. The
+      dialog still says <strong>"It cannot be undone"</strong>, which is now false, and
+      the list filters deleted workspaces out — so the restore and purge endpoints I
+      built are unreachable from the product. A customer who deletes by mistake on
+      Monday cannot be helped on Tuesday. This is a correctness fix, not a feature.
+    </p>
+    <div class="ev">PlatformTenantsPage.tsx:241  "It cannot be undone."     ← untrue since this morning
+platform/router.py:198       WHERE deleted_at IS NULL   ← hides what you need to restore</div>
+  </div>
+
+  <div class="item now">
+    <div class="row">
+      <span class="num">03</span>
+      <span class="title">Change a customer's plan</span>
+      <span class="tag">commercial</span>
+      <span class="tag verified">verified</span>
+    </div>
+    <p class="why">
+      Nothing in the entire product can move a workspace between plans. Creation
+      hardcodes Starter, and the tenant's own update schema deliberately excludes the
+      field — with a comment saying plan changes belong to the platform console. The
+      console has no such endpoint. <strong>You cannot take money for an upgrade.</strong>
+    </p>
+    <div class="ev">platform/router.py:282      subscription_tier hardcoded 'STARTER'
+tenants/schemas.py:96       "Plan changes belong to the platform console"
+platform console            …has no plan endpoint</div>
+  </div>
+
+  <div class="item now">
+    <div class="row">
+      <span class="num">04</span>
+      <span class="title">Record who did it</span>
+      <span class="tag">audit</span>
+      <span class="tag verified">verified</span>
+    </div>
+    <p class="why">
+      Database triggers write an audit trail for seven tables, capturing an actor id
+      from a session variable. The only function that sets that variable has
+      <strong>zero callers</strong> — it is dead code. So every audit row ever written
+      records what changed and never who changed it. An afternoon's work, and it is a
+      hard prerequisite for support access: an impersonated write would otherwise be
+      indistinguishable from the customer's own.
+    </p>
+    <div class="ev">core/database.py:181  def get_db(...)   sets actor/role/ip/request GUCs
+grep -rn get_db      → the definition, and nothing else</div>
+  </div>
+
+  <div class="item now">
+    <div class="row">
+      <span class="num">05</span>
+      <span class="title">Show notification delivery</span>
+      <span class="tag">support</span>
+    </div>
+    <p class="why">
+      "Our customer never got the confirmation email" is the highest-volume ticket in
+      this category and there is no screen for it anywhere in the product. The table
+      already exists with status, channel, recipient and gateway message id. This is a
+      read of data you are already collecting.
+    </p>
+  </div>
+
+  <div class="item now">
+    <div class="row">
+      <span class="num">06</span>
+      <span class="title">Require MFA on platform-admin accounts</span>
+      <span class="tag">security</span>
+    </div>
+    <p class="why">
+      These accounts can suspend and purge every customer's data. MFA is per-user
+      opt-in today, so that power currently sits behind one password. Cheap, and it
+      should land before support access rather than after.
+    </p>
+  </div>
+
+  <h2>Build next</h2>
+  <p class="h2note">Worth doing, in this order, once the six above are in.</p>
+
+  <div class="item next">
+    <div class="row">
+      <span class="num">07</span>
+      <span class="title">Support access — consent-gated, read-only, time-boxed</span>
+      <span class="tag">the big one</span>
+    </div>
+    <p class="why">
+      "Log in as this customer" is the most-requested console feature anywhere, and the
+      mechanism here is already 90&nbsp;% present — which is exactly the danger. Roughly
+      twenty lines would do it badly. The guardrails are not optional: the tenant grants
+      a window and can revoke it, sessions are read-only by default and never
+      refreshable, tokens are minted for a synthetic support principal rather than
+      impersonating a named employee, a banner shows the customer while it is live, and
+      every session is logged. Blocked on item 4 — without an actor, support writes are
+      unattributable.
+    </p>
+  </div>
+
+  <div class="item next">
+    <div class="row">
+      <span class="num">08</span>
+      <span class="title">Meter the billable dimension</span>
+      <span class="tag">commercial</span>
+    </div>
+    <p class="why">
+      Seat limits are enforced; vehicles and locations are not — and vehicles are what
+      the plan intends to charge on. There is a usage function that computes all three
+      and is consumed by nothing.
+    </p>
+  </div>
+
+  <div class="item next">
+    <div class="row">
+      <span class="num">09</span>
+      <span class="title">Cross-tenant lookup</span>
+      <span class="tag">support</span>
+    </div>
+    <p class="why">
+      A renter emails your support address. You have no way to tell which of forty
+      workspaces they belong to. Email, slug, or confirmation number in — workspace out.
+      One query; saves ten minutes per misrouted ticket.
+    </p>
+  </div>
+
+  <div class="item next">
+    <div class="row">
+      <span class="num">10</span>
+      <span class="title">Platform action log, and export on behalf</span>
+      <span class="tag">compliance</span>
+    </div>
+    <p class="why">
+      Suspend, delete and purge currently exist only as log lines. And a departing
+      customer whose administrator has already left has no way to get their data out —
+      the export exists but is scoped to the caller's own workspace.
+    </p>
+  </div>
+
+  <h2>Deliberately not building</h2>
+  <p class="h2note">
+    At five to fifty tenants these cost more than they return. Recorded so the decision
+    is visible rather than an oversight.
+  </p>
+
+  <div class="item never">
+    <div class="row"><span class="title">Fine-grained platform roles and approval workflows</span></div>
+    <p class="why">
+      One boolean is the right design for a team that fits in a room. Revisit when
+      there are people who should see billing but not customer data.
+    </p>
+  </div>
+
+  <div class="item never">
+    <div class="row"><span class="title">MRR charts, cohort retention, funnel dashboards</span></div>
+    <p class="why">
+      Stripe plus a SQL client covers this. Building it here means maintaining a second,
+      wronger copy of Stripe's numbers.
+    </p>
+  </div>
+
+  <div class="item never">
+    <div class="row"><span class="title">Per-tenant feature flags · SSO for admins · in-console messaging · SLA tracking</span></div>
+    <p class="why">
+      No flag infrastructure exists, MFA on a flag is enough at this headcount, email
+      and a helpdesk already work, and nobody has signed an SLA.
+    </p>
+  </div>
+
+  <div class="item never">
+    <div class="row"><span class="title">A separate console on its own hostname</span></div>
+    <p class="why">
+      The unlinked route inside the admin app is right for now. Worth recording the
+      trade-off: the console is served from a tenant hostname, so any cross-site
+      scripting in the tenant app reaches it. The slug is already reserved, so the move
+      stays available without a migration.
+    </p>
+  </div>
+
+  <h2>One correction</h2>
+  <div class="item done">
+    <div class="row">
+      <span class="title">"READONLY_AUDITOR has no permissions and 403s on everything"</span>
+      <span class="tag verified">disproved</span>
+    </div>
+    <p class="why">
+      Asserted twice during research and false both times. The role has a full
+      read-only permission set in the database. Recorded because it nearly became a
+      work item, and because a plan is only as good as the claims under it.
+    </p>
+    <div class="ev">SELECT role_key FROM staff_roles WHERE role_key='READONLY_AUDITOR';
+ READONLY_AUDITOR    ← exists, with 13 read grants</div>
+  </div>
+
+  <footer>
+    Checked against the running system on 2 August 2026. Evidence lines are real output
+    or real file references, not paraphrase.
+  </footer>
+
+</div>

@@ -200,9 +200,9 @@ async def set_billing_config(
 ) -> BillingConfigOut:
     """Store credentials. Requires the password again, in this request."""
     await enforce_limit(
-        request, bucket="platform-billing", limit=10, window_seconds=900,
+        request, bucket="platform-billing", limit=40, window_seconds=900,
         subject=str(claims.admin_id),
-        message="Too many attempts. Try again shortly.",
+        message="Too many attempts. Wait a few minutes and try again.",
     )
     await session.execute(text("SELECT set_config('app.current_tenant_id', '', true)"))
     await _reauthenticate(session, claims, payload.current_password)
@@ -292,7 +292,7 @@ async def verify_billing_config(
     """
     await enforce_limit(
         request, bucket="platform-billing-verify", limit=20, window_seconds=900,
-        subject=str(claims.admin_id), message="Too many attempts. Try again shortly.",
+        subject=str(claims.admin_id), message="Too many attempts. Wait a few minutes and try again.",
     )
     await session.execute(text("SELECT set_config('app.current_tenant_id', '', true)"))
     await _reauthenticate(session, claims, payload.current_password)
@@ -373,8 +373,8 @@ async def set_billing_enabled(
     actually succeeded — otherwise "enabled" means "we hope".
     """
     await enforce_limit(
-        request, bucket="platform-billing", limit=10, window_seconds=900,
-        subject=str(claims.admin_id), message="Too many attempts. Try again shortly.",
+        request, bucket="platform-billing", limit=40, window_seconds=900,
+        subject=str(claims.admin_id), message="Too many attempts. Wait a few minutes and try again.",
     )
     await session.execute(text("SELECT set_config('app.current_tenant_id', '', true)"))
     await _reauthenticate(session, claims, payload.current_password)
@@ -421,8 +421,8 @@ async def clear_billing_config(
     charge customers and cannot.
     """
     await enforce_limit(
-        request, bucket="platform-billing", limit=10, window_seconds=900,
-        subject=str(claims.admin_id), message="Too many attempts. Try again shortly.",
+        request, bucket="platform-billing", limit=40, window_seconds=900,
+        subject=str(claims.admin_id), message="Too many attempts. Wait a few minutes and try again.",
     )
     await session.execute(text("SELECT set_config('app.current_tenant_id', '', true)"))
     await _reauthenticate(session, claims, payload.current_password)

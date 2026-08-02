@@ -208,13 +208,17 @@ export default function PlatformBillingPage() {
         >
           <div>
             <label className={label} htmlFor="sk">Secret key</label>
-            <input id="sk" type="password" autoComplete="off" spellCheck={false}
+            <input id="sk" name="stripe-sk" type="password"
+                   autoComplete="new-password" data-1p-ignore data-lpignore="true"
+                   spellCheck={false}
                    value={secret} onChange={(e) => setSecret(e.target.value)}
                    placeholder="sk_test_… or sk_live_…" className={`${field} mt-1 font-mono`} />
           </div>
           <div>
             <label className={label} htmlFor="wh">Webhook signing secret</label>
-            <input id="wh" type="password" autoComplete="off" spellCheck={false}
+            <input id="wh" name="stripe-wh" type="password"
+                   autoComplete="new-password" data-1p-ignore data-lpignore="true"
+                   spellCheck={false}
                    value={webhook} onChange={(e) => setWebhook(e.target.value)}
                    placeholder="whsec_…" className={`${field} mt-1 font-mono`} />
           </div>
@@ -251,6 +255,12 @@ export default function PlatformBillingPage() {
               the one at the keyboard right now.
             </p>
           </div>
+
+          {/* Beside the button, not only at the top of the page. The first
+              version showed failures in a banner above two long sections, so
+              a wrong password looked exactly like nothing happening. */}
+          {error && <p className="text-sm text-red-300">{error}</p>}
+          {notice && <p className="text-sm text-emerald-400">{notice}</p>}
 
           <button type="submit" disabled={busy || !password}
                   className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500 disabled:opacity-50">
@@ -315,6 +325,8 @@ export default function PlatformBillingPage() {
                   className="rounded-lg border border-red-900/60 px-4 py-2 text-sm text-red-300 hover:border-red-700 disabled:opacity-40">
             Remove
           </button>
+          {error && <p className="w-full text-sm text-red-300">{error}</p>}
+          {notice && <p className="w-full text-sm text-emerald-400">{notice}</p>}
         </form>
       </section>
 

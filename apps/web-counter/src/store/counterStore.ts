@@ -31,7 +31,7 @@ interface CounterStore {
 
 export const useCounterStore = create<CounterStore>()(
   persist(
-    (set, get) => ({
+    (set) => ({
       // Modal
       modalState: 'idle',
       setModal: (state) => set({ modalState: state }),

@@ -71,7 +71,11 @@ export function CheckInPage() {
   const checkIn = useCheckIn()
 
   // Search for active rental by RA number or customer name
-  const { data: searchResults, isFetching } = useQuery({
+  // The result set is deliberately not bound: this page looks up one rental at
+  // a time and the operator picks it from the scan/RA field, so only the
+  // in-flight state is used. Binding it would imply a results list that the UI
+  // does not render.
+  const { isFetching } = useQuery({
     queryKey: ['rentals', 'active', searchQuery],
     queryFn: async () => {
       // In production this would hit a dedicated active-rentals search endpoint
@@ -92,6 +96,12 @@ export function CheckInPage() {
         rental_agreement_id: activeRental.rental_agreement_id,
         odometer_in: Number(odometerIn),
         fuel_level_in: fuelLevelIn,
+        // Both carry server-side defaults, so omitting them was accepted — but
+        // it left the two fields that decide whether a return is clean implicit
+        // at the one call site that knows. A damage return is raised through the
+        // inspection flow, so a plain check-in states the clean case outright.
+        return_condition: 'NO_DAMAGE',
+        damage_charge_amount: 0,
       })
       setCompleted(true)
     } catch {

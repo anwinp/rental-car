@@ -42,13 +42,18 @@ const paymentSchema = z.object({
 })
 type PaymentFormData = z.infer<typeof paymentSchema>
 
-const EXTRAS = [
-  { code: 'CDW', name: 'Collision Damage Waiver', dailyRate: 19.99 },
-  { code: 'GPS', name: 'GPS Navigation', dailyRate: 7.99 },
-  { code: 'CSS', name: 'Child Safety Seat', dailyRate: 9.99 },
-  { code: 'PAI', name: 'Personal Accident Insurance', dailyRate: 4.99 },
-  { code: 'RSA', name: 'Roadside Assistance', dailyRate: 3.99 },
-]
+// Extras come from the workspace's own catalogue. This was a hardcoded list of
+// five with invented prices, keyed by CODE — but /pricing/quote and the
+// reservation endpoint both take `extra_id: UUID`, so every selection was
+// rejected. A customer could tick "Child Safety Seat", watch a price appear,
+// and have the booking fail on a field they never saw.
+interface BookableExtra {
+  extra_id: string
+  code: string
+  name: string
+  pricing_type?: string | null
+  default_price?: number | null
+}
 
 const STEPS = ['Extras', 'Driver Info', 'Payment', 'Confirmed']
 
@@ -119,9 +124,22 @@ export default function BookingPage({ params, searchParams }: BookingPageProps) 
   const [promoError, setPromoError] = useState('')
   const [promoLoading, setPromoLoading] = useState(false)
 
+  const [extras, setExtras] = useState<BookableExtra[]>([])
+
   useEffect(() => {
     if (draft.selectedExtras.length) setSelectedExtras(draft.selectedExtras)
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    fetch('/api/v1/catalogue/extras/public', {
+      headers: { 'X-Tenant-ID': tenantId() },
+    })
+      .then(r => (r.ok ? r.json() : []))
+      .then((rows: BookableExtra[]) => setExtras(Array.isArray(rows) ? rows : []))
+      // An empty extras list is a valid state — a workspace need not sell any.
+      // Failing quietly here shows no add-ons rather than blocking the booking.
+      .catch(() => setExtras([]))
+  }, [])
 
   const daysCount = from && to
     ? Math.max(1, Math.ceil((new Date(to).getTime() - new Date(from).getTime()) / 86400000))
@@ -132,7 +150,7 @@ export default function BookingPage({ params, searchParams }: BookingPageProps) 
     pickup_date: from,
     dropoff_date: to,
     class_code: classId,
-    extras: selectedExtras,
+    extras: selectedExtras.map(id => ({ extra_id: id, quantity: 1 })),
   })
 
   const driverForm = useForm<DriverFormData>({
@@ -154,10 +172,10 @@ export default function BookingPage({ params, searchParams }: BookingPageProps) 
     defaultValues: { card_name: '', card_number: '', expiry: '', cvc: '' },
   })
 
-  function toggleExtra(code: string) {
-    const next = selectedExtras.includes(code)
-      ? selectedExtras.filter(c => c !== code)
-      : [...selectedExtras, code]
+  function toggleExtra(extraId: string) {
+    const next = selectedExtras.includes(extraId)
+      ? selectedExtras.filter(c => c !== extraId)
+      : [...selectedExtras, extraId]
     setSelectedExtras(next)
     draft.setExtras(next)
   }
@@ -175,7 +193,7 @@ export default function BookingPage({ params, searchParams }: BookingPageProps) 
           vehicle_class_id: classId,
           pickup_dt: from,
           dropoff_dt: to,
-          extras: selectedExtras.map(code => ({ extra_id: code, quantity: 1 })),
+          extras: selectedExtras.map(id => ({ extra_id: id, quantity: 1 })),
           promo_code: promoCode.trim().toUpperCase(),
         }),
       })
@@ -236,7 +254,7 @@ export default function BookingPage({ params, searchParams }: BookingPageProps) 
             email: driverData.email,
             phone: driverData.phone || null,
           },
-          extras: selectedExtras,
+          extras: selectedExtras.map(id => ({ extra_id: id, quantity: 1 })),
         }),
       })
       if (!res.ok) {
@@ -263,9 +281,11 @@ export default function BookingPage({ params, searchParams }: BookingPageProps) 
     setAgeWarning(age < 25)
   }
 
-  const extrasTotal = selectedExtras.reduce((sum, code) => {
-    const e = EXTRAS.find(x => x.code === code)
-    return sum + (e?.dailyRate ?? 0) * daysCount
+  const extrasTotal = selectedExtras.reduce((sum, id) => {
+    const e = extras.find(x => x.extra_id === id)
+    if (!e?.default_price) return sum
+    // PER_RENTAL extras are charged once; everything else is per day.
+    return sum + e.default_price * (e.pricing_type === 'PER_RENTAL' ? 1 : daysCount)
   }, 0)
 
   return (
@@ -351,10 +371,10 @@ export default function BookingPage({ params, searchParams }: BookingPageProps) 
                   <fieldset style={{ border: 0, padding: 0, margin: 0 }}>
                     <legend className="sr-only">Optional extras</legend>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                      {EXTRAS.map(extra => {
-                        const checked = selectedExtras.includes(extra.code)
+                      {extras.map(extra => {
+                        const checked = selectedExtras.includes(extra.extra_id)
                         return (
-                          <label key={extra.code} style={{
+                          <label key={extra.extra_id} style={{
                             display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                             padding: '14px 16px', borderRadius: 0, cursor: 'pointer',
                             border: `1px solid ${checked ? 'rgba(218,41,28,0.4)' : 'rgba(255,255,255,0.07)'}`,
@@ -365,7 +385,7 @@ export default function BookingPage({ params, searchParams }: BookingPageProps) 
                               <input
                                 type="checkbox"
                                 checked={checked}
-                                onChange={() => toggleExtra(extra.code)}
+                                onChange={() => toggleExtra(extra.extra_id)}
                                 style={{ display: 'none' }}
                                 aria-label={extra.name}
                               />
@@ -390,9 +410,11 @@ export default function BookingPage({ params, searchParams }: BookingPageProps) 
                             </div>
                             <div style={{ textAlign: 'right', flexShrink: 0 }}>
                               <div style={{ fontSize: 15, fontWeight: 400, color: checked ? '#da291c' : '#ffffff' }}>
-                                ${extra.dailyRate.toFixed(2)}
+                                ${(extra.default_price ?? 0).toFixed(2)}
                               </div>
-                              <div style={{ fontSize: 11, fontWeight: 400, color: '#666666' }}>/day</div>
+                              <div style={{ fontSize: 11, fontWeight: 400, color: '#666666' }}>
+                                {extra.pricing_type === 'PER_RENTAL' ? '/rental' : '/day'}
+                              </div>
                             </div>
                           </label>
                         )
@@ -834,12 +856,19 @@ export default function BookingPage({ params, searchParams }: BookingPageProps) 
                   <>
                     {quote.line_items.map((item, i) => (
                       <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 10 }}>
-                        <span style={{ fontWeight: 400, color: item.type === 'tax' || item.type === 'fee' ? '#666666' : '#969696' }}>
+                        {/* The API returns these uppercase (BASE/EXTRA/FEE/TAX/DISCOUNT)
+                            and money as decimal STRINGS, to avoid float drift. The
+                            comparisons here were lowercase and the amounts were passed
+                            straight to a number formatter, so tax and fee lines never
+                            took their muted styling and every amount formatted as NaN.
+                            The currency lives on the quote, not the line item. */}
+                        <span style={{ fontWeight: 400, color: item.type === 'TAX' || item.type === 'FEE' ? '#666666' : '#969696' }}>
                           {item.description}
                         </span>
-                        <span style={{ fontWeight: 400, color: item.type === 'discount' ? '#03904a' : '#ffffff' }}>
-                          {item.type === 'discount' ? '-' : ''}
-                          {new Intl.NumberFormat('en-US', { style: 'currency', currency: item.currency_code }).format(Math.abs(item.amount))}
+                        <span style={{ fontWeight: 400, color: item.type === 'DISCOUNT' ? '#03904a' : '#ffffff' }}>
+                          {item.type === 'DISCOUNT' ? '-' : ''}
+                          {new Intl.NumberFormat('en-US', { style: 'currency', currency: quote.currency })
+                            .format(Math.abs(Number(item.amount)))}
                         </span>
                       </div>
                     ))}
@@ -847,7 +876,8 @@ export default function BookingPage({ params, searchParams }: BookingPageProps) 
                     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 18 }}>
                       <span style={{ fontWeight: 400, color: '#ffffff' }}>Total</span>
                       <span style={{ fontWeight: 500, color: '#ffffff', letterSpacing: '-0.02em' }}>
-                        {new Intl.NumberFormat('en-US', { style: 'currency', currency: quote.currency_code }).format(quote.total)}
+                        {new Intl.NumberFormat('en-US', { style: 'currency', currency: quote.currency })
+                          .format(Number(quote.total))}
                       </span>
                     </div>
                   </>
@@ -855,13 +885,14 @@ export default function BookingPage({ params, searchParams }: BookingPageProps) 
                   <>
                     {selectedExtras.length > 0 && (
                       <>
-                        {selectedExtras.map(code => {
-                          const e = EXTRAS.find(x => x.code === code)
+                        {selectedExtras.map(id => {
+                          const e = extras.find(x => x.extra_id === id)
                           if (!e) return null
+                          const units = e.pricing_type === 'PER_RENTAL' ? 1 : daysCount
                           return (
-                            <div key={code} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 8 }}>
+                            <div key={id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 8 }}>
                               <span style={{ fontWeight: 400, color: '#969696' }}>{e.name}</span>
-                              <span style={{ fontWeight: 400, color: '#ffffff' }}>${(e.dailyRate * daysCount).toFixed(2)}</span>
+                              <span style={{ fontWeight: 400, color: '#ffffff' }}>${((e.default_price ?? 0) * units).toFixed(2)}</span>
                             </div>
                           )
                         })}

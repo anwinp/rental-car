@@ -30,6 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_session
 from app.core.rbac import require_permission
 from app.core.security import UserClaims
+from app.core.tenancy import require_tenant
 
 router = APIRouter()
 
@@ -267,6 +268,56 @@ async def list_extras(
         )
     ).mappings().all()
     return [ExtraOut(**r) for r in rows]
+
+
+class PublicExtra(BaseModel):
+    """An extra as the booking site needs it — id, label, price, nothing else."""
+    extra_id: str
+    code: str
+    name: str
+    pricing_type: Optional[str] = None
+    default_price: Optional[float] = None
+
+
+@router.get("/extras/public", response_model=list[PublicExtra],
+            summary="Bookable extras (public — no auth, for the booking site)")
+async def list_extras_public(
+    session: AsyncSession = Depends(get_session),
+    tenant_id: uuid.UUID = Depends(require_tenant),
+) -> list[PublicExtra]:
+    """Active extras for the public booking flow.
+
+    The booking site had a hardcoded list of five extras with invented prices
+    and used their CODE as the identifier. Both quote and reservation take
+    `extra_id: UUID`, so every one of those selections was rejected — a customer
+    could tick "Child Safety Seat", see a price, and have the booking fail with
+    a validation error naming a field they never saw.
+
+    Tenant comes from the hostname exactly as /locations/public does: no
+    fallback, because an unresolvable tenant must be an error rather than some
+    other company's price list.
+    """
+    rows = (
+        await session.execute(
+            text(
+                "SELECT extra_id, code, name, pricing_type, default_price "
+                "  FROM extras_catalog "
+                " WHERE tenant_id = :t AND is_active "
+                " ORDER BY name"
+            ),
+            {"t": str(tenant_id)},
+        )
+    ).mappings().all()
+    return [
+        PublicExtra(
+            extra_id=str(r["extra_id"]),
+            code=r["code"],
+            name=r["name"],
+            pricing_type=r["pricing_type"],
+            default_price=float(r["default_price"]) if r["default_price"] is not None else None,
+        )
+        for r in rows
+    ]
 
 
 @router.post("/extras", response_model=ExtraOut,

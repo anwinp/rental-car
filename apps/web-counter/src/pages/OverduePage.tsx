@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Skeleton } from '@rcm/ui'
+import { Badge, Button, Card, CardContent, CardHeader, Skeleton } from '@rcm/ui'
 
 type EscalationTier = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL'
 

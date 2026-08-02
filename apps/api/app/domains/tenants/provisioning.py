@@ -117,7 +117,13 @@ async def provision_tenant_defaults(
                 "t": str(tenant_id),
                 "code": location_code[:10].upper(),
                 "name": location_name,
-                "city": city or location_name,
+                # Not `city or location_name`: with no city supplied that wrote
+                # the branch name into the city column — "Acme Rentals — Main
+                # Branch" as a city, shown to customers on the storefront
+                # location picker. The column is NOT NULL, so an empty string is
+                # the honest placeholder; onboarding already asks the operator
+                # to complete this address.
+                "city": city or "",
                 "country": country_code,
                 "tz": timezone,
                 "cur": currency,

@@ -104,9 +104,16 @@ async function updateReservationStatus(reservation_id: string, newStatus: string
     if (!res.ok) throw new Error(`Cancel failed: ${res.status}`)
     return
   }
+  // These pointed at /api/v1/counter/*, which is not mounted — every call 404'd
+  // and the failure was swallowed below with a comment guessing the endpoints
+  // might not exist yet. They do; the prefix is /checkout.
+  //
+  // The swallowing mattered more than the wrong path: a check-out that silently
+  // fails leaves the reservation, the vehicle and the deposit disagreeing about
+  // whether the car has left, with nothing shown to the operator.
   const path = newStatus === 'ACTIVE'
-    ? '/api/v1/counter/checkout'
-    : '/api/v1/counter/check-in'
+    ? '/api/v1/checkout/checkout'
+    : '/api/v1/checkout/check-in'
   const res = await fetch(path, {
     method: 'POST',
     credentials: 'include',
@@ -114,7 +121,14 @@ async function updateReservationStatus(reservation_id: string, newStatus: string
     body: JSON.stringify({ reservation_id }),
   })
   if (!res.ok) {
-    // Fall through — counter endpoints may not exist yet; page will refetch
+    let detail = `Request failed (${res.status})`
+    try {
+      const body = await res.json()
+      if (typeof body?.detail === 'string') detail = body.detail
+    } catch {
+      /* keep the status */
+    }
+    throw new Error(detail)
   }
 }
 

@@ -16,9 +16,9 @@
   "scripts": {
     "build": "tsup src/index.ts --format esm,cjs --dts --out-dir dist",
     "dev": "tsup src/index.ts --watch --format esm,cjs --dts --out-dir dist",
-    "generate": "openapi-typescript http://localhost:8000/openapi.json -o src/schema.d.ts",
-    "generate:staging": "openapi-typescript $STAGING_API_URL/openapi.json -o src/schema.d.ts",
-    "drift-check": "openapi-typescript http://localhost:8000/openapi.json -o /tmp/schema-fresh.d.ts && diff src/schema.d.ts /tmp/schema-fresh.d.ts && echo 'No drift' || (echo 'DRIFT DETECTED — run npm run generate' && exit 1)",
+    "generate": "openapi-typescript http://localhost:8000/api/openapi.json -o src/schema.d.ts && node -e \"const f='src/schema.d.ts',s=require('fs');s.writeFileSync(f,s.readFileSync(f,'utf8').split('\\\"/api/v1/').join('\\\"/'))\"",
+    "generate:staging": "openapi-typescript $STAGING_API_URL/api/openapi.json -o src/schema.d.ts",
+    "drift-check": "openapi-typescript http://localhost:8000/api/openapi.json -o /tmp/schema-fresh.d.ts && diff src/schema.d.ts /tmp/schema-fresh.d.ts && echo 'No drift' || (echo 'DRIFT DETECTED \u2014 run npm run generate' && exit 1)",
     "lint": "eslint src --ext .ts",
     "type-check": "tsc --noEmit"
   },

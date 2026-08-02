@@ -1,0 +1,446 @@
+<title>RCM — Pending Build</title>
+
+<style>
+  :root {
+    --ink:        #16181d;
+    --ink-2:      #4a5260;
+    --ink-3:      #767f8f;
+    --ground:     #f7f7f5;
+    --card:       #ffffff;
+    --rule:       #e3e3de;
+    --rule-soft:  #eeeeea;
+    --accent:     #b3452f;
+    --accent-dim: #f0e0da;
+    --blocker:    #b3452f;
+    --major:      #9a6b1f;
+    --later:      #4a6b58;
+    --done:       #3f7d5c;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ink: #ecedef; --ink-2: #a6adba; --ink-3: #767f8f;
+      --ground: #131417; --card: #1a1c21; --rule: #2b2e35; --rule-soft: #23262c;
+      --accent: #e2765c; --accent-dim: #3a231d;
+      --blocker: #e2765c; --major: #d9a441; --later: #7fb094; --done: #6fbb92;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ink: #ecedef; --ink-2: #a6adba; --ink-3: #767f8f;
+    --ground: #131417; --card: #1a1c21; --rule: #2b2e35; --rule-soft: #23262c;
+    --accent: #e2765c; --accent-dim: #3a231d;
+    --blocker: #e2765c; --major: #d9a441; --later: #7fb094; --done: #6fbb92;
+  }
+  :root[data-theme="light"] {
+    --ink: #16181d; --ink-2: #4a5260; --ink-3: #767f8f;
+    --ground: #f7f7f5; --card: #ffffff; --rule: #e3e3de; --rule-soft: #eeeeea;
+    --accent: #b3452f; --accent-dim: #f0e0da;
+    --blocker: #b3452f; --major: #9a6b1f; --later: #4a6b58; --done: #3f7d5c;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--ground); color: var(--ink);
+    font-family: var(--sans); font-size: 15px; line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 56px 24px 96px; }
+
+  header { border-bottom: 2px solid var(--ink); padding-bottom: 22px; margin-bottom: 8px; }
+  .eyebrow {
+    font-family: var(--mono); font-size: 11px; letter-spacing: .14em;
+    text-transform: uppercase; color: var(--accent); margin: 0 0 10px;
+  }
+  h1 { margin: 0; font-size: clamp(30px, 5vw, 46px); line-height: 1.05; letter-spacing: -.022em; text-wrap: balance; }
+  .lede { margin: 14px 0 0; max-width: 62ch; color: var(--ink-2); font-size: 16px; }
+
+  .meta { display: flex; flex-wrap: wrap; gap: 0; margin: 26px 0 44px; border: 1px solid var(--rule); background: var(--card); }
+  .meta div { flex: 1 1 160px; padding: 14px 18px; border-right: 1px solid var(--rule); }
+  .meta div:last-child { border-right: 0; }
+  .meta dt { font-family: var(--mono); font-size: 10.5px; letter-spacing: .11em; text-transform: uppercase; color: var(--ink-3); margin: 0 0 5px; }
+  .meta dd { margin: 0; font-size: 21px; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
+
+  h2 {
+    margin: 46px 0 6px; font-size: 13px; font-family: var(--mono);
+    letter-spacing: .12em; text-transform: uppercase; color: var(--ink);
+    display: flex; align-items: baseline; gap: 12px;
+  }
+  h2::after { content: ""; flex: 1; height: 1px; background: var(--rule); }
+  .h2note { margin: 0 0 20px; color: var(--ink-3); font-size: 13.5px; max-width: 66ch; }
+
+  .item {
+    background: var(--card); border: 1px solid var(--rule);
+    border-left: 3px solid var(--tone, var(--rule));
+    padding: 18px 20px; margin-bottom: 10px;
+  }
+  .item.blocker { --tone: var(--blocker); }
+  .item.major   { --tone: var(--major); }
+  .item.later   { --tone: var(--later); }
+
+  .row { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  .title { font-weight: 600; font-size: 15.5px; letter-spacing: -.005em; }
+  .tag {
+    font-family: var(--mono); font-size: 10px; letter-spacing: .09em;
+    text-transform: uppercase; padding: 3px 7px; border: 1px solid var(--rule);
+    color: var(--ink-3); white-space: nowrap;
+  }
+  .tag.effort { border-color: var(--rule); }
+  .why { margin: 9px 0 0; color: var(--ink-2); font-size: 14px; max-width: 76ch; }
+  .ev {
+    margin: 11px 0 0; padding: 9px 12px; background: var(--ground);
+    border: 1px solid var(--rule-soft); font-family: var(--mono);
+    font-size: 12px; color: var(--ink-2); overflow-x: auto; white-space: pre;
+  }
+
+  .done-list { background: var(--card); border: 1px solid var(--rule); padding: 6px 20px; }
+  .done-list li { padding: 9px 0; border-bottom: 1px solid var(--rule-soft); color: var(--ink-2); font-size: 14px; }
+  .done-list li:last-child { border-bottom: 0; }
+  .done-list b { color: var(--ink); font-weight: 600; }
+  ul.done-list { list-style: none; margin: 0; }
+
+  .callout {
+    border: 1px solid var(--accent); background: var(--accent-dim);
+    padding: 16px 20px; margin: 12px 0 0;
+  }
+  .callout p { margin: 0; font-size: 14px; color: var(--ink); max-width: 74ch; }
+  .callout p + p { margin-top: 9px; }
+
+  footer { margin-top: 56px; padding-top: 18px; border-top: 1px solid var(--rule); color: var(--ink-3); font-size: 13px; }
+  code { font-family: var(--mono); font-size: .9em; }
+  a { color: var(--accent); }
+</style>
+
+<div class="wrap">
+
+  <header>
+    <p class="eyebrow">Rental Car Manager · Build status</p>
+    <h1>What is still to build</h1>
+    <p class="lede">
+      Every claim here was checked against the running system today, not carried
+      over from a plan. Where something is listed as broken, the evidence is the
+      actual output.
+    </p>
+  </header>
+
+  <dl class="meta">
+    <div><dt>API endpoints</dt><dd>157</dd></div>
+    <div><dt>Blockers to selling</dt><dd>7</dd></div>
+    <div><dt>Tables, zero cross-tenant leak</dt><dd>31</dd></div>
+    <div><dt>Migrations ahead of prod</dt><dd>17</dd></div>
+  </dl>
+
+  <div class="callout">
+    <p>
+      <b>The engine is real; the business around it is not.</b> Reservations,
+      fleet, damage, deposits, counter and the AI agent all work end to end, and
+      multi-tenancy now holds under adversarial testing.
+    </p>
+    <p>
+      What is missing is what turns that into something a rental company can buy
+      and run on: they cannot be charged for the product, cannot bring their
+      existing bookings in, cannot get their data out, cannot make the storefront
+      look like theirs, and every quote under-collects tax.
+    </p>
+  </div>
+
+  <h2>Blockers</h2>
+  <p class="h2note">
+    Nothing else should ship first. Each of these either loses money, breaks a
+    legal obligation, or stops a customer becoming a customer.
+  </p>
+
+  <div class="item blocker">
+    <div class="row">
+      <span class="title">Tax is zero on every quote</span>
+      <span class="tag">pricing</span><span class="tag effort">S</span>
+    </div>
+    <p class="why">
+      <code>AvalaraClient</code> is written and never instantiated, and the pricing
+      service calls <code>calculate_tax()</code> — a method the class does not
+      define, so even wiring it would fail. Under-collecting tax is an
+      unrecoverable liability, not a workaround. For a one-to-three location
+      operator the answer is a tax rate on the location, not a tax engine.
+    </p>
+    <div class="ev">POST /pricing/quote  →  "taxes": "0.00",  "total": "79.98"</div>
+  </div>
+
+  <div class="item blocker">
+    <div class="row">
+      <span class="title">Online bookings arrive unpaid</span>
+      <span class="tag">payments</span><span class="tag effort">M</span>
+    </div>
+    <p class="why">
+      The booking site's payment step is labelled “Demo mode” and card details
+      never reach the API. An unpaid online reservation is a lead, not a booking,
+      and a small operator has no collections function. Stripe pre-auth, capture
+      and refund already work — only the storefront capture path is missing.
+    </p>
+    <div class="ev">apps/web-booking/app/booking/[id]/page.tsx:697 → “Demo mode”</div>
+  </div>
+
+  <div class="item blocker">
+    <div class="row">
+      <span class="title">Counter check-out silently 404s</span>
+      <span class="tag">operations</span><span class="tag effort">S</span>
+    </div>
+    <p class="why">
+      Three call sites POST to <code>/api/v1/counter/*</code>. No counter router
+      is mounted, and the failure is deliberately swallowed with a comment saying
+      the endpoints may not exist yet. The reservation, the vehicle and the money
+      go out of sync with no error shown — unrecoverable on paper.
+    </p>
+    <div class="ev">3 call sites → /api/v1/counter/…   ·   routers mounted: 0</div>
+  </div>
+
+  <div class="item blocker">
+    <div class="row">
+      <span class="title">No rental agreement is ever produced</span>
+      <span class="tag">legal</span><span class="tag effort">M</span>
+    </div>
+    <p class="why">
+      Signature capture is real and hashed. The document is not — <code>weasyprint</code>
+      is in requirements and imported nowhere. A signed agreement is legally
+      required and cannot be recreated after the fact, which is exactly when it
+      is needed.
+    </p>
+    <div class="ev">weasyprint==62.3 installed  ·  imports in app/: 0</div>
+  </div>
+
+  <div class="item blocker">
+    <div class="row">
+      <span class="title">Forward bookings cannot be imported</span>
+      <span class="tag">migration</span><span class="tag effort">L</span>
+    </div>
+    <p class="why">
+      An operator switching has roughly thirty live bookings and two hundred past
+      customers. Vehicles import by CSV; nothing else does. So they run this and
+      their spreadsheet in parallel, double-entering everything — and nobody
+      sustains that past week two. This is the single highest-leverage missing
+      feature for conversion, and it goes unbuilt everywhere because it is
+      unglamorous.
+    </p>
+    <div class="ev">import/export endpoints across all 22 domains: 1 (vehicles only)</div>
+  </div>
+
+  <div class="item blocker">
+    <div class="row">
+      <span class="title">No data export</span>
+      <span class="tag">legal</span><span class="tag effort">M</span>
+    </div>
+    <p class="why">
+      Not one export route exists. GDPR erasure is implemented properly, including
+      legal holds — so the product can delete a person's data and cannot give it
+      to them. Export must also work while an account is past-due or suspended;
+      holding a business's operating records over an unpaid invoice is not
+      defensible. A per-tenant CSV is already written to S3 nightly with no route
+      to download it, so this is half-built.
+    </p>
+  </div>
+
+  <div class="item blocker">
+    <div class="row">
+      <span class="title">No subscription billing</span>
+      <span class="tag">commercial</span><span class="tag effort">L</span>
+    </div>
+    <p class="why">
+      The billing domain is a twelve-line health check. <code>stripe_customer_id</code>
+      and <code>trial_ends_at</code> exist on the tenant and nothing writes them.
+      Plan limits are enforced for staff seats only — the one dimension that
+      should not be billable — and the single upgrade prompt in the product is a
+      sentence with no link, no price and nowhere to go. Self-serve signup with
+      no way to charge is a free-tier generator.
+    </p>
+    <div class="ev">billing · corporate · maintenance · admin  →  12 lines each</div>
+  </div>
+
+  <h2>Major</h2>
+  <p class="h2note">Needed to be competitive rather than merely usable.</p>
+
+  <div class="item major">
+    <div class="row">
+      <span class="title">White-label storefront</span>
+      <span class="tag">differentiator</span><span class="tag effort">~8 wks</span>
+    </div>
+    <p class="why">
+      The Shopify part, and close to unbuilt: one branding column
+      (<code>logo_url</code>), no theme table, and a storefront painted with 740
+      literal colour values against 96 declared CSS variables. The theming layer
+      exists and is bypassed. Roughly 40% of the effort is de-hardcoding those
+      literals, which produces nothing demo-able — expect pressure to skip it.
+    </p>
+    <div class="ev">branding tables: 0   ·   hardcoded hex: 740   ·   CSS vars: 96</div>
+  </div>
+
+  <div class="item major">
+    <div class="row">
+      <span class="title">Real reporting</span>
+      <span class="tag">analytics</span><span class="tag effort">M</span>
+    </div>
+    <p class="why">
+      Two async jobs write to S3 and there is no route to read a result. The
+      Reports page is now hidden behind a flag rather than showing invented
+      revenue. Most of the aggregation already exists in the dashboard domain —
+      this is exposure and CSV export, not new computation.
+    </p>
+  </div>
+
+  <div class="item major">
+    <div class="row">
+      <span class="title">Customers page shows six invented people</span>
+      <span class="tag">crm</span><span class="tag effort">S</span>
+    </div>
+    <p class="why">
+      The customers API is complete — nine routes including merge and GDPR
+      erasure — but the list renders <code>INIT_CUSTOMERS</code>. A tenant with
+      629 real customers sees the same six fictional names as an empty one.
+      Wiring it up is small and visible.
+    </p>
+  </div>
+
+  <div class="item major">
+    <div class="row">
+      <span class="title">Maintenance has no storage at all</span>
+      <span class="tag">fleet</span><span class="tag effort">M</span>
+    </div>
+    <p class="why">
+      No work-order table exists in any migration and the router is a stub. The
+      genuine mechanism is a vehicle block with type <code>MAINTENANCE</code>,
+      plus automatic recall holds from the daily VIN scan. Minimum viable is a
+      work order attached to that block — one table, not a subsystem.
+    </p>
+  </div>
+
+  <div class="item major">
+    <div class="row">
+      <span class="title">Counter offline queue never drains</span>
+      <span class="tag">operations</span><span class="tag effort">M</span>
+    </div>
+    <p class="why">
+      An offline checkout is queued to local storage and the operator is told it
+      will sync. Nothing ever sends it, and the drain functions are called from
+      nowhere. Revenue-bearing data loss, reported to the user as success.
+    </p>
+  </div>
+
+  <div class="item major">
+    <div class="row">
+      <span class="title">Onboarding does not survive contact with a new operator</span>
+      <span class="tag">activation</span><span class="tag effort">M</span>
+    </div>
+    <p class="why">
+      Two competing definitions of “ready” exist. The checklist opens at 60% with
+      three items auto-satisfied, and its staff step can never be completed by a
+      solo operator. Unverified workspaces are hard-deleted after fourteen days
+      against a verification token that lives twenty-four hours — with no warning
+      email. Someone who misses the email and returns in three weeks finds their
+      workspace gone.
+    </p>
+  </div>
+
+  <h2>Later</h2>
+  <p class="h2note">
+    Real, but deferrable. Two entries here are deliberately <em>not</em>
+    scheduled — they imply capability the product does not have.
+  </p>
+
+  <div class="item later">
+    <div class="row">
+      <span class="title">Custom domains</span>
+      <span class="tag">white-label</span><span class="tag effort">L</span>
+    </div>
+    <p class="why">
+      Will be the loudest request and is correctly deferred. A verified
+      <code>acme-rcm.ceez.ai</code> carrying the operator's own logo, colours,
+      copy and legal text is most of the perceived value at a fraction of the
+      cost and none of the certificate support burden. The on-demand TLS
+      mechanism built this week already serves customer domains unchanged when
+      the time comes.
+    </p>
+  </div>
+
+  <div class="item later">
+    <div class="row">
+      <span class="title">Corporate accounts</span>
+      <span class="tag">sales</span><span class="tag effort">M</span>
+    </div>
+    <p class="why">
+      No table exists. What a small operator actually needs is “invoice the panel
+      shop monthly” — a customer flag and an invoice, not an account hierarchy
+      with credit limits. The hidden fabricated page is not evidence of demand.
+    </p>
+  </div>
+
+  <div class="item later">
+    <div class="row">
+      <span class="title">Weekend rates never apply</span>
+      <span class="tag">pricing</span><span class="tag effort">S</span>
+    </div>
+    <p class="why">
+      <code>WEEKEND_SPECIAL</code> is public but ranked below the rack rate on
+      purpose: nothing evaluates whether the rental falls on a weekend, so
+      promoting it would silently discount midweek hires. Inert until that date
+      logic exists — the safer of two wrong behaviours, and a deliberate choice
+      rather than an oversight.
+    </p>
+  </div>
+
+  <div class="item later">
+    <div class="row">
+      <span class="title">Dead integrations that imply they work</span>
+      <span class="tag">cleanup</span><span class="tag effort">S</span>
+    </div>
+    <p class="why">
+      Booking.com and Expedia connectors raise <code>NotImplementedError</code> on
+      every method while a five-minute job polls them and logs success. A toll
+      task is scheduled against a task name that does not exist. The Tyro gateway
+      is a skeleton. Remove the schedule entries and stubs so the codebase stops
+      claiming capability it lacks.
+    </p>
+  </div>
+
+  <h2>Shipped this week</h2>
+  <p class="h2note">Context for what the above is measured against. Ten commits, none pushed.</p>
+
+  <ul class="done-list">
+    <li><b>Tenant isolation</b> — 31 tables with zero cross-tenant read, update or delete; suite 32/32</li>
+    <li><b>Per-tenant catalogues</b> — every workspace owns and can edit its own classes and extras; no shared rows</li>
+    <li><b>Pricing UI</b> — operators can set prices; the write endpoint had never worked (unresolvable ORM foreign key)</li>
+    <li><b>Rate eligibility</b> — negotiated rates were pricing public bookings at a 30% discount, invisibly</li>
+    <li><b>Session integrity</b> — password reset now ends every session; MFA is enforced at login</li>
+    <li><b>Deploy role</b> — production connected as the schema owner, making every RLS policy decorative</li>
+    <li><b>Per-tenant hostnames</b> — hyphenated hosts with on-demand TLS, gated so cert issuance cannot be abused</li>
+    <li><b>Fabricated screens</b> — four hidden behind a flag, with a banner when it is on</li>
+  </ul>
+
+  <h2>Not code</h2>
+  <p class="h2note">Blocked on you, and worth starting early because of lead time.</p>
+
+  <div class="item blocker">
+    <div class="row"><span class="title">DNS records</span><span class="tag">ops</span></div>
+    <p class="why">
+      Per-tenant hostnames do not resolve in production yet. One wildcard A record
+      covers every tenant; no wildcard <em>certificate</em> and no DNS-01 challenge
+      is needed, because certificates are issued per hostname on demand.
+    </p>
+    <div class="ev">*.ceez.ai    A    63.250.55.137</div>
+  </div>
+
+  <div class="item blocker">
+    <div class="row"><span class="title">Production is 17 migrations behind</span><span class="tag">ops</span></div>
+    <p class="why">
+      Live runs a build predating all of this work. None of the isolation,
+      pricing, MFA or catalogue changes are deployed, and nothing has been pushed
+      to a remote.
+    </p>
+    <div class="ev">local 066_catalogue_delete   ·   production 049_user_role_enum_values</div>
+  </div>
+
+  <footer>
+    Verified against the running system. Effort marks are rough:
+    S ≈ days · M ≈ 1–2 weeks · L ≈ 3&nbsp;weeks+.
+    Market assumptions behind the prioritisation are recorded separately in
+    <code>PRODUCT_PLAN.md</code> and are not treated as fact.
+  </footer>
+
+</div>

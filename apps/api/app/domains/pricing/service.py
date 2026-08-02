@@ -251,6 +251,7 @@ class PricingService:
         tax_amount = await self._calculate_taxes(
             pretax_subtotal=pretax_subtotal,
             location_id=request.location_id,
+            rental_days=Decimal(str(rental_days_int)),
         )
         if tax_amount > Decimal("0"):
             line_items.append(
@@ -608,26 +609,79 @@ class PricingService:
         self,
         pretax_subtotal: Decimal,
         location_id: UUID,
+        rental_days: Decimal = Decimal("1"),
     ) -> Decimal:
-        """
-        Calculate taxes for the pretax subtotal.
+        """Tax and statutory fees for a quote, from the tenant's own template.
 
-        Calls Avalara if client is available; falls back to a 0% stub
-        (tax_template integration is handled by the counter domain at checkout).
+        Every quote returned 0.00 before this. The Avalara branch was never
+        reachable — the client is not constructed at any call site — and it would
+        have failed anyway, because it called `calculate_tax()`, a method that
+        class does not define. So the fallback was the only path, and it returned
+        Decimal("0") unconditionally. Under-collecting tax is not a degraded
+        experience; it is a liability the operator cannot recover later.
+
+        The data to do this correctly already existed. `tax_templates` is
+        per-tenant and holds a jurisdictions array, and `locations` carries a
+        tax_template_id. Nothing consulted either.
+
+        Jurisdiction entries take two shapes:
+            {"type": "SALES_TAX", "rate": 0.0725}      proportion of the subtotal
+            {"type": "FLAT_PER_DAY", "amount": 5.99}   fixed charge per rental day
+
+        Falls back to the tenant's own template when a location has none, which
+        is currently every location — provisioning creates the template but never
+        links it. Returning 0 in that case would reintroduce the same silent
+        under-collection this replaces.
         """
-        if self._avalara is not None:
+        from sqlalchemy import text as _text
+
+        row = (
+            await self._repo.session.execute(
+                _text(
+                    """
+                    SELECT COALESCE(
+                        (SELECT tt.jurisdictions FROM tax_templates tt
+                          WHERE tt.template_id = l.tax_template_id),
+                        (SELECT tt2.jurisdictions FROM tax_templates tt2
+                          WHERE tt2.tenant_id = l.tenant_id
+                          ORDER BY tt2.created_at LIMIT 1)
+                    ) AS jurisdictions
+                      FROM locations l
+                     WHERE l.location_id = :loc
+                    """
+                ),
+                {"loc": str(location_id)},
+            )
+        ).first()
+
+        jurisdictions = (row[0] if row else None) or []
+        if isinstance(jurisdictions, str):
+            import json as _json
+
             try:
-                tax_result = await self._avalara.calculate_tax(
-                    lines=[
-                        {"amount": float(pretax_subtotal), "itemCode": "RENTAL"}
-                    ],
-                    ship_to_location_id=str(location_id),
-                )
-                return _round6(Decimal(str(tax_result.get("totalTax", 0))))
-            except Exception:
-                log.warning(
-                    "Avalara unavailable — falling back to 0 tax",
-                    exc_info=True,
-                )
-        # Fallback: no tax calculation available
-        return Decimal("0")
+                jurisdictions = _json.loads(jurisdictions)
+            except ValueError:
+                jurisdictions = []
+
+        if not jurisdictions:
+            # No template at all. Loud, because a silent zero is what this
+            # method existed to stop.
+            log.warning(
+                "no_tax_template_for_location",
+                location_id=str(location_id),
+                detail="quote priced with zero tax",
+            )
+            return Decimal("0")
+
+        total = Decimal("0")
+        for j in jurisdictions:
+            if not isinstance(j, dict):
+                continue
+            if j.get("rate") is not None:
+                total += pretax_subtotal * Decimal(str(j["rate"]))
+            elif j.get("amount") is not None:
+                # Per-day charges scale with the hire, not the price.
+                per_day = Decimal(str(j["amount"]))
+                total += per_day * (rental_days if rental_days > 0 else Decimal("1"))
+
+        return _round6(total)

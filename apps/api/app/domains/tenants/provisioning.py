@@ -123,6 +123,20 @@ async def provision_tenant_defaults(
                 "cur": currency,
             },
         )
+        # Link it to the tenant's tax template so quotes tax correctly from day
+        # one. Without this the pricing engine falls back to the tenant's first
+        # template, which is a guess that goes wrong as soon as a second branch
+        # with different jurisdictions exists.
+        await session.execute(
+            text(
+                "UPDATE locations SET tax_template_id = ("
+                "  SELECT template_id FROM tax_templates"
+                "   WHERE tenant_id = :t ORDER BY created_at LIMIT 1)"
+                " WHERE location_id = :loc AND tax_template_id IS NULL"
+            ),
+            {"t": str(tenant_id), "loc": str(location_id)},
+        )
+
         result.location_id = location_id
         result.steps.append("starter_location")
 

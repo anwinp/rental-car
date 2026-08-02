@@ -150,7 +150,7 @@ export function useCheckout() {
     mutationFn: async (body: CheckoutRequest) => {
       const { data, error } = await (apiClient as never as {
         POST: (path: string, opts: unknown) => Promise<{ data: unknown; error: unknown }>
-      }).POST('/counter/checkout', { body })
+      }).POST('/checkout/checkout', { body })
       if (error) throw error
       return data as components['schemas']['CheckoutResponse']
     },
@@ -170,7 +170,7 @@ export function useCheckIn() {
     mutationFn: async (body: CheckInRequest) => {
       const { data, error } = await (apiClient as never as {
         POST: (path: string, opts: unknown) => Promise<{ data: unknown; error: unknown }>
-      }).POST('/counter/check-in', { body })
+      }).POST('/checkout/check-in', { body })
       if (error) throw error
       return data as components['schemas']['CheckInResponse']
     },

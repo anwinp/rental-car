@@ -154,7 +154,9 @@ export function CheckoutPage() {
 
     if (!navigator.onLine) {
       addToQueue({
-        url: '/api/v1/counter/checkout',
+        // Must match the live route — an item queued against
+        // /api/v1/counter/* would 404 on every retry, forever.
+        url: '/api/v1/checkout/checkout',
         body: JSON.stringify(payload),
         timestamp: Date.now(),
       })
@@ -165,10 +167,13 @@ export function CheckoutPage() {
     try {
       await (apiClient as never as {
         POST: (path: string, opts: unknown) => Promise<unknown>
-      }).POST('/counter/checkout', { body: payload })
+      }).POST('/checkout/checkout', { body: payload })
       alert('Checkout complete!')
-    } catch {
-      alert('Checkout failed. Please try again.')
+    } catch (err) {
+      // Say why. "Please try again" on a check-out that can never
+      // succeed sends the agent round the loop while a customer waits.
+      const detail = err instanceof Error ? err.message : 'Unknown error'
+      alert(`Checkout failed: ${detail}`)
     }
   }
 

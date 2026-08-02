@@ -51,6 +51,17 @@ export default function TenantBoot({ children }: { children: ReactNode }) {
   }
 
   if (state === 'platform') {
+    // The front door is the front door, not every door. This branch replaced
+    // children for EVERY path on the platform host, so /start — the workspace
+    // signup form — rendered the marketing page instead, and choosing a plan
+    // looked like it did nothing.
+    //
+    // Only the root is the landing page. Any other route on this host is a
+    // page in its own right and renders itself; there is no tenant to resolve
+    // for it, which is exactly why it lives on this host.
+    if (typeof window !== 'undefined' && window.location.pathname !== '/') {
+      return <>{children}</>
+    }
     return <PlatformLanding />
   }
 

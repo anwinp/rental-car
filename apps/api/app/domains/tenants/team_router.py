@@ -64,6 +64,71 @@ _GRANTABLE_ROLES: dict[str, set[str]] = {
 }
 
 
+# Seniority for actions taken ON a member, as distinct from _GRANTABLE_ROLES
+# which governs what may be handed out. Deactivation had no rank check at all,
+# so a BRANCH_MANAGER — who is in ADMIN_ROLES and may therefore manage the team
+# — could deactivate SYSTEM_ADMINs one at a time until only their own choice
+# remained. The last-admin guard did not stop it: it only refuses when exactly
+# one administrator is left, so with two present the first could always go.
+_RANK: dict[str, int] = {
+    "SUPER_ADMIN": 100,
+    "SYSTEM_ADMIN": 90,
+    "EXECUTIVE": 80,
+    "REGIONAL_MANAGER": 70,
+    "BRANCH_MANAGER": 60,
+    "FLEET_MANAGER": 50,
+    "FINANCE": 50,
+    "FINANCE_ANALYST": 45,
+    "CLAIMS_COORDINATOR": 45,
+    "SENIOR_AGENT": 40,
+    "MAINTENANCE_TECH": 30,
+    "COUNTER_AGENT": 20,
+    "READONLY_AUDITOR": 10,
+}
+
+
+def _assert_outranks(claims: UserClaims, target_role: str, verb: str) -> None:
+    """Refuse an action on a member of equal or greater seniority."""
+    actor = _RANK.get(claims.primary_role, 0)
+    target = _RANK.get(target_role, 0)
+    if actor <= target:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"You cannot {verb} a {target_role.replace('_', ' ').lower()}.",
+        )
+
+
+async def _revoke_all_sessions(session: AsyncSession, user_id: str) -> None:
+    """Sign a user out everywhere, immediately and durably.
+
+    Two mechanisms, because neither alone is sufficient. The credential epoch
+    lives in Postgres and invalidates every token ever issued to this user,
+    including refresh tokens this process cannot enumerate — that is the
+    authoritative kill. The JTI sweep makes it take effect now rather than
+    after the epoch cache expires.
+
+    Redis being unavailable must not make a deactivation silently fail, so the
+    sweep is best-effort; the epoch has already been written to the database by
+    then and is what actually holds.
+    """
+    # USER_SESSIONS_KEY is defined in the auth service, not core.redis, and is
+    # imported from there so the two halves of revocation cannot drift onto
+    # different key names.
+    from app.core.redis import REVOKED_TOKENS_SET, get_session_redis
+    from app.core.security import bump_epoch
+    from app.domains.auth.service import USER_SESSIONS_KEY
+
+    await bump_epoch(session, user_id)
+    try:
+        redis = get_session_redis()
+        jtis = await redis.smembers(USER_SESSIONS_KEY.format(user_id=user_id))
+        if jtis:
+            await redis.sadd(REVOKED_TOKENS_SET, *jtis)
+        await redis.delete(USER_SESSIONS_KEY.format(user_id=user_id))
+    except Exception:  # noqa: BLE001 — the epoch is the durable half
+        log.warning("session_sweep_failed", user_id=user_id, exc_info=True)
+
+
 def _require_team_admin(claims: UserClaims) -> UserClaims:
     if claims.primary_role not in ADMIN_ROLES:
         raise HTTPException(
@@ -357,16 +422,29 @@ async def deactivate_member(
         raise HTTPException(404, "No such team member.")
     if target[0] in ("SYSTEM_ADMIN", "SUPER_ADMIN") and admins <= 1:
         raise HTTPException(
-            400, "This is the workspace's last administrator. Promote someone else first."
+            400,
+            "This is the workspace's last administrator. Give someone else the "
+            "administrator role first.",
         )
+    _assert_outranks(claims, target[0], "deactivate")
 
     await session.execute(
         text("UPDATE staff_users SET is_active = false, updated_at = now() "
              "WHERE user_id = :u AND tenant_id = :t"),
         {"u": str(user_id), "t": str(claims.tenant_id)},
     )
+
+    # End their live sessions. Without this the flag flip was almost cosmetic:
+    # get_current_user checks the signature, the revoked-JTI set and the
+    # credential epoch — never is_active — so a deactivated person kept working
+    # until their access token expired. On the counter PWA that is EIGHT HOURS,
+    # i.e. someone dismissed at the start of a shift could still check cars out
+    # for the rest of it. change_password and reset_password already do exactly
+    # this; deactivation simply never did.
+    await _revoke_all_sessions(session, str(user_id))
+
     log.info("staff_deactivated", tenant_id=str(claims.tenant_id), by=str(claims.user_id))
-    return SimpleResult(ok=True, message="Team member deactivated.")
+    return SimpleResult(ok=True, message="Team member deactivated and signed out.")
 
 
 # ── Accept (public) ──────────────────────────────────────────────────────────
@@ -481,3 +559,152 @@ async def accept_invite(
     # Accepting proves the address, so the account starts verified — unlike
     # self-registration, where nobody has vouched for it.
     return SimpleResult(ok=True, message="Your account is ready. You can sign in now.")
+
+
+class RoleChange(BaseModel):
+    role: str
+
+    @field_validator("role")
+    @classmethod
+    def _known(cls, v: str) -> str:
+        v = v.strip().upper()
+        if v not in INVITABLE_ROLES:
+            raise ValueError("Unknown role.")
+        return v
+
+
+@router.patch("/members/{user_id}/role", response_model=SimpleResult,
+              summary="Change a team member's role")
+async def change_member_role(
+    user_id: uuid.UUID,
+    body: RoleChange,
+    session: AsyncSession = Depends(get_session),
+    claims: UserClaims = Depends(get_current_user),
+) -> SimpleResult:
+    """Give a team member a different role.
+
+    This did not exist. Roles were fixed at account creation — the only two
+    UPDATEs against staff_users in the whole application set email_verified_at
+    and is_active — which made the last-admin guard's own advice impossible to
+    follow: it refuses to deactivate the final administrator and tells you to
+    promote someone else, and there was no way to promote anyone. A workspace
+    whose sole admin left was frozen permanently and needed a DBA.
+
+    Two rank rules, both needed. You cannot grant a role you could not invite,
+    so nobody mints a peer or a superior. And you cannot act on someone who
+    already outranks you, so a branch manager cannot demote the system
+    administrator above them.
+    """
+    _require_team_admin(claims)
+    if str(user_id) == str(claims.user_id):
+        # Otherwise the only administrator can demote themselves and strand the
+        # workspace — the exact failure the last-admin guard exists to prevent,
+        # reached by a different route.
+        raise HTTPException(400, "You cannot change your own role.")
+
+    target = (
+        await session.execute(
+            text(
+                "SELECT role, is_active FROM staff_users "
+                " WHERE user_id = :u AND tenant_id = :t AND deleted_at IS NULL"
+            ),
+            {"u": str(user_id), "t": str(claims.tenant_id)},
+        )
+    ).first()
+    if not target:
+        raise HTTPException(404, "No such team member.")
+
+    current_role = target[0]
+    if current_role == body.role:
+        return SimpleResult(ok=True, message=f"Already a {body.role}.")
+
+    _assert_outranks(claims, current_role, "change the role of")
+    _assert_may_grant(claims, body.role)
+
+    if current_role in ("SYSTEM_ADMIN", "SUPER_ADMIN") and body.role not in (
+        "SYSTEM_ADMIN", "SUPER_ADMIN",
+    ):
+        admins = (
+            await session.execute(
+                text(
+                    "SELECT count(*) FROM staff_users "
+                    " WHERE tenant_id = :t AND is_active AND deleted_at IS NULL "
+                    "   AND role IN (\'SYSTEM_ADMIN\',\'SUPER_ADMIN\')"
+                ),
+                {"t": str(claims.tenant_id)},
+            )
+        ).scalar() or 0
+        if admins <= 1:
+            raise HTTPException(
+                400,
+                "This is the workspace's last administrator. Give someone else "
+                "the administrator role first.",
+            )
+
+    await session.execute(
+        text(
+            "UPDATE staff_users SET role = :r, updated_at = now() "
+            " WHERE user_id = :u AND tenant_id = :t"
+        ),
+        {"r": body.role, "u": str(user_id), "t": str(claims.tenant_id)},
+    )
+
+    # A role change alters what their existing token may do. Tokens carry the
+    # role, so without this a demoted user keeps their old powers until the
+    # token expires — up to eight hours on the counter.
+    await _revoke_all_sessions(session, str(user_id))
+
+    log.info(
+        "staff_role_changed",
+        tenant_id=str(claims.tenant_id),
+        by=str(claims.user_id),
+        from_role=current_role,
+        to_role=body.role,
+    )
+    return SimpleResult(
+        ok=True,
+        message=f"Role changed to {body.role.replace('_', ' ').title()}. "
+                "They will need to sign in again.",
+    )
+
+
+@router.post("/members/{user_id}/reactivate", response_model=SimpleResult,
+             summary="Reactivate a deactivated team member")
+async def reactivate_member(
+    user_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    claims: UserClaims = Depends(get_current_user),
+) -> SimpleResult:
+    """Restore access for someone previously deactivated.
+
+    Deactivation was one-way through the API, so a mistaken click — or a
+    seasonal worker returning — meant re-inviting them, which creates a second
+    account and splits their history in two.
+    """
+    _require_team_admin(claims)
+    target = (
+        await session.execute(
+            text(
+                "SELECT role, is_active FROM staff_users "
+                " WHERE user_id = :u AND tenant_id = :t AND deleted_at IS NULL"
+            ),
+            {"u": str(user_id), "t": str(claims.tenant_id)},
+        )
+    ).first()
+    if not target:
+        raise HTTPException(404, "No such team member.")
+    if target[1]:
+        return SimpleResult(ok=True, message="That member is already active.")
+
+    _assert_outranks(claims, target[0], "reactivate")
+    await assert_within_limit(session, claims.tenant_id, "staff")
+
+    await session.execute(
+        text(
+            "UPDATE staff_users SET is_active = true, updated_at = now() "
+            " WHERE user_id = :u AND tenant_id = :t"
+        ),
+        {"u": str(user_id), "t": str(claims.tenant_id)},
+    )
+    log.info("staff_reactivated", tenant_id=str(claims.tenant_id), by=str(claims.user_id))
+    return SimpleResult(ok=True, message="Team member reactivated.")

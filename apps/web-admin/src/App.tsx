@@ -12,6 +12,8 @@ import {
 const _TENANT = () => cachedTenant()?.tenant_id ?? ''
 const _TENANT_HEADERS = () => tenantHeaders()
 import { AuthProvider, RouteGuard, useAuth } from '@rcm/ui/auth'
+import { ForgotPasswordPage } from './pages/ForgotPasswordPage'
+import { ResetPasswordPage } from './pages/ResetPasswordPage'
 import SignupPage from './pages/SignupPage'
 import OnboardingPage from './pages/OnboardingPage'
 import VerifyPage from './pages/VerifyPage'
@@ -552,7 +554,22 @@ function LoginPage() {
                   <line x1="12" y1="8" x2="12" y2="12"/>
                   <line x1="12" y1="16" x2="12.01" y2="16"/>
                 </svg>
-                <p className="text-sm" style={{ color: 'var(--danger)' }}>{error}</p>
+                <div>
+                  <p className="text-sm" style={{ color: 'var(--danger)' }}>{error}</p>
+                  {/* A locked-out or wrong-password user's instinct is to keep
+                      retrying, which burns the remaining attempts and then
+                      waits out a 15-minute lock. Offer the way out at the
+                      moment it becomes relevant, not buried below the form. */}
+                  {/(password|locked|credential)/i.test(error) && (
+                    <a
+                      href="/forgot-password"
+                      className="mt-1.5 inline-block text-sm font-medium underline underline-offset-2"
+                      style={{ color: 'var(--danger)' }}
+                    >
+                      Reset your password
+                    </a>
+                  )}
+                </div>
               </div>
             )}
 
@@ -569,6 +586,16 @@ function LoginPage() {
               )}
               {loading ? 'Signing in…' : 'Sign in'}
             </button>
+
+            <div className="text-center">
+              <a
+                href="/forgot-password"
+                className="text-[13px]"
+                style={{ color: 'var(--text-3)' }}
+              >
+                Forgot your password?
+              </a>
+            </div>
           </form>
 
           {/* Two different audiences end up on this screen: staff of an
@@ -695,6 +722,8 @@ export default function App() {
             {/* Public: no workspace exists yet, so this sits outside the guard */}
             <Route path="/signup" element={<SignupPage />} />
             <Route path="/verify" element={<VerifyPage />} />
+            <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+            <Route path="/reset-password" element={<ResetPasswordPage />} />
             {/* Public: the invitee has no account until they accept. */}
             <Route path="/accept-invite" element={<AcceptInvitePage />} />
             <Route path="/unauthorized" element={<UnauthorizedPage />} />

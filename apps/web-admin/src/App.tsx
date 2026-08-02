@@ -36,6 +36,7 @@ import { StaffDashboardPage } from './pages/StaffDashboardPage'
 import { BackOfficeDashboardPage } from './pages/BackOfficeDashboardPage'
 import { TaskBoardPage } from './pages/TaskBoardPage'
 import StaffDailyTaskListPage from './pages/StaffDailyTaskListPage'
+import { PlanUsagePage } from './pages/PlanUsagePage'
 import { SettingsPage } from './pages/SettingsPage'
 import { ReturnProcessingPage } from './pages/ReturnProcessingPage'
 import { CounterCheckoutPage } from './pages/CounterCheckoutPage'
@@ -883,6 +884,11 @@ export default function App() {
                           <Unbuilt><ReportsPage /></Unbuilt>
                         </RouteGuard>
                       } />
+                      {/* No role guard. The person refused at a cap is
+                          usually not an administrator, and the number
+                          that explains the refusal is on their own
+                          workspace. */}
+                      <Route path="/plan" element={<PlanUsagePage />} />
                       <Route
                         path="/settings"
                         element={

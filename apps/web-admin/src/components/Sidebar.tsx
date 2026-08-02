@@ -191,6 +191,9 @@ const GROUPS = [
     { label: 'Reports',      href: '/reports',      roles: REPORT,  icon: <Ic.Chart /> },
   ]},
   { label: 'System', items: [
+    // STAFF, not ADMIN: whoever hits a plan limit needs to see the limit,
+    // and that is usually not an administrator.
+    { label: 'Plan & usage', href: '/plan',        roles: STAFF,   icon: <Ic.Tag /> },
     { label: 'Settings',     href: '/settings',     roles: ADMIN,   icon: <Ic.Gear /> },
   ]},
 ]

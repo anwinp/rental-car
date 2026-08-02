@@ -127,8 +127,11 @@ def generate_daily_revenue_report(
         result = asyncio.run(_generate_daily_revenue_report_async(tenant_id, date))
         asyncio.run(_mark(
             report_id, tenant_id,
-            status="READY",
-            object_key=f"tenants/{tenant_id}/revenue/{date}/daily_revenue.csv",
+            status="READY" if result.get("object_key") else "FAILED",
+            error=None if result.get("object_key")
+                  else "The report was produced but could not be stored.",
+            object_key=result.get("object_key"),
+            byte_size=result.get("byte_size"),
             row_count=result.get("transaction_count"),
             summary={
                 "net_revenue": result.get("net_revenue"),
@@ -263,18 +266,25 @@ async def _generate_daily_revenue_report_async(tenant_id: str, date: str) -> dic
     csv_content = output.getvalue()
 
     # Upload to S3 (if boto3 available; skip gracefully in test/dev)
-    s3_uri = f"s3://{settings.s3_reports_bucket}/tenants/{tenant_id}/revenue/{date}/daily_revenue.csv"
+    #
+    # The key is built once, here, and returned to the caller. It used to be
+    # re-derived by whoever needed it, and a download endpoint that guesses a
+    # key produces a signed URL for an object that is not there.
+    object_key = f"tenants/{tenant_id}/revenue/{date}/daily_revenue.csv"
+    s3_uri = f"s3://{settings.s3_reports_bucket}/{object_key}"
+    uploaded = False
     try:
         from app.core.s3 import get_s3_client, supports_sse
         s3 = get_s3_client()
         extra = {"ServerSideEncryption": "AES256"} if supports_sse() else {}
         s3.put_object(
             Bucket=settings.s3_reports_bucket,
-            Key=f"tenants/{tenant_id}/revenue/{date}/daily_revenue.csv",
+            Key=object_key,
             Body=csv_content.encode("utf-8"),
             ContentType="text/csv",
             **extra,
         )
+        uploaded = True
         log.info("daily_revenue_report_uploaded", s3_uri=s3_uri)
     except ImportError:
         log.warning("boto3_not_available", s3_uri=s3_uri)
@@ -287,6 +297,10 @@ async def _generate_daily_revenue_report_async(tenant_id: str, date: str) -> dic
         "tenant_id": tenant_id,
         "date": date,
         "s3_uri": s3_uri,
+        # None when the upload did not happen, so a caller cannot mark a report
+        # downloadable when there is nothing to download.
+        "object_key": object_key if uploaded else None,
+        "byte_size": len(csv_content.encode("utf-8")) if uploaded else None,
         "total_revenue": str(total_gross),
         "total_refunded": str(total_refunded),
         "net_revenue": str(net_revenue),
@@ -341,8 +355,11 @@ def calculate_fleet_utilization(
         )
         asyncio.run(_mark(
             report_id, tenant_id,
-            status="READY",
-            object_key=f"tenants/{tenant_id}/utilization/{period_start}_{period_end}/fleet_utilization.csv",
+            status="READY" if result.get("object_key") else "FAILED",
+            error=None if result.get("object_key")
+                  else "The report was produced but could not be stored.",
+            object_key=result.get("object_key"),
+            byte_size=result.get("byte_size"),
             # Keys taken from what the task actually returns. The first
             # version guessed at vehicle_count and utilization_pct, neither of
             # which exists, so every summary field came back null and the list
@@ -543,6 +560,57 @@ async def _calculate_fleet_utilization_async(
             })
 
     await engine.dispose()
+
+    # Write the CSV. This task computed a utilisation figure and uploaded
+    # nothing at all, so "fleet utilisation" was a number in a log line and a
+    # report you could never open — the download endpoint signed a URL for an
+    # object that had never been written.
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["Fleet utilisation", f"{period_start} to {period_end}"])
+    w.writerow([])
+    w.writerow(["Vehicles", total_vehicles])
+    w.writerow(["Fleet days available", round(total_fleet_days, 2)])
+    w.writerow(["Vehicle days rented", round(total_vehicle_days_rented, 2)])
+    w.writerow(["Utilisation %", overall_utilization_pct])
+    w.writerow([])
+    w.writerow(["By vehicle class"])
+    w.writerow(["Class", "Vehicles", "Days rented", "Utilisation %"])
+    for r in by_class:
+        w.writerow([r.get("class_name"), r.get("total_vehicles"),
+                    r.get("vehicle_days_rented"), r.get("utilization_pct")])
+    w.writerow([])
+    w.writerow(["By location"])
+    w.writerow(["Location", "Vehicles", "Days rented", "Utilisation %"])
+    for r in by_location:
+        w.writerow([r.get("location_name"), r.get("total_vehicles"),
+                    r.get("vehicle_days_rented"), r.get("utilization_pct")])
+    csv_content = buf.getvalue()
+
+    object_key = (
+        f"tenants/{tenant_id}/utilization/{period_start}_{period_end}/"
+        "fleet_utilization.csv"
+    )
+    s3_uri = f"s3://{settings.s3_reports_bucket}/{object_key}"
+    uploaded = False
+    try:
+        from app.core.s3 import get_s3_client, supports_sse
+
+        extra = {"ServerSideEncryption": "AES256"} if supports_sse() else {}
+        get_s3_client().put_object(
+            Bucket=settings.s3_reports_bucket,
+            Key=object_key,
+            Body=csv_content.encode("utf-8"),
+            ContentType="text/csv",
+            **extra,
+        )
+        uploaded = True
+        log.info("fleet_utilization_report_uploaded", s3_uri=s3_uri)
+    except ImportError:
+        log.warning("boto3_not_available", s3_uri=s3_uri)
+    except Exception as exc:  # noqa: BLE001
+        log.error("s3_upload_error", s3_uri=s3_uri, error=str(exc))
+
     elapsed = (datetime.now(timezone.utc) - started_at).total_seconds()
     return {
         "report_id": str(uuid.uuid4()),
@@ -556,6 +624,9 @@ async def _calculate_fleet_utilization_async(
         "overall_utilization_pct": round(overall_pct, 2),
         "by_class": by_class,
         "by_location": by_location,
+        "s3_uri": s3_uri,
+        "object_key": object_key if uploaded else None,
+        "byte_size": len(csv_content.encode("utf-8")) if uploaded else None,
         "generated_at": started_at.isoformat(),
         "elapsed_seconds": round(elapsed, 2),
     }

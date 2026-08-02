@@ -189,20 +189,33 @@ function LoginPage() {
       // Resolve the workspace first: without a tenant the API cannot tell which
       // organisation this email belongs to, and the same address may exist in
       // several of them.
-      const slug = slugFromHost ?? workspace
-      if (!slug) {
-        setWorkspaceError('Enter your workspace address.')
-        return
-      }
-      if (cachedTenant()?.slug !== slug) {
-        const config = await fetchTenantConfig(slug)
-        if (!config) {
-          setWorkspaceError(`No workspace found at "${slug}".`)
+      //
+      // This compared the resolved tenant's slug against the raw hostname
+      // LABEL, which are not the same string on a deployed host: the label
+      // carries the platform suffix ("acme-rcm-admin") and the slug does not
+      // ("acme"). They therefore never matched, so every sign-in refetched with
+      // the full label, took a 404, and returned with "No workspace found"
+      // before the login request was ever sent.
+      //
+      // The server already resolves the tenant from the Host header at boot, so
+      // an existing resolution is authoritative. Only ask again when there is
+      // none — which is the local-development case, where the host carries no
+      // tenant label and the operator types the workspace in.
+      let tenant = cachedTenant() ?? (await resolveTenant())
+      if (!tenant) {
+        const typed = workspace.trim().toLowerCase()
+        if (!typed) {
+          setWorkspaceError('Enter your workspace address.')
           return
         }
-        setCachedTenant(config)
-        rememberSlug(config.slug)
+        tenant = await fetchTenantConfig(typed)
+        if (!tenant) {
+          setWorkspaceError(`No workspace found at "${typed}".`)
+          return
+        }
       }
+      setCachedTenant(tenant)
+      rememberSlug(tenant.slug)
       const { data, error: apiError } = await (apiClient as any).POST('/auth/login', {
         body: { email, password, app_context: 'web-admin' },
       })

@@ -1,606 +1,545 @@
-import { useState, type FormEvent } from 'react'
+import { useState, useMemo, useEffect, type ReactNode } from 'react'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 
-type RateCode = {
-  id: string; code: string; name: string
-  status: 'ACTIVE' | 'DRAFT' | 'EXPIRED'
-  type: string; valid_from: string; valid_to: string; classes_count: number
+/**
+ * Pricing — what this workspace charges.
+ *
+ * This page previously rendered two hardcoded arrays and made no network calls,
+ * so an operator could not set a price at all. The /pricing API has been
+ * complete the whole time — eleven working routes — with nothing wired to it.
+ *
+ * It is deliberately a price GRID rather than a rate-code wizard. The API
+ * supports market segments, blackout dates, day-of-week modifiers, advance
+ * booking windows and driver-age rules — a model built for an airport counter
+ * with a revenue manager. The operator this product serves prices a handful of
+ * car types per day with a weekly and monthly discount, and that fits on one
+ * screen. The richer fields remain available through the API; they are not what
+ * a new workspace should meet first.
+ */
+
+// ── Types (mirroring the API responses) ──────────────────────────────────────
+
+interface RateCode {
+  rate_code_id: string
+  code: string
+  description: string
+  rate_type: string
+  currency: string
+  status: string
 }
 
-type Extra = {
-  id: string; code: string; name: string; description: string
-  daily_rate: number; is_active: boolean; category: string
+interface ScheduleItem {
+  item_id: string
+  vehicle_class_id: string
+  days_min: number
+  price_per_day: string
+  price_per_week: string | null
+  price_per_month: string | null
+  free_miles_per_day: number | null
+  overage_rate_per_mile: string | null
 }
 
-const INIT_RATES: RateCode[] = [
-  { id:'1', code:'STD-BASE',  name:'Standard Base Rate',    status:'ACTIVE',  type:'RACK',        valid_from:'2026-01-01', valid_to:'2026-12-31', classes_count:6 },
-  { id:'2', code:'SUMMER26',  name:'Summer 2026 Promo',     status:'ACTIVE',  type:'PROMOTIONAL', valid_from:'2026-06-01', valid_to:'2026-08-31', classes_count:4 },
-  { id:'3', code:'CORP-ACME', name:'ACME Corp Rate',        status:'ACTIVE',  type:'CORPORATE',   valid_from:'2026-01-01', valid_to:'2026-12-31', classes_count:6 },
-  { id:'4', code:'WINTER25',  name:'Winter 2025',           status:'EXPIRED', type:'PROMOTIONAL', valid_from:'2025-12-01', valid_to:'2025-12-31', classes_count:3 },
-  { id:'5', code:'AAA-DISC',  name:'AAA Member Discount',   status:'DRAFT',   type:'AFFINITY',    valid_from:'2026-07-01', valid_to:'2026-12-31', classes_count:0 },
-]
-
-const INIT_EXTRAS: Extra[] = [
-  { id:'1', code:'CDW',     name:'Collision Damage Waiver',    description:'Reduces your financial liability in case of vehicle damage', daily_rate:19.99, is_active:true,  category:'Protection' },
-  { id:'2', code:'PAI',     name:'Personal Accident Insurance',description:'Covers medical costs for you and your passengers',          daily_rate:4.99,  is_active:true,  category:'Protection' },
-  { id:'3', code:'RSN',     name:'Roadside Network',            description:'24/7 emergency roadside assistance',                        daily_rate:3.99,  is_active:true,  category:'Protection' },
-  { id:'4', code:'GPS',     name:'GPS Navigation Unit',         description:'Portable GPS device with lifetime map updates',             daily_rate:7.99,  is_active:true,  category:'Equipment'  },
-  { id:'5', code:'CSS',     name:'Child Safety Seat',           description:'Certified child car seat, rear or forward facing',          daily_rate:9.99,  is_active:true,  category:'Equipment'  },
-  { id:'6', code:'BOOSTER', name:'Booster Seat',                description:'For children over 40 lbs who outgrown a child seat',        daily_rate:7.99,  is_active:false, category:'Equipment'  },
-  { id:'7', code:'SAT',     name:'Satellite Radio',             description:'Sirius XM satellite radio access',                          daily_rate:5.99,  is_active:true,  category:'Equipment'  },
-]
-
-const STATUS_CFG: Record<RateCode['status'], { label: string; color: string; bg: string; dot: string }> = {
-  ACTIVE:  { label:'Active',  color:'var(--success)', bg:'var(--success-bg)',          dot:'#34d399' },
-  DRAFT:   { label:'Draft',   color:'var(--warn)',    bg:'var(--warn-bg)',              dot:'#fbbf24' },
-  EXPIRED: { label:'Expired', color:'var(--text-3)',  bg:'rgba(100,116,139,0.15)',      dot:'#64748b' },
+interface VehicleClass {
+  class_id: string
+  sipp_prefix: string
+  name: string
+  is_active: boolean
 }
 
-const TYPE_LABELS: Record<string, string> = {
-  RACK:'Rack', PROMOTIONAL:'Promo', CORPORATE:'Corporate', AFFINITY:'Affinity', OPAQUE:'Opaque',
+interface Extra {
+  extra_id: string
+  code: string
+  name: string
+  extra_type: string | null
+  pricing_type: string | null
+  default_price: number | null
+  is_active: boolean
 }
 
-function fmt(d: string) {
-  return new Date(d).toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' })
+// ── Data access ──────────────────────────────────────────────────────────────
+
+async function getJSON<T>(url: string): Promise<T> {
+  const res = await fetch(url, { credentials: 'include' })
+  if (!res.ok) throw new Error(await errorText(res))
+  return res.json()
 }
 
-let nextRateId  = INIT_RATES.length  + 1
-let nextExtraId = INIT_EXTRAS.length + 1
-
-function ModalLabel({ children }: { children: React.ReactNode }) {
-  return (
-    <p className="text-[10.5px] font-semibold uppercase tracking-widest mb-1" style={{ color: 'var(--text-3)' }}>
-      {children}
-    </p>
-  )
+async function send<T>(url: string, method: string, body?: unknown): Promise<T> {
+  const res = await fetch(url, {
+    method,
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  })
+  if (!res.ok) throw new Error(await errorText(res))
+  return res.status === 204 ? ({} as T) : res.json()
 }
 
-function CloseBtn({ onClick }: { onClick: () => void }) {
-  return (
-    <button type="button" onClick={onClick} className="rounded-md p-1.5 transition-colors" style={{ color: 'var(--text-3)' }}
-            onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.06)' }}
-            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent' }}>
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-      </svg>
-    </button>
-  )
+/** Surface the API's own message — those are written for the operator. */
+async function errorText(res: Response): Promise<string> {
+  try {
+    const body = await res.json()
+    const d = body?.detail
+    if (typeof d === 'string') return d
+    if (Array.isArray(d) && d[0]?.msg) return String(d[0].msg)
+  } catch {
+    /* fall through to the status code */
+  }
+  return `Request failed (${res.status})`
 }
 
-const BLANK_RATE  = { code:'', name:'', type:'RACK', status:'DRAFT' as RateCode['status'], valid_from:'', valid_to:'' }
-const BLANK_EXTRA = { code:'', name:'', description:'', daily_rate:'', category:'Protection', is_active: true }
+// ── Page ─────────────────────────────────────────────────────────────────────
 
 export function PricingPage() {
-  const [tab,    setTab]    = useState<'rates' | 'extras'>('rates')
-  const [rates,  setRates]  = useState<RateCode[]>(INIT_RATES)
-  const [extras, setExtras] = useState<Extra[]>(INIT_EXTRAS)
+  const qc = useQueryClient()
+  const [notice, setNotice] = useState('')
+  const [problem, setProblem] = useState('')
 
-  // Rate modals
-  const [showNewRate,  setShowNewRate]  = useState(false)
-  const [rateForm,     setRateForm]     = useState<typeof BLANK_RATE>(BLANK_RATE)
-  const [editRate,     setEditRate]     = useState<RateCode | null>(null)
-  const [editRateForm, setEditRateForm] = useState<typeof BLANK_RATE>(BLANK_RATE)
-  const [deleteRate,   setDeleteRate]   = useState<RateCode | null>(null)
+  const { data: rateCodes = [], isLoading: loadingCodes, error: codesError } =
+    useQuery<RateCode[]>({
+      queryKey: ['rate-codes'],
+      queryFn: () => getJSON<RateCode[]>('/api/v1/pricing/rate-codes'),
+      staleTime: 60_000,
+    })
 
-  // Extra modals
-  const [showNewExtra,  setShowNewExtra]  = useState(false)
-  const [extraForm,     setExtraForm]     = useState<typeof BLANK_EXTRA>(BLANK_EXTRA)
-  const [editExtra,     setEditExtra]     = useState<Extra | null>(null)
-  const [editExtraForm, setEditExtraForm] = useState<typeof BLANK_EXTRA>(BLANK_EXTRA)
+  const { data: classes = [] } = useQuery<VehicleClass[]>({
+    queryKey: ['vehicle-classes'],
+    queryFn: () => getJSON<VehicleClass[]>('/api/v1/catalogue/vehicle-classes'),
+    staleTime: 300_000,
+  })
 
-  const rfi  = (k: keyof typeof BLANK_RATE,  v: string) => setRateForm(p => ({ ...p, [k]: v }))
-  const erfi = (k: keyof typeof BLANK_RATE,  v: string) => setEditRateForm(p => ({ ...p, [k]: v }))
-  const xfi  = (k: keyof typeof BLANK_EXTRA, v: string | boolean) => setExtraForm(p => ({ ...p, [k]: v }))
-  const exfi = (k: keyof typeof BLANK_EXTRA, v: string | boolean) => setEditExtraForm(p => ({ ...p, [k]: v }))
-
-  const activeRates = rates.filter(r => r.status === 'ACTIVE').length
-
-  function toggleExtra(id: string) {
-    setExtras(prev => prev.map(e => e.id === id ? { ...e, is_active: !e.is_active } : e))
-  }
-
-  function handleNewRate(e: FormEvent) {
-    e.preventDefault()
-    const newR: RateCode = {
-      id:            String(nextRateId++),
-      code:          rateForm.code.toUpperCase(),
-      name:          rateForm.name,
-      type:          rateForm.type,
-      status:        rateForm.status,
-      valid_from:    rateForm.valid_from,
-      valid_to:      rateForm.valid_to,
-      classes_count: 0,
+  // Default to the workspace's rack rate — the one provisioning creates and the
+  // one the storefront quotes from.
+  //
+  // Match on `code` before `rate_type`: rate_type is not unique, and in seeded
+  // data a code named WEEKLY also carries rate_type RACK. Matching on type
+  // alone landed on that one — which has no schedule items — so the page opened
+  // claiming every car type was unpriced while the real rack rate held 46 rows.
+  const [activeCodeId, setActiveCodeId] = useState('')
+  useEffect(() => {
+    if (!activeCodeId && rateCodes.length) {
+      const rack =
+        rateCodes.find((r) => r.code.toUpperCase() === 'RACK') ??
+        rateCodes.find((r) => r.rate_type === 'RACK') ??
+        rateCodes[0]
+      setActiveCodeId(rack.rate_code_id)
     }
-    setRates(prev => [newR, ...prev])
-    setShowNewRate(false)
-    setRateForm(BLANK_RATE)
-  }
+  }, [rateCodes, activeCodeId])
 
-  function openEditRate(r: RateCode) {
-    setEditRate(r)
-    setEditRateForm({ code: r.code, name: r.name, type: r.type, status: r.status, valid_from: r.valid_from, valid_to: r.valid_to })
-  }
+  const activeCode = rateCodes.find((r) => r.rate_code_id === activeCodeId)
 
-  function handleEditRate(e: FormEvent) {
-    e.preventDefault()
-    if (!editRate) return
-    setRates(prev => prev.map(r =>
-      r.id === editRate.id
-        ? { ...r, code: editRateForm.code.toUpperCase(), name: editRateForm.name, type: editRateForm.type, status: editRateForm.status, valid_from: editRateForm.valid_from, valid_to: editRateForm.valid_to }
-        : r
-    ))
-    setEditRate(null)
-  }
+  const { data: schedule = [], isLoading: loadingSchedule } = useQuery<ScheduleItem[]>({
+    queryKey: ['rate-schedule', activeCodeId],
+    queryFn: () =>
+      getJSON<ScheduleItem[]>(`/api/v1/pricing/rate-codes/${activeCodeId}/schedule`),
+    enabled: Boolean(activeCodeId),
+  })
 
-  function handleDeleteRate() {
-    if (!deleteRate) return
-    setRates(prev => prev.filter(r => r.id !== deleteRate.id))
-    setDeleteRate(null)
-  }
+  const { data: extras = [] } = useQuery<Extra[]>({
+    queryKey: ['extras'],
+    queryFn: () => getJSON<Extra[]>('/api/v1/catalogue/extras'),
+    staleTime: 300_000,
+  })
 
-  function handleNewExtra(e: FormEvent) {
-    e.preventDefault()
-    const newE: Extra = {
-      id:          String(nextExtraId++),
-      code:        extraForm.code.toUpperCase(),
-      name:        extraForm.name,
-      description: extraForm.description,
-      daily_rate:  parseFloat(extraForm.daily_rate) || 0,
-      is_active:   extraForm.is_active as boolean,
-      category:    extraForm.category,
+  const savePrice = useMutation({
+    mutationFn: (row: PriceDraft) =>
+      send(`/api/v1/pricing/rate-codes/${activeCodeId}/schedule`, 'POST', {
+        vehicle_class_id: row.classId,
+        days_min: 1,
+        price_per_day: row.perDay,
+        price_per_week: row.perWeek || null,
+        price_per_month: row.perMonth || null,
+        free_miles_per_day: row.freeMiles === '' ? null : Number(row.freeMiles),
+        overage_rate_per_mile: row.overage || null,
+      }),
+    onSuccess: (_data, row) => {
+      setProblem('')
+      setNotice(`Saved ${row.className}.`)
+      qc.invalidateQueries({ queryKey: ['rate-schedule', activeCodeId] })
+    },
+    onError: (e: Error) => { setNotice(''); setProblem(e.message) },
+  })
+
+  const saveExtra = useMutation({
+    mutationFn: (x: Extra) =>
+      send(`/api/v1/catalogue/extras/${x.extra_id}`, 'PATCH', {
+        code: x.code,
+        name: x.name,
+        extra_type: x.extra_type ?? 'EQUIPMENT',
+        pricing_type: x.pricing_type ?? 'PER_DAY',
+        default_price: x.default_price ?? 0,
+        is_active: x.is_active,
+      }),
+    onSuccess: (_data, x) => {
+      setProblem('')
+      setNotice(`Saved ${x.name}.`)
+      qc.invalidateQueries({ queryKey: ['extras'] })
+    },
+    onError: (e: Error) => { setNotice(''); setProblem(e.message) },
+  })
+
+  // One editable row per active class, pre-filled from the schedule. Classes
+  // with no price still get a row — that is the point: a class with no schedule
+  // item is invisible to the quote engine, and today the operator has no way to
+  // discover why a car type never appears on their site.
+  const rows: PriceDraft[] = useMemo(() => {
+    // A rate code can hold several duration bands per class (1-7 days at one
+    // price, 8+ at another). The row shows the BASE band — the lowest days_min
+    // — because that is what "per day" means to an operator and what a one-day
+    // hire is quoted at.
+    //
+    // Picking arbitrarily is not harmless: the first version of this took
+    // whichever band the map happened to keep last, so it displayed the 8-day
+    // discount rate (29.99) under a column headed "Per day" while a one-day
+    // hire actually quoted 39.99.
+    const byClass = new Map<string, ScheduleItem>()
+    for (const s of schedule) {
+      const held = byClass.get(s.vehicle_class_id)
+      if (!held || s.days_min < held.days_min) byClass.set(s.vehicle_class_id, s)
     }
-    setExtras(prev => [...prev, newE])
-    setShowNewExtra(false)
-    setExtraForm(BLANK_EXTRA)
-  }
+    const bandCount = new Map<string, number>()
+    for (const s of schedule) {
+      bandCount.set(s.vehicle_class_id, (bandCount.get(s.vehicle_class_id) ?? 0) + 1)
+    }
+    return classes
+      .filter((c) => c.is_active)
+      .map((c) => {
+        const s = byClass.get(c.class_id)
+        const dec = (v: string | null | undefined) =>
+          v == null || v === '' ? '' : Number(v).toFixed(2)
+        return {
+          classId: c.class_id,
+          className: c.name,
+          sipp: c.sipp_prefix,
+          perDay: dec(s?.price_per_day),
+          perWeek: dec(s?.price_per_week),
+          perMonth: dec(s?.price_per_month),
+          freeMiles: s?.free_miles_per_day == null ? '' : String(s.free_miles_per_day),
+          overage: dec(s?.overage_rate_per_mile),
+          priced: Boolean(s),
+          extraBands: Math.max(0, (bandCount.get(c.class_id) ?? 0) - 1),
+        }
+      })
+  }, [classes, schedule])
 
-  function openEditExtra(ex: Extra) {
-    setEditExtra(ex)
-    setEditExtraForm({ code: ex.code, name: ex.name, description: ex.description, daily_rate: String(ex.daily_rate), category: ex.category, is_active: ex.is_active })
-  }
+  const unpriced = rows.filter((r) => !r.priced).length
 
-  function handleEditExtra(e: FormEvent) {
-    e.preventDefault()
-    if (!editExtra) return
-    setExtras(prev => prev.map(ex =>
-      ex.id === editExtra.id
-        ? { ...ex, code: editExtraForm.code.toUpperCase(), name: editExtraForm.name, description: editExtraForm.description, daily_rate: parseFloat(String(editExtraForm.daily_rate)) || 0, category: editExtraForm.category, is_active: editExtraForm.is_active as boolean }
-        : ex
-    ))
-    setEditExtra(null)
+  if (codesError) {
+    return (
+      <div className="mx-auto max-w-5xl p-8">
+        <Banner kind="error">
+          Could not load your pricing. {(codesError as Error).message}
+        </Banner>
+      </div>
+    )
   }
 
   return (
-    <div className="space-y-5">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-[22px] font-bold tracking-tight" style={{ color: 'var(--text-1)' }}>Pricing</h1>
-          <p className="text-[13px] mt-0.5" style={{ color: 'var(--text-3)' }}>{activeRates} active rate code{activeRates !== 1 ? 's' : ''}</p>
-        </div>
-        <button className="btn-primary" onClick={() => { setShowNewRate(true); setRateForm(BLANK_RATE) }}>
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-            <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
-          </svg>
-          New Rate Code
-        </button>
-      </div>
+    <div className="mx-auto max-w-6xl p-8">
+      <header>
+        <p className="text-xs font-semibold uppercase tracking-widest text-indigo-400">
+          Pricing
+        </p>
+        <h1 className="mt-2 text-2xl font-bold text-white">What you charge</h1>
+        <p className="mt-2 max-w-prose text-sm leading-relaxed text-slate-400">
+          A daily price per car type, and optionally a weekly or monthly price for
+          longer hires. These are the numbers your booking site quotes.
+        </p>
+      </header>
 
-      {/* Tabs */}
-      <div className="flex gap-1" style={{ borderBottom: '1px solid var(--border)' }}>
-        {(['rates', 'extras'] as const).map(t => (
-          <button key={t} onClick={() => setTab(t)}
-            className="px-4 py-2.5 text-[13px] font-medium transition-colors border-b-2 -mb-px"
-            style={{
-              borderColor: tab === t ? 'var(--accent)' : 'transparent',
-              color:       tab === t ? 'var(--accent)' : 'var(--text-3)',
-            }}>
-            {t === 'rates' ? 'Rate Codes' : 'Extras & Add-ons'}
-          </button>
-        ))}
-      </div>
+      {notice && <Banner kind="ok">{notice}</Banner>}
+      {problem && <Banner kind="error">{problem}</Banner>}
 
-      {/* ── Rate Codes tab ── */}
-      {tab === 'rates' && (
-        <div className="panel overflow-hidden">
-          <table className="w-full">
-            <thead className="tbl-head">
-              <tr>
-                {['Code', 'Name', 'Type', 'Status', 'Valid Period', 'Classes', ''].map(h => <th key={h}>{h}</th>)}
-              </tr>
-            </thead>
-            <tbody className="tbl-body">
-              {rates.length === 0 ? (
-                <tr><td colSpan={7} className="py-12 text-center text-[13px]" style={{ color: 'var(--text-3)' }}>No rate codes — add one above</td></tr>
-              ) : rates.map(r => {
-                const cfg = STATUS_CFG[r.status]
-                return (
-                  <tr key={r.id}>
-                    <td className="font-mono text-[12px] font-bold" style={{ color: 'var(--text-1)' }}>{r.code}</td>
-                    <td className="font-medium" style={{ color: 'var(--text-1)' }}>{r.name}</td>
-                    <td>
-                      <span className="rounded-md px-2 py-0.5 text-[11px] font-medium" style={{ background: 'var(--elevated)', color: 'var(--text-2)' }}>
-                        {TYPE_LABELS[r.type] ?? r.type}
-                      </span>
-                    </td>
-                    <td>
-                      <span className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[11.5px] font-semibold" style={{ background: cfg.bg, color: cfg.color }}>
-                        <span className="h-1.5 w-1.5 rounded-full" style={{ background: cfg.dot }} />
-                        {cfg.label}
-                      </span>
-                    </td>
-                    <td className="text-[12px]" style={{ color: 'var(--text-3)' }}>
-                      {fmt(r.valid_from)} – {fmt(r.valid_to)}
-                    </td>
-                    <td style={{ color: r.classes_count > 0 ? 'var(--text-2)' : 'var(--text-3)' }}>
-                      {r.classes_count > 0 ? `${r.classes_count} classes` : '—'}
-                    </td>
-                    <td>
-                      <div className="flex items-center gap-1">
-                        <button onClick={() => openEditRate(r)} className="btn-secondary px-2.5 py-1 text-[11px]">Edit</button>
-                        <button
-                          onClick={() => setDeleteRate(r)}
-                          className="rounded-md px-2 py-1 text-[11px] transition-colors"
-                          style={{ color: 'var(--danger)', border: '1px solid transparent' }}
-                          onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = 'rgba(244,114,114,0.3)'; (e.currentTarget as HTMLElement).style.background = 'var(--danger-bg)' }}
-                          onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = 'transparent'; (e.currentTarget as HTMLElement).style.background = 'transparent' }}>
-                          Delete
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
+      {unpriced > 0 && (
+        <Banner kind="warn">
+          {unpriced} car {unpriced === 1 ? 'type has' : 'types have'} no price yet.
+          Customers cannot book {unpriced === 1 ? 'it' : 'them'} until you set one.
+        </Banner>
+      )}
+
+      {/* Shown only when there is a genuine choice to make. */}
+      {rateCodes.length > 1 && (
+        <div className="mt-6 flex items-center gap-3">
+          <label htmlFor="ratecode" className="text-sm text-slate-400">Rate</label>
+          <select
+            id="ratecode"
+            value={activeCodeId}
+            onChange={(e) => setActiveCodeId(e.target.value)}
+            className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white"
+          >
+            {rateCodes.map((r) => (
+              <option key={r.rate_code_id} value={r.rate_code_id}>
+                {r.code} — {r.description}
+              </option>
+            ))}
+          </select>
         </div>
       )}
 
-      {/* ── Extras tab ── */}
-      {tab === 'extras' && (
-        <div className="space-y-3">
-          {['Protection', 'Equipment'].map(category => {
-            const items = extras.filter(e => e.category === category)
-            if (items.length === 0) return null
-            return (
-              <div key={category} className="panel overflow-hidden">
-                <div className="px-5 py-3" style={{ background: 'var(--elevated)', borderBottom: '1px solid var(--border)' }}>
-                  <p className="text-[10.5px] font-semibold uppercase tracking-wider" style={{ color: 'var(--text-3)' }}>{category}</p>
-                </div>
-                <div>
-                  {items.map((extra, i) => (
-                    <div key={extra.id} className="flex items-center gap-4 px-5 py-4"
-                         style={{ borderBottom: i < items.length - 1 ? '1px solid var(--border-sub)' : 'none' }}>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className="font-mono text-[11px] font-bold" style={{ color: 'var(--text-3)' }}>{extra.code}</span>
-                          <span className="text-[13px] font-semibold" style={{ color: 'var(--text-1)' }}>{extra.name}</span>
-                        </div>
-                        <p className="text-[12px] mt-0.5 leading-relaxed" style={{ color: 'var(--text-3)' }}>{extra.description}</p>
-                      </div>
-                      <div className="flex items-center gap-4 shrink-0">
-                        <div className="text-right">
-                          <p className="text-[13px] font-bold num" style={{ color: 'var(--text-1)' }}>${extra.daily_rate.toFixed(2)}</p>
-                          <p className="text-[11px]" style={{ color: 'var(--text-3)' }}>per day</p>
-                        </div>
-                        <button onClick={() => toggleExtra(extra.id)}
-                          className="relative inline-flex h-5 w-9 items-center rounded-full transition-colors"
-                          style={{ background: extra.is_active ? 'var(--accent)' : 'rgba(100,116,139,0.3)' }}
-                          role="switch" aria-checked={extra.is_active} aria-label={`${extra.is_active ? 'Disable' : 'Enable'} ${extra.name}`}>
-                          <span className="inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform"
-                                style={{ transform: `translateX(${extra.is_active ? '16px' : '2px'})` }} />
-                        </button>
-                        <button onClick={() => openEditExtra(extra)} className="btn-secondary px-2.5 py-1 text-[11px]">Edit</button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )
-          })}
+      <Section
+        title="Daily rates"
+        description={activeCode ? `${activeCode.code} · ${activeCode.currency}` : undefined}
+      >
+        {loadingCodes || loadingSchedule ? (
+          <p className="px-5 py-6 text-sm text-slate-400">Loading your prices…</p>
+        ) : rows.length === 0 ? (
+          <p className="px-5 py-6 text-sm text-slate-400">
+            No car types yet. Add them under Fleet, then set their prices here.
+          </p>
+        ) : (
+          <PriceTable
+            rows={rows}
+            currency={activeCode?.currency ?? 'USD'}
+            saving={savePrice.isPending}
+            onSave={(r) => savePrice.mutate(r)}
+          />
+        )}
+      </Section>
 
-          <button
-            onClick={() => { setShowNewExtra(true); setExtraForm(BLANK_EXTRA) }}
-            className="w-full rounded-lg py-4 text-[13px] font-medium transition-colors"
-            style={{ border: '1px dashed var(--border)', color: 'var(--text-3)' }}
-            onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = 'var(--text-2)'; (e.currentTarget as HTMLElement).style.borderColor = 'var(--text-3)' }}
-            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = 'var(--text-3)'; (e.currentTarget as HTMLElement).style.borderColor = 'var(--border)' }}>
-            + Add Extra
-          </button>
-        </div>
-      )}
-
-      {/* ── New Rate Code Modal ── */}
-      {showNewRate && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
-             style={{ background: 'rgba(0,0,0,0.65)', backdropFilter: 'blur(4px)' }}
-             onClick={e => { if (e.target === e.currentTarget) setShowNewRate(false) }}>
-          <div className="panel w-full max-w-md overflow-hidden">
-            <div className="flex items-center justify-between px-6 py-4" style={{ borderBottom: '1px solid var(--border)' }}>
-              <h2 className="text-[15px] font-semibold" style={{ color: 'var(--text-1)' }}>New Rate Code</h2>
-              <CloseBtn onClick={() => setShowNewRate(false)} />
-            </div>
-            <form onSubmit={handleNewRate} className="px-6 py-5 space-y-4">
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <ModalLabel>Code</ModalLabel>
-                  <input required type="text" placeholder="SUMMER27"
-                    value={rateForm.code} onChange={e => rfi('code', e.target.value)}
-                    className="field-input h-9 px-3 text-[13px] w-full font-mono tracking-wider" />
-                </div>
-                <div>
-                  <ModalLabel>Type</ModalLabel>
-                  <select value={rateForm.type} onChange={e => rfi('type', e.target.value)} className="field-input h-9 px-3 text-[13px] w-full">
-                    <option value="RACK">Rack</option>
-                    <option value="PROMOTIONAL">Promotional</option>
-                    <option value="CORPORATE">Corporate</option>
-                    <option value="AFFINITY">Affinity</option>
-                    <option value="OPAQUE">Opaque</option>
-                  </select>
-                </div>
-              </div>
-              <div>
-                <ModalLabel>Rate Name</ModalLabel>
-                <input required type="text" placeholder="Summer 2027 Promotion"
-                  value={rateForm.name} onChange={e => rfi('name', e.target.value)}
-                  className="field-input h-9 px-3 text-[13px] w-full" />
-              </div>
-              <div>
-                <ModalLabel>Status</ModalLabel>
-                <select value={rateForm.status} onChange={e => rfi('status', e.target.value as RateCode['status'])} className="field-input h-9 px-3 text-[13px] w-full">
-                  <option value="DRAFT">Draft</option>
-                  <option value="ACTIVE">Active</option>
-                </select>
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <ModalLabel>Valid From</ModalLabel>
-                  <input required type="date"
-                    value={rateForm.valid_from} onChange={e => rfi('valid_from', e.target.value)}
-                    className="field-input h-9 px-3 text-[13px] w-full" />
-                </div>
-                <div>
-                  <ModalLabel>Valid To</ModalLabel>
-                  <input required type="date"
-                    value={rateForm.valid_to} onChange={e => rfi('valid_to', e.target.value)}
-                    min={rateForm.valid_from}
-                    className="field-input h-9 px-3 text-[13px] w-full" />
-                </div>
-              </div>
-              <div className="flex justify-end gap-2 pt-2" style={{ borderTop: '1px solid var(--border-sub)' }}>
-                <button type="button" onClick={() => setShowNewRate(false)} className="btn-secondary">Cancel</button>
-                <button type="submit" className="btn-primary">Create Rate Code</button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* ── Edit Rate Code Modal ── */}
-      {editRate && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
-             style={{ background: 'rgba(0,0,0,0.65)', backdropFilter: 'blur(4px)' }}
-             onClick={e => { if (e.target === e.currentTarget) setEditRate(null) }}>
-          <div className="panel w-full max-w-md overflow-hidden">
-            <div className="flex items-center justify-between px-6 py-4" style={{ borderBottom: '1px solid var(--border)' }}>
-              <div>
-                <h2 className="text-[15px] font-semibold" style={{ color: 'var(--text-1)' }}>Edit Rate Code</h2>
-                <p className="text-[12px] font-mono mt-0.5" style={{ color: 'var(--text-3)' }}>{editRate.code}</p>
-              </div>
-              <CloseBtn onClick={() => setEditRate(null)} />
-            </div>
-            <form onSubmit={handleEditRate} className="px-6 py-5 space-y-4">
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <ModalLabel>Code</ModalLabel>
-                  <input required type="text"
-                    value={editRateForm.code} onChange={e => erfi('code', e.target.value)}
-                    className="field-input h-9 px-3 text-[13px] w-full font-mono tracking-wider" />
-                </div>
-                <div>
-                  <ModalLabel>Type</ModalLabel>
-                  <select value={editRateForm.type} onChange={e => erfi('type', e.target.value)} className="field-input h-9 px-3 text-[13px] w-full">
-                    <option value="RACK">Rack</option>
-                    <option value="PROMOTIONAL">Promotional</option>
-                    <option value="CORPORATE">Corporate</option>
-                    <option value="AFFINITY">Affinity</option>
-                    <option value="OPAQUE">Opaque</option>
-                  </select>
-                </div>
-              </div>
-              <div>
-                <ModalLabel>Rate Name</ModalLabel>
-                <input required type="text"
-                  value={editRateForm.name} onChange={e => erfi('name', e.target.value)}
-                  className="field-input h-9 px-3 text-[13px] w-full" />
-              </div>
-              <div>
-                <ModalLabel>Status</ModalLabel>
-                <select value={editRateForm.status} onChange={e => erfi('status', e.target.value as RateCode['status'])} className="field-input h-9 px-3 text-[13px] w-full">
-                  <option value="DRAFT">Draft</option>
-                  <option value="ACTIVE">Active</option>
-                  <option value="EXPIRED">Expired</option>
-                </select>
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <ModalLabel>Valid From</ModalLabel>
-                  <input required type="date"
-                    value={editRateForm.valid_from} onChange={e => erfi('valid_from', e.target.value)}
-                    className="field-input h-9 px-3 text-[13px] w-full" />
-                </div>
-                <div>
-                  <ModalLabel>Valid To</ModalLabel>
-                  <input required type="date"
-                    value={editRateForm.valid_to} onChange={e => erfi('valid_to', e.target.value)}
-                    min={editRateForm.valid_from}
-                    className="field-input h-9 px-3 text-[13px] w-full" />
-                </div>
-              </div>
-              <div className="flex justify-end gap-2 pt-2" style={{ borderTop: '1px solid var(--border-sub)' }}>
-                <button type="button" onClick={() => setEditRate(null)} className="btn-secondary">Cancel</button>
-                <button type="submit" className="btn-primary">Save Changes</button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* ── Delete Rate Confirm ── */}
-      {deleteRate && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
-             style={{ background: 'rgba(0,0,0,0.65)', backdropFilter: 'blur(4px)' }}
-             onClick={e => { if (e.target === e.currentTarget) setDeleteRate(null) }}>
-          <div className="panel w-full max-w-sm overflow-hidden">
-            <div className="px-6 py-5 space-y-4">
-              <div>
-                <h2 className="text-[15px] font-semibold" style={{ color: 'var(--text-1)' }}>Delete Rate Code?</h2>
-                <p className="text-[13px] mt-1" style={{ color: 'var(--text-3)' }}>
-                  This will permanently remove <span className="font-mono font-bold" style={{ color: 'var(--text-1)' }}>{deleteRate.code}</span> — {deleteRate.name}.
-                </p>
-              </div>
-              <div className="flex gap-2">
-                <button onClick={() => setDeleteRate(null)} className="btn-secondary flex-1 justify-center py-2">Cancel</button>
-                <button onClick={handleDeleteRate} className="btn-primary flex-1 justify-center py-2" style={{ background: 'var(--danger)', boxShadow:'none' }}>
-                  Delete
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── Add Extra Modal ── */}
-      {showNewExtra && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
-             style={{ background: 'rgba(0,0,0,0.65)', backdropFilter: 'blur(4px)' }}
-             onClick={e => { if (e.target === e.currentTarget) setShowNewExtra(false) }}>
-          <div className="panel w-full max-w-md overflow-hidden">
-            <div className="flex items-center justify-between px-6 py-4" style={{ borderBottom: '1px solid var(--border)' }}>
-              <h2 className="text-[15px] font-semibold" style={{ color: 'var(--text-1)' }}>Add Extra</h2>
-              <CloseBtn onClick={() => setShowNewExtra(false)} />
-            </div>
-            <form onSubmit={handleNewExtra} className="px-6 py-5 space-y-4">
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <ModalLabel>Code</ModalLabel>
-                  <input required type="text" placeholder="WIFI"
-                    value={extraForm.code} onChange={e => xfi('code', e.target.value)}
-                    className="field-input h-9 px-3 text-[13px] w-full font-mono tracking-wider" />
-                </div>
-                <div>
-                  <ModalLabel>Category</ModalLabel>
-                  <select value={extraForm.category} onChange={e => xfi('category', e.target.value)} className="field-input h-9 px-3 text-[13px] w-full">
-                    <option>Protection</option>
-                    <option>Equipment</option>
-                  </select>
-                </div>
-              </div>
-              <div>
-                <ModalLabel>Name</ModalLabel>
-                <input required type="text" placeholder="Wi-Fi Hotspot"
-                  value={extraForm.name} onChange={e => xfi('name', e.target.value)}
-                  className="field-input h-9 px-3 text-[13px] w-full" />
-              </div>
-              <div>
-                <ModalLabel>Description</ModalLabel>
-                <textarea required rows={2} placeholder="What does this add-on include?"
-                  value={extraForm.description} onChange={e => xfi('description', e.target.value)}
-                  className="field-input px-3 py-2 text-[13px] w-full resize-none" />
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <ModalLabel>Daily Rate ($)</ModalLabel>
-                  <input required type="number" min="0" step="0.01" placeholder="9.99"
-                    value={extraForm.daily_rate} onChange={e => xfi('daily_rate', e.target.value)}
-                    className="field-input h-9 px-3 text-[13px] w-full num" />
-                </div>
-                <div>
-                  <ModalLabel>Status</ModalLabel>
-                  <select
-                    value={extraForm.is_active ? 'active' : 'inactive'}
-                    onChange={e => xfi('is_active', e.target.value === 'active')}
-                    className="field-input h-9 px-3 text-[13px] w-full">
-                    <option value="active">Active</option>
-                    <option value="inactive">Inactive</option>
-                  </select>
-                </div>
-              </div>
-              <div className="flex justify-end gap-2 pt-2" style={{ borderTop: '1px solid var(--border-sub)' }}>
-                <button type="button" onClick={() => setShowNewExtra(false)} className="btn-secondary">Cancel</button>
-                <button type="submit" className="btn-primary">Add Extra</button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* ── Edit Extra Modal ── */}
-      {editExtra && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
-             style={{ background: 'rgba(0,0,0,0.65)', backdropFilter: 'blur(4px)' }}
-             onClick={e => { if (e.target === e.currentTarget) setEditExtra(null) }}>
-          <div className="panel w-full max-w-md overflow-hidden">
-            <div className="flex items-center justify-between px-6 py-4" style={{ borderBottom: '1px solid var(--border)' }}>
-              <div>
-                <h2 className="text-[15px] font-semibold" style={{ color: 'var(--text-1)' }}>Edit Extra</h2>
-                <p className="text-[12px] font-mono mt-0.5" style={{ color: 'var(--text-3)' }}>{editExtra.code}</p>
-              </div>
-              <CloseBtn onClick={() => setEditExtra(null)} />
-            </div>
-            <form onSubmit={handleEditExtra} className="px-6 py-5 space-y-4">
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <ModalLabel>Code</ModalLabel>
-                  <input required type="text"
-                    value={editExtraForm.code} onChange={e => exfi('code', e.target.value)}
-                    className="field-input h-9 px-3 text-[13px] w-full font-mono tracking-wider" />
-                </div>
-                <div>
-                  <ModalLabel>Category</ModalLabel>
-                  <select value={String(editExtraForm.category)} onChange={e => exfi('category', e.target.value)} className="field-input h-9 px-3 text-[13px] w-full">
-                    <option>Protection</option>
-                    <option>Equipment</option>
-                  </select>
-                </div>
-              </div>
-              <div>
-                <ModalLabel>Name</ModalLabel>
-                <input required type="text"
-                  value={editExtraForm.name} onChange={e => exfi('name', e.target.value)}
-                  className="field-input h-9 px-3 text-[13px] w-full" />
-              </div>
-              <div>
-                <ModalLabel>Description</ModalLabel>
-                <textarea required rows={2}
-                  value={editExtraForm.description} onChange={e => exfi('description', e.target.value)}
-                  className="field-input px-3 py-2 text-[13px] w-full resize-none" />
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <ModalLabel>Daily Rate ($)</ModalLabel>
-                  <input required type="number" min="0" step="0.01"
-                    value={editExtraForm.daily_rate} onChange={e => exfi('daily_rate', e.target.value)}
-                    className="field-input h-9 px-3 text-[13px] w-full num" />
-                </div>
-                <div>
-                  <ModalLabel>Status</ModalLabel>
-                  <select
-                    value={editExtraForm.is_active ? 'active' : 'inactive'}
-                    onChange={e => exfi('is_active', e.target.value === 'active')}
-                    className="field-input h-9 px-3 text-[13px] w-full">
-                    <option value="active">Active</option>
-                    <option value="inactive">Inactive</option>
-                  </select>
-                </div>
-              </div>
-              <div className="flex justify-end gap-2 pt-2" style={{ borderTop: '1px solid var(--border-sub)' }}>
-                <button type="button" onClick={() => setEditExtra(null)} className="btn-secondary">Cancel</button>
-                <button type="submit" className="btn-primary">Save Changes</button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      <Section title="Extras" description="Add-ons offered at booking and at the counter.">
+        {extras.length === 0 ? (
+          <p className="px-5 py-6 text-sm text-slate-400">No extras yet.</p>
+        ) : (
+          <ExtrasTable
+            extras={extras}
+            saving={saveExtra.isPending}
+            onSave={(x) => saveExtra.mutate(x)}
+          />
+        )}
+      </Section>
     </div>
   )
 }
+
+// ── Pieces ───────────────────────────────────────────────────────────────────
+
+interface PriceDraft {
+  classId: string
+  className: string
+  sipp: string
+  perDay: string
+  perWeek: string
+  perMonth: string
+  freeMiles: string
+  overage: string
+  priced: boolean
+  /** Additional duration bands beyond the base one, if any. */
+  extraBands: number
+}
+
+function PriceTable({
+  rows, currency, saving, onSave,
+}: {
+  rows: PriceDraft[]
+  currency: string
+  saving: boolean
+  onSave: (r: PriceDraft) => void
+}) {
+  const [draft, setDraft] = useState<Record<string, PriceDraft>>({})
+
+  // Re-seed from the server without clobbering an edit in progress.
+  useEffect(() => {
+    setDraft((d) => {
+      const next = { ...d }
+      for (const r of rows) if (!next[r.classId]) next[r.classId] = r
+      return next
+    })
+  }, [rows])
+
+  const set = (id: string, field: keyof PriceDraft, value: string) =>
+    setDraft((d) => ({ ...d, [id]: { ...(d[id]), [field]: value } as PriceDraft }))
+
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="text-left text-xs uppercase tracking-wider text-slate-500">
+            <th className="px-4 py-3">Car type</th>
+            <th className="px-4 py-3">Per day ({currency})</th>
+            <th className="px-4 py-3">Per week</th>
+            <th className="px-4 py-3">Per month</th>
+            <th className="px-4 py-3">Free miles/day</th>
+            <th className="px-4 py-3">Over-mileage</th>
+            <th className="px-4 py-3" />
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => {
+            const d = draft[r.classId] ?? r
+            const dirty =
+              d.perDay !== r.perDay || d.perWeek !== r.perWeek ||
+              d.perMonth !== r.perMonth || d.freeMiles !== r.freeMiles ||
+              d.overage !== r.overage
+            const valid = d.perDay !== '' && Number(d.perDay) > 0
+            return (
+              <tr key={r.classId} className="border-t border-slate-800">
+                <td className="px-4 py-3">
+                  <div className="font-medium text-white">{r.className}</div>
+                  <div className="text-xs text-slate-500">
+                    {r.sipp}
+                    {!r.priced && (
+                      <span className="ml-2 font-semibold text-amber-400">not priced</span>
+                    )}
+                    {r.extraBands > 0 && (
+                      <span className="ml-2 text-slate-400">
+                        +{r.extraBands} longer-hire {r.extraBands === 1 ? 'band' : 'bands'}
+                      </span>
+                    )}
+                  </div>
+                </td>
+                <Cell value={d.perDay} onChange={(v) => set(r.classId, 'perDay', v)} required />
+                <Cell value={d.perWeek} onChange={(v) => set(r.classId, 'perWeek', v)} />
+                <Cell value={d.perMonth} onChange={(v) => set(r.classId, 'perMonth', v)} />
+                <Cell value={d.freeMiles} onChange={(v) => set(r.classId, 'freeMiles', v)} step="1" />
+                <Cell value={d.overage} onChange={(v) => set(r.classId, 'overage', v)} />
+                <td className="px-4 py-3">
+                  <button
+                    onClick={() => onSave(d)}
+                    disabled={!dirty || !valid || saving}
+                    className="rounded-lg bg-indigo-500 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-indigo-400 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-500"
+                  >
+                    {saving ? 'Saving…' : 'Save'}
+                  </button>
+                </td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function Cell({
+  value, onChange, required = false, step = '0.01',
+}: {
+  value: string
+  onChange: (v: string) => void
+  required?: boolean
+  step?: string
+}) {
+  return (
+    <td className="px-4 py-3">
+      <input
+        type="number"
+        min="0"
+        step={step}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={required ? 'required' : '—'}
+        className="w-24 rounded-lg border border-slate-700 bg-slate-950 px-2.5 py-1.5 text-sm tabular-nums text-white focus:border-indigo-500 focus:outline-none"
+      />
+    </td>
+  )
+}
+
+function ExtrasTable({
+  extras, saving, onSave,
+}: {
+  extras: Extra[]
+  saving: boolean
+  onSave: (x: Extra) => void
+}) {
+  const [draft, setDraft] = useState<Record<string, Extra>>({})
+  useEffect(() => {
+    setDraft((d) => {
+      const next = { ...d }
+      for (const x of extras) if (!next[x.extra_id]) next[x.extra_id] = x
+      return next
+    })
+  }, [extras])
+
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="text-left text-xs uppercase tracking-wider text-slate-500">
+            <th className="px-4 py-3">Extra</th>
+            <th className="px-4 py-3">Charged</th>
+            <th className="px-4 py-3">Price</th>
+            <th className="px-4 py-3">Offered</th>
+            <th className="px-4 py-3" />
+          </tr>
+        </thead>
+        <tbody>
+          {extras.map((x) => {
+            const d = draft[x.extra_id] ?? x
+            const dirty =
+              d.default_price !== x.default_price || d.is_active !== x.is_active
+            return (
+              <tr key={x.extra_id} className="border-t border-slate-800">
+                <td className="px-4 py-3">
+                  <div className="font-medium text-white">{x.name}</div>
+                  <div className="text-xs text-slate-500">{x.code}</div>
+                </td>
+                <td className="px-4 py-3 text-slate-400">
+                  {(x.pricing_type ?? 'PER_DAY') === 'PER_DAY' ? 'per day' : 'per rental'}
+                </td>
+                <td className="px-4 py-3">
+                  <input
+                    type="number" min="0" step="0.01"
+                    value={d.default_price ?? ''}
+                    onChange={(e) =>
+                      setDraft((s) => ({
+                        ...s,
+                        [x.extra_id]: {
+                          ...d,
+                          default_price: e.target.value === '' ? null : Number(e.target.value),
+                        },
+                      }))
+                    }
+                    className="w-24 rounded-lg border border-slate-700 bg-slate-950 px-2.5 py-1.5 text-sm tabular-nums text-white focus:border-indigo-500 focus:outline-none"
+                  />
+                </td>
+                <td className="px-4 py-3">
+                  <input
+                    type="checkbox"
+                    checked={d.is_active}
+                    onChange={(e) =>
+                      setDraft((s) => ({ ...s, [x.extra_id]: { ...d, is_active: e.target.checked } }))
+                    }
+                    className="h-4 w-4 accent-indigo-500"
+                  />
+                </td>
+                <td className="px-4 py-3">
+                  <button
+                    onClick={() => onSave(d)}
+                    disabled={!dirty || saving}
+                    className="rounded-lg bg-indigo-500 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-indigo-400 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-500"
+                  >
+                    {saving ? 'Saving…' : 'Save'}
+                  </button>
+                </td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function Section({
+  title, description, children,
+}: { title: string; description?: string; children: ReactNode }) {
+  return (
+    <section className="mt-8 overflow-hidden rounded-xl border border-slate-800 bg-slate-900/60">
+      <div className="border-b border-slate-800 px-5 py-4">
+        <h2 className="text-sm font-semibold text-white">{title}</h2>
+        {description && <p className="mt-0.5 text-xs text-slate-500">{description}</p>}
+      </div>
+      {children}
+    </section>
+  )
+}
+
+function Banner({ kind, children }: { kind: 'ok' | 'warn' | 'error'; children: ReactNode }) {
+  const tone = {
+    ok: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300',
+    warn: 'border-amber-500/30 bg-amber-500/10 text-amber-300',
+    error: 'border-red-500/30 bg-red-500/10 text-red-300',
+  }[kind]
+  return <div className={`mt-5 rounded-lg border px-4 py-3 text-sm ${tone}`}>{children}</div>
+}
+
+export default PricingPage

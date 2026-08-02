@@ -784,7 +784,22 @@ export default function App() {
                       <Route
                         path="/pricing"
                         element={
-                          <RouteGuard roles={[UserRole.SYSTEM_ADMIN, UserRole.SUPER_ADMIN]} redirectTo="/unauthorized">
+                          /* Setting prices is a manager's job, not only an
+                             administrator's — in a small business the branch
+                             manager IS the person who decides the day rate. */
+                          <RouteGuard
+                            roles={[
+                              UserRole.BRANCH_MANAGER,
+                              UserRole.REGIONAL_MANAGER,
+                              /* NB: the DB user_role enum also has FINANCE,
+                                 which this TS enum does not declare — a drift
+                                 worth reconciling, but not silently here. */
+                              UserRole.FINANCE_ANALYST,
+                              UserRole.SYSTEM_ADMIN,
+                              UserRole.SUPER_ADMIN,
+                            ]}
+                            redirectTo="/unauthorized"
+                          >
                             <PricingPage />
                           </RouteGuard>
                         }

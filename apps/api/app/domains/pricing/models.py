@@ -174,14 +174,33 @@ class RateScheduleItem(Base):
         ForeignKey("rate_codes.rate_code_id", ondelete="CASCADE"),
         nullable=False,
     )
+    # Same cross-registry problem as location_id below — vehicle_classes is
+    # mapped under another domain's DeclarativeBase, so SQLAlchemy cannot
+    # resolve this reference and raised NoReferencedTableError on flush.
+    # Postgres still enforces rate_schedule_items_vehicle_class_id_fkey.
     vehicle_class_id: Mapped[str] = mapped_column(
         UUID(as_uuid=False),
-        ForeignKey("vehicle_classes.class_id"),
         nullable=False,
     )
+    # No ORM-level ForeignKey here, deliberately.
+    #
+    # Every domain in this codebase declares its own DeclarativeBase, so
+    # `locations` lives in a different metadata registry than this model.
+    # SQLAlchemy cannot resolve a ForeignKey across registries and raised
+    # NoReferencedTableError on every insert — which meant POST
+    # /pricing/rate-codes/{id}/schedule had never once succeeded, despite the
+    # endpoint, service and repository all being written. The API looked
+    # complete and was unusable.
+    #
+    # The constraint still exists and is still enforced in Postgres
+    # (rate_schedule_items_location_id_fkey); dropping it from the ORM only
+    # stops SQLAlchemy trying to resolve a table it cannot see. Nothing
+    # navigates this as a relationship, so there is nothing else to lose.
+    #
+    # The real fix is one shared Base across domains. That is a wide change and
+    # does not belong in the same commit as making pricing work.
     location_id: Mapped[Optional[str]] = mapped_column(
         UUID(as_uuid=False),
-        ForeignKey("locations.location_id"),
         nullable=True,
     )
 

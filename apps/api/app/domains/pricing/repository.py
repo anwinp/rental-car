@@ -203,10 +203,41 @@ class PricingRepository(BaseRepository[RateCode]):
         rate_code_id: uuid.UUID,
         **kwargs,
     ) -> RateScheduleItem:
-        """Add a new schedule item to a rate code."""
-        item_id = str(uuid.uuid4())
+        """Set the price for a (rate code, class, duration band, location).
+
+        Upserts rather than always inserting. A price band is identified by
+        (rate_code, vehicle_class, days_min, location) — saving the same band
+        twice means "change this price", not "add a second price for it".
+
+        This previously always INSERTed, which is why seeded rate codes carry
+        duplicate rows for the same band (Economy 1-7 days appears twice at
+        49.99). With two rows for one band, which one applies to a quote is
+        decided by row order — so the same search could be priced differently
+        depending on how Postgres happened to return them.
+        """
+        existing = (
+            await self.session.execute(
+                select(RateScheduleItem).where(
+                    RateScheduleItem.tenant_id == str(self.tenant_id),
+                    RateScheduleItem.rate_code_id == str(rate_code_id),
+                    RateScheduleItem.vehicle_class_id == str(kwargs.get("vehicle_class_id")),
+                    RateScheduleItem.days_min == kwargs.get("days_min", 1),
+                    RateScheduleItem.location_id.is_(None)
+                    if kwargs.get("location_id") is None
+                    else RateScheduleItem.location_id == str(kwargs.get("location_id")),
+                )
+            )
+        ).scalars().first()
+
+        if existing is not None:
+            for field, value in kwargs.items():
+                setattr(existing, field, value)
+            await self.session.flush()
+            await self.session.refresh(existing)
+            return existing
+
         obj = RateScheduleItem(
-            item_id=item_id,
+            item_id=str(uuid.uuid4()),
             tenant_id=str(self.tenant_id),
             rate_code_id=str(rate_code_id),
             **kwargs,

@@ -201,6 +201,13 @@ services:
       DATABASE_URL: postgresql+asyncpg://${APP_DB_USER}:${APP_DB_PASSWORD}@pgbouncer:5433/${POSTGRES_DB}
       DB_VIA_PGBOUNCER: "true"
       REDIS_BROKER_URL: redis://redis-broker:6380/0
+      # Settings requires all three Redis URLs, and beat was the only service
+      # setting just the broker — so it crashed on import with a pydantic
+      # "field required" and had been restart-looping in production, unnoticed,
+      # since the stack came up. Nothing scheduled had ever run: no nightly
+      # archive, no scheduled reports, no recurring notifications.
+      REDIS_AVAIL_URL: redis://redis-avail:6379/0
+      REDIS_SESSION_URL: redis://redis-sessions:6381/0
       BEAT: "true"
     networks: [internal]
     depends_on: [redis-broker, pgbouncer]

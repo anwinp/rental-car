@@ -118,7 +118,18 @@ async def platform_login(
     if not row["is_active"]:
         raise _unauthorised()
 
-    if not verify_password(payload.password, row["password_hash"]):
+    # A stored hash that passlib cannot parse raises rather than returning
+    # False, which turned a corrupt row into a 500 while every other failure
+    # was a 401 — so the status code told an attacker which accounts had a
+    # damaged hash. The tenant login was hardened against this exact thing for
+    # its dummy hash; this path was not.
+    try:
+        password_ok = verify_password(payload.password, row["password_hash"])
+    except Exception:  # noqa: BLE001 — see above
+        log.error("platform_password_hash_unusable", admin_id=str(row["admin_id"]))
+        password_ok = False
+
+    if not password_ok:
         failures = int(row["failed_login_count"]) + 1
         lock_at = now + timedelta(minutes=_LOCKOUT_MINUTES) if failures >= _MAX_FAILURES else None
         await session.execute(

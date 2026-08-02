@@ -34,6 +34,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_session_untenanted
 from app.core.platform_security import PlatformClaims, get_current_platform_admin
+from app.core.ratelimit import enforce_limit
 from app.core.config import settings
 from app.core.tenancy import (
     RESERVED_SLUGS,
@@ -957,4 +958,146 @@ async def get_tenant_detail(
         locations_with_tax=counts.get("locations_with_tax", 0),
         staff=staff,
         is_self=False,
+    )
+
+
+# ── Operator-initiated password reset ────────────────────────────────────────
+
+class ResetInitiated(BaseModel):
+    ok: bool = True
+    sent_to: str
+    message: str
+
+
+@router.post("/tenants/{tenant_id}/staff/{user_id}/password-reset",
+             response_model=ResetInitiated)
+async def send_staff_password_reset(
+    tenant_id: uuid.UUID,
+    user_id: uuid.UUID,
+    request: Request,
+    session: AsyncSession = Depends(get_session_untenanted),
+    claims: PlatformClaims = Depends(require_platform_admin),
+) -> ResetInitiated:
+    """Email a customer's staff member a recovery link, on request.
+
+    The support call this answers is "our manager is locked out and the reset
+    email never arrives". Until now the only answer was to talk them through
+    the self-serve form, which does not help when the address on the account is
+    a mailbox they no longer read, or when they cannot recall which of the
+    workspace addresses they signed up with.
+
+    What an operator can do here is *start* the flow. What they cannot do:
+
+      * choose where the link goes. The destination is read from the account
+        row below and is never taken from the request. Accepting an address
+        here would turn a support tool into a one-click takeover of any account
+        on the platform — the same shape as the Origin-header hole this
+        codebase already had once.
+      * see the link, or the token. Neither is returned, and only the hash is
+        stored. An operator who wanted to use it would have to read the
+        customer's mailbox.
+      * set a password. There is no endpoint for that and this does not add
+        one. The person who ends up knowing the new password is the account
+        holder, and only them.
+
+    The reset itself is the ordinary one: single-use, one hour, and redeeming
+    it ends every existing session for that account.
+    """
+    # Modest, and per operator rather than per target: a support desk works
+    # through several people in a sitting, but nobody legitimately fires
+    # hundreds. Sized to be invisible in real use and obvious in abuse.
+    await enforce_limit(
+        request, bucket="platform-pwreset", limit=30, window_seconds=3600,
+        subject=str(claims.admin_id),
+        message="Too many resets started. Try again shortly.",
+    )
+
+    # Adopt the target workspace: staff_users is under RLS and this session
+    # carries no tenant. Rule 3 — name the tenant, see only that tenant.
+    await session.execute(text("SELECT set_config('app.current_tenant_id', '', true)"))
+    tenant = (
+        await session.execute(
+            text(
+                "SELECT slug, COALESCE(trading_name, legal_name, slug) AS name, "
+                "       deleted_at "
+                "  FROM tenants WHERE tenant_id = :t"
+            ),
+            {"t": str(tenant_id)},
+        )
+    ).mappings().first()
+    if not tenant:
+        raise HTTPException(status_code=404, detail="No such workspace.")
+    if tenant["deleted_at"]:
+        # A deleted workspace cannot be signed into, so a link would be a dead
+        # end. Restore it first — which is the thing the operator actually
+        # meant to do.
+        raise HTTPException(
+            status_code=409,
+            detail="This workspace is deleted. Restore it before resetting a password.",
+        )
+
+    await session.execute(
+        text("SELECT set_config('app.current_tenant_id', :t, true)"),
+        {"t": str(tenant_id)},
+    )
+    user = (
+        await session.execute(
+            text(
+                "SELECT email, is_active FROM staff_users "
+                " WHERE user_id = :u AND tenant_id = :t AND deleted_at IS NULL"
+            ),
+            {"u": str(user_id), "t": str(tenant_id)},
+        )
+    ).mappings().first()
+    if not user:
+        raise HTTPException(status_code=404, detail="No such person in this workspace.")
+    if not user["is_active"]:
+        # Sending one would be worse than refusing: the link works, and the
+        # sign-in that follows does not. Reactivate first.
+        raise HTTPException(
+            status_code=409,
+            detail="This account is deactivated. Reactivate it before resetting the password.",
+        )
+
+    from app.core.mailer import send_email, wrap_html
+    from app.domains.auth.service import AuthService
+
+    link = await AuthService(session).mint_reset_link(
+        user_id=str(user_id), tenant_id=str(tenant_id), slug=tenant["slug"],
+    )
+
+    # Says who started it. Somebody receiving an unexpected reset email should
+    # be able to tell a support action from an attack on their account.
+    html = wrap_html(
+        "Reset your password",
+        f"<p>Support started a password reset for your "
+        f"<strong>{tenant['name']}</strong> account at your request. This link "
+        f"expires in one hour and can be used once.</p>"
+        "<p>If you did not ask for this, ignore this email — your password will "
+        "not change — and tell your workspace administrator.</p>",
+        cta_text="Choose a new password", cta_url=link,
+    )
+    transport = await send_email(
+        to_email=user["email"],
+        subject="Reset your RCM password",
+        html=html,
+        kind="password_reset",
+    )
+
+    await session.execute(text("SELECT set_config('app.current_tenant_id', '', true)"))
+
+    log.warning(
+        "platform_password_reset_initiated",
+        by=str(claims.admin_id),
+        by_email=claims.email,
+        tenant_id=str(tenant_id),
+        slug=tenant["slug"],
+        target_user=str(user_id),
+        transport=transport,
+        # The link is never logged. Only its hash exists, in Redis.
+    )
+
+    return ResetInitiated(
+        sent_to=user["email"],
+        message=f"Recovery link sent to {user['email']}. It expires in one hour.",
     )

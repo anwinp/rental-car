@@ -74,6 +74,9 @@ export function PlatformTenantDetailPage() {
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [busy, setBusy] = useState(false)
+  // Which row has just been sent one, so the button can report what happened
+  // rather than snapping back and leaving the operator wondering.
+  const [sent, setSent] = useState<string | null>(null)
 
   async function load() {
     try {
@@ -103,6 +106,29 @@ export function PlatformTenantDetailPage() {
       const body = await res.json().catch(() => ({}))
       if (res.ok) { setNotice(String(body.message ?? 'Updated.')); await load() }
       else setError(String(body.detail ?? 'Could not change the plan.'))
+    } finally { setBusy(false) }
+  }
+
+  async function sendReset(userId: string, email: string) {
+    // Confirmed because it lands in somebody else's inbox unprompted. Cheap to
+    // undo, but not something to fire from a stray click while reading a page.
+    if (!window.confirm(
+      `Email a password reset link to ${email}?\n\n` +
+      'It goes only to that address, expires in one hour, and signs them out ' +
+      'of everything when they use it.'
+    )) return
+
+    setBusy(true); setError(''); setNotice('')
+    try {
+      const res = await fetch(
+        `/api/v1/platform/tenants/${tenantId}/staff/${userId}/password-reset`,
+        { method: 'POST', credentials: 'include' },
+      )
+      const body = await res.json().catch(() => ({}))
+      if (res.ok) { setNotice(String(body.message ?? 'Link sent.')); setSent(userId) }
+      else setError(String(body.detail ?? 'Could not send the link.'))
+    } catch {
+      setError('Could not reach the server.')
     } finally { setBusy(false) }
   }
 
@@ -262,6 +288,13 @@ export function PlatformTenantDetailPage() {
         <h2 className="text-xs font-semibold uppercase tracking-wider text-slate-500">
           People ({d.staff.length})
         </h2>
+        {/* Said once, here, rather than in a tooltip on the button. An operator
+            should know the shape of the power before they reach for it. */}
+        <p className="mt-2 text-xs text-slate-500">
+          You can start a password reset. The link goes to the address on the
+          account and nowhere else — you will not see it, and you cannot set a
+          password yourself.
+        </p>
         <div className="mt-3 overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
@@ -270,6 +303,7 @@ export function PlatformTenantDetailPage() {
                 <th className="px-2 py-2 text-left font-semibold">Role</th>
                 <th className="px-2 py-2 text-left font-semibold">Last sign-in</th>
                 <th className="px-2 py-2 text-left font-semibold">State</th>
+                <th className="px-2 py-2 text-right font-semibold">Recovery</th>
               </tr>
             </thead>
             <tbody>
@@ -287,6 +321,20 @@ export function PlatformTenantDetailPage() {
                       {!u.email_verified_at && <span className="text-amber-400">unverified</span>}
                       {u.is_mfa_enabled && <span className="text-emerald-400">MFA</span>}
                     </div>
+                  </td>
+                  <td className="px-2 py-2 text-right">
+                    <button
+                      disabled={busy || sent === u.user_id || !u.is_active}
+                      onClick={() => void sendReset(u.user_id, u.email)}
+                      title={
+                        u.is_active
+                          ? `Email a single-use recovery link to ${u.email}`
+                          : 'Reactivate this account first — the link would work and the sign-in would not.'
+                      }
+                      className="whitespace-nowrap rounded-lg border border-slate-700 px-2.5 py-1 text-xs text-slate-300 hover:border-slate-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      {sent === u.user_id ? 'Link sent' : 'Send reset link'}
+                    </button>
                   </td>
                 </tr>
               ))}

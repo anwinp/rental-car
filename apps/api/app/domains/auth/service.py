@@ -760,6 +760,36 @@ class AuthService:
 
     # ── Password Reset ────────────────────────────────────────────────────────
 
+    async def mint_reset_link(
+        self, *, user_id: str, tenant_id: str, slug: str
+    ) -> str:
+        """One single-use recovery link for one account.
+
+        The only place a reset token is created. Both callers — the self-serve
+        "I forgot my password" flow and the operator-initiated reset in the
+        platform console — go through here so the TTL, the hashing, and the
+        payload format cannot drift apart between them. A token that a console
+        mints but the redemption path cannot parse is an outage nobody would
+        catch until a customer was already locked out.
+
+        The token carries its tenant. Redemption binds it before reading the
+        user — without that, a token minted for one workspace is invisible to
+        RLS when redeemed anywhere else, and the holder gets "invalid link" for
+        a link that was just emailed to them.
+        """
+        from app.core.config import settings
+        from app.core.tenancy import tenant_host
+
+        raw_token = secrets.token_urlsafe(32)
+        token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
+        await get_session_redis().setex(
+            PWRESET_KEY.format(token_hash=token_hash),
+            _PWRESET_TTL_SECONDS,
+            f"{user_id}|{tenant_id}",
+        )
+        host = tenant_host(slug, settings.public_admin_host)
+        return f"{settings.public_url_scheme}://{host}/reset-password?token={raw_token}"
+
     async def request_password_reset(
         self, email: str, tenant_id: str | None = None, reset_base_url: str = ""
     ) -> None:
@@ -813,26 +843,17 @@ class AuthService:
             log.info("password_reset_requested", matched=0)
             return
 
-        redis = get_session_redis()
-        scheme = settings.public_url_scheme
         links: list[tuple[str, str]] = []
 
         for row in rows:
-            raw_token = secrets.token_urlsafe(32)
-            token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
-            # The token carries its tenant. Redemption binds it before reading
-            # the user — without that, a token minted for one workspace is
-            # invisible to RLS when redeemed anywhere else, and the holder gets
-            # "invalid link" for a link that was just emailed to them.
-            await redis.setex(
-                PWRESET_KEY.format(token_hash=token_hash),
-                _PWRESET_TTL_SECONDS,
-                f"{row['user_id']}|{row['tenant_id']}",
-            )
-            host = tenant_host(row["slug"], settings.public_admin_host)
-            links.append(
-                (row["display_name"], f"{scheme}://{host}/reset-password?token={raw_token}")
-            )
+            links.append((
+                row["display_name"],
+                await self.mint_reset_link(
+                    user_id=str(row["user_id"]),
+                    tenant_id=str(row["tenant_id"]),
+                    slug=row["slug"],
+                ),
+            ))
 
         if len(links) == 1:
             name, url = links[0]

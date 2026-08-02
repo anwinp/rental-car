@@ -111,6 +111,10 @@ class RegisterResponse(BaseModel):
     verification_required: bool = True
     # True when the confirmation email actually reached a mail transport.
     email_sent: bool = False
+    # Where to send them next when they picked a paid plan: Stripe's own
+    # hosted checkout. Somebody who has just chosen a price expects to pay,
+    # not to be told to check their email and come back.
+    checkout_url: str | None = None
     # Fallback ONLY when no transport was available and nothing was sent, and
     # never in production — otherwise anyone able to call this endpoint could
     # activate the workspace they just created. When mail is working this stays
@@ -416,7 +420,50 @@ async def register(
     # the application log — the one case where the UI must surface it.
     email_sent = transport != "log"
 
+    # A paid plan means they came here to buy something. Hand back the Stripe
+    # URL with the workspace, so the next thing they see is a payment page
+    # rather than an instruction to wait for an email.
+    #
+    # Paying before the address is verified is fine and is not the same risk as
+    # granting the plan before payment: Stripe collects and confirms an email of
+    # its own, the workspace still cannot be signed into until ours is
+    # confirmed, and the subscription only takes effect through the webhook.
+    checkout_url = None
+    if chosen:
+        try:
+            from app.domains.platform.stripe_client import create_checkout_session
+
+            plan = (
+                await session.execute(
+                    text(
+                        "SELECT display_name, price_cents, currency, billing_period "
+                        "  FROM plans WHERE code = :c"
+                    ),
+                    {"c": chosen},
+                )
+            ).mappings().first()
+            admin_host = tenant_host(body.slug, settings.public_admin_host)
+            scheme = settings.public_url_scheme
+            stripe_session = await create_checkout_session(
+                session,
+                tenant_id=str(tenant_id),
+                tenant_email=str(body.admin_email),
+                plan_code=chosen,
+                plan_name=f"{body.company_name} — {plan['display_name']}",
+                amount_cents=int(plan["price_cents"]),
+                currency=plan["currency"] or "USD",
+                interval="year" if plan["billing_period"] == "YEARLY" else "month",
+                success_url=f"{scheme}://{admin_host}/plan?checkout=done",
+                cancel_url=f"{scheme}://{admin_host}/plan?checkout=cancelled",
+            )
+            checkout_url = stripe_session.get("url")
+        except Exception:  # noqa: BLE001
+            # The workspace exists and that is the part that must not be lost.
+            # They can pay from inside it, and the plan page will prompt them.
+            log.warning("signup_checkout_unavailable", slug=body.slug, exc_info=True)
+
     return RegisterResponse(
+        checkout_url=checkout_url,
         tenant_id=tenant_id,
         slug=body.slug,
         company_name=body.company_name,

@@ -59,7 +59,7 @@ const ORIGINS = (() => {
     parts.length >= 3
       ? `${protocol}//${parts[0]}-admin.${parts.slice(1).join('.')}${port ? `:${port}` : ''}`
       : `${protocol}//${name}:3002`
-  return { admin, signup: `${admin}/signup`, signin: `${admin}/login` }
+  return { admin, signup: '/start', signin: `${admin}/login` }
 })()
 
 const NAV = [
@@ -678,10 +678,14 @@ export default function PlatformLanding() {
                     <div style={{ marginTop: 'auto', paddingTop: space.xs }}>
                       {custom ? (
                         <ButtonOutline href="mailto:hello@ceez.ai">Contact us</ButtonOutline>
+                      ) : free ? (
+                        <ButtonOutline href="/start">Start free</ButtonOutline>
                       ) : (
-                        <ButtonOutline href={`${ORIGINS.signup}?plan=${plan.code}`}>
-                          Start free
-                        </ButtonOutline>
+                        /* Named for what the button does. "Start free" on a
+                           priced plan describes the wrong transaction. */
+                        <ButtonPrimary href={`/start?plan=${plan.code}`}>
+                          Choose {plan.name}
+                        </ButtonPrimary>
                       )}
                     </div>
                   </div>

@@ -39,6 +39,12 @@ class Feature:
     # set_plan_features refuses to tick a feature that is not built. A promise
     # that cannot be kept should be impossible to make, not merely discouraged.
     implemented: bool = True
+    # How the capability is enforced. "router" means a require_feature gate on
+    # a mounted router, which the lint can see. "creation" means the gate is on
+    # creating the thing that uses it — the partner API authenticates machines
+    # by API key, and require_feature resolves a human, so the check lives on
+    # key issuance: no capability, no key, nothing to call the API with.
+    gate: str = "router"
 
 
 FEATURES: tuple[Feature, ...] = (
@@ -56,7 +62,7 @@ FEATURES: tuple[Feature, ...] = (
             implemented=False),
     Feature("api_access", "API access",
             "Programmatic access for integrations built in-house.",
-            implemented=False),
+            gate="creation"),
 )
 
 FEATURE_KEYS: frozenset[str] = frozenset(f.key for f in FEATURES)

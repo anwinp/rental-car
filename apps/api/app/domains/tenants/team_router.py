@@ -708,3 +708,137 @@ async def reactivate_member(
     )
     log.info("staff_reactivated", tenant_id=str(claims.tenant_id), by=str(claims.user_id))
     return SimpleResult(ok=True, message="Team member reactivated.")
+
+
+# ── API keys ─────────────────────────────────────────────────────────────────
+#
+# Kept with team management because that is what this is: deciding who — and
+# now what — may act on the workspace. An integration is a member of the team
+# with a very small job.
+
+class ApiKeyOut(BaseModel):
+    key_id: uuid.UUID
+    label: str
+    key_prefix: str
+    scopes: list[str]
+    created_at: datetime
+    expires_at: datetime | None = None
+    revoked_at: datetime | None = None
+    last_used_at: datetime | None = None
+    last_used_ip: str | None = None
+
+
+class ApiKeyCreated(ApiKeyOut):
+    # Returned exactly once, by the create call, and by nothing else ever.
+    key: str
+
+
+class ApiKeyIn(BaseModel):
+    label: str = Field(min_length=1, max_length=80)
+    # Default rather than optional: a credential with no end date is one nobody
+    # ever revisits. Ninety days is long enough not to be a nuisance and short
+    # enough that a forgotten key stops working.
+    expires_in_days: int | None = Field(default=90, ge=1, le=3650)
+
+
+@router.get("/api-keys", response_model=list[ApiKeyOut],
+            summary="API keys for this workspace")
+async def list_api_keys(
+    session: AsyncSession = Depends(get_session),
+    claims: UserClaims = Depends(_require_team_admin),
+) -> list[ApiKeyOut]:
+    rows = (
+        await session.execute(
+            text(
+                "SELECT key_id, label, key_prefix, scopes, created_at, expires_at, "
+                "       revoked_at, last_used_at, last_used_ip "
+                "  FROM api_keys WHERE tenant_id = :t ORDER BY created_at DESC"
+            ),
+            {"t": str(claims.tenant_id)},
+        )
+    ).mappings().all()
+    return [ApiKeyOut(**r) for r in rows]
+
+
+@router.post("/api-keys", response_model=ApiKeyCreated,
+             status_code=status.HTTP_201_CREATED,
+             summary="Create an API key — shown once")
+async def create_api_key(
+    body: ApiKeyIn,
+    session: AsyncSession = Depends(get_session),
+    claims: UserClaims = Depends(_require_team_admin),
+) -> ApiKeyCreated:
+    """Mint a key. The secret is in this response and nowhere else, ever."""
+    from datetime import timedelta
+
+    from app.core.api_key_auth import generate_key
+    from app.domains.tenants.features import assert_feature
+
+    # Gated like every other paid capability. Checked here rather than at the
+    # router mount because the rest of team management is not a paid feature.
+    await assert_feature(session, claims.tenant_id, "api_access")
+
+    full, digest, prefix = generate_key()
+    expires = (
+        datetime.now(timezone.utc) + timedelta(days=body.expires_in_days)
+        if body.expires_in_days else None
+    )
+    key_id = str(uuid.uuid4())
+
+    await session.execute(
+        text(
+            "INSERT INTO api_keys (key_id, tenant_id, label, key_hash, key_prefix, "
+            "                      scopes, created_by, expires_at) "
+            "VALUES (CAST(:k AS uuid), CAST(:t AS uuid), :l, :h, :p, "
+            "        ARRAY['read']::text[], CAST(:u AS uuid), :e)"
+        ),
+        {"k": key_id, "t": str(claims.tenant_id), "l": body.label.strip(),
+         "h": digest, "p": prefix, "u": str(claims.user_id), "e": expires},
+    )
+    await session.commit()
+
+    log.warning("api_key_created", tenant_id=str(claims.tenant_id),
+                key_id=key_id, label=body.label, by=str(claims.user_id))
+
+    row = (
+        await session.execute(
+            text(
+                "SELECT key_id, label, key_prefix, scopes, created_at, expires_at, "
+                "       revoked_at, last_used_at, last_used_ip "
+                "  FROM api_keys WHERE key_id = CAST(:k AS uuid) AND tenant_id = :t"
+            ),
+            {"k": key_id, "t": str(claims.tenant_id)},
+        )
+    ).mappings().first()
+    return ApiKeyCreated(**row, key=full)
+
+
+@router.delete("/api-keys/{key_id}", response_model=SimpleResult,
+               summary="Revoke an API key")
+async def revoke_api_key(
+    key_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    claims: UserClaims = Depends(_require_team_admin),
+) -> SimpleResult:
+    """Revoke, do not delete.
+
+    The row is what tells you a key existed, what it could do and when it was
+    last used. Deleting it erases the answer to "what did that integration have
+    access to", which is the question asked after an incident.
+    """
+    res = await session.execute(
+        text(
+            "UPDATE api_keys SET revoked_at = now() "
+            " WHERE key_id = :k AND tenant_id = :t AND revoked_at IS NULL "
+            " RETURNING label"
+        ),
+        {"k": str(key_id), "t": str(claims.tenant_id)},
+    )
+    row = res.first()
+    if not row:
+        raise HTTPException(404, "No such key, or it is already revoked.")
+    await session.commit()
+
+    log.warning("api_key_revoked", tenant_id=str(claims.tenant_id),
+                key_id=str(key_id), by=str(claims.user_id))
+    return SimpleResult(ok=True, message=f"{row[0]} is revoked and stops working now.")

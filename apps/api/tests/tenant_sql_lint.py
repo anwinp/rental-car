@@ -64,6 +64,10 @@ ALLOWLIST = {
     ("platform/subscriptions_router.py", "stripe_webhook"),
     ("platform/subscriptions_router.py", "_upsert"),
     ("tenants/public_router.py", "public_plans"),   # the published price list
+    # api_keys is read BEFORE a tenant is known — resolving the key is what
+    # establishes the tenant, so it cannot be behind a tenant predicate.
+    ("core/api_key_auth.py", "get_api_caller"),
+    ("core/api_key_auth.py", "api_session"),
 }
 
 

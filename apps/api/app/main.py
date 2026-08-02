@@ -117,6 +117,7 @@ def create_app() -> FastAPI:
     from app.domains.platform.auth_router  import router as platform_auth_router
     from app.domains.platform.billing_router import router as platform_billing_router
     from app.domains.platform.subscriptions_router import router as subscriptions_router
+    from app.domains.partner.router          import router as partner_router
     from app.domains.tenants.team_router   import router as team_router
     from app.domains.tenants.team_router   import public_router as invite_public_router
     from app.domains.locations.router    import router as locations_router
@@ -192,6 +193,11 @@ def create_app() -> FastAPI:
     app.include_router(tasks_router,          prefix=f"{PREFIX}/tasks",          tags=["tasks"])
     app.include_router(agents_router,         prefix=f"{PREFIX}/agents",         tags=["agents"],
                        dependencies=[Depends(require_feature("agent_assistant"))])
+    # The partner API. Authenticated by X-API-Key rather than a session, so the
+    # plan gate cannot be require_feature — that dependency resolves a human.
+    # The gate lives on key CREATION instead: no key can be minted without the
+    # capability, so no key exists to call this.
+    app.include_router(partner_router,        prefix=f"{PREFIX}/partner",        tags=["partner"])
 
     # Health check — no auth, no prefix (ALB health check target)
     from app.core.dependencies import health_router

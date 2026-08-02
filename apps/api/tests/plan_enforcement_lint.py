@@ -289,9 +289,28 @@ def check_hollow_features() -> None:
     # Everything after a key up to the next Feature( or the tuple end, so the
     # implemented=False flag is attributed to the right entry.
     declared_unbuilt = set()
+    # Features enforced somewhere other than a router mount. The partner API
+    # authenticates machines by API key, so require_feature — which resolves a
+    # human session — cannot gate it; the check sits on key creation instead.
+    # Those still have to be enforced, so the assert_feature call is verified
+    # below rather than the key simply being excused.
+    creation_gated = set()
     for m in _re.finditer(r'Feature\(\s*"([a-z_]+)"(.*?)(?=Feature\(|\)\n)', reg_src, _re.S):
         if "implemented=False" in m.group(2):
             declared_unbuilt.add(m.group(1))
+        if 'gate="creation"' in m.group(2):
+            creation_gated.add(m.group(1))
+
+    # A creation-gated feature must appear in a real assert_feature call.
+    app_src = "\n".join(
+        f.read_text() for f in ROOT.rglob("*.py") if f.name != "features.py"
+    )
+    for key in sorted(creation_gated):
+        if not _re.search(rf'assert_feature\([^)]*["\']{key}["\']', app_src, _re.S):
+            findings.append(
+                f"feature '{key}' declares gate=\"creation\" but no "
+                f"assert_feature(..., '{key}') call exists. Nothing enforces it."
+            )
     if not keys:
         findings.append("No feature keys found in the registry — the scraper is broken.")
         return
@@ -308,7 +327,7 @@ def check_hollow_features() -> None:
         gated.setdefault(m.group(1), "")
 
     for key in sorted(keys):
-        if key not in gated and key not in declared_unbuilt:
+        if key not in gated and key not in declared_unbuilt and key not in creation_gated:
             findings.append(
                 f"feature '{key}' gates no route but claims implemented=True. It "
                 f"can be ticked on a plan and sold while granting nothing. Gate "

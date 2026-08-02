@@ -106,6 +106,7 @@ def create_app() -> FastAPI:
     from app.domains.auth.router         import router as auth_router
     from app.domains.tenants.router      import router as tenants_router
     from app.domains.catalogue.router import router as catalogue_router
+    from app.domains.platform.tls_router import router as tls_router
     from app.domains.tenants.public_router import router as public_router
     from app.domains.platform.router       import router as platform_router
     from app.domains.tenants.team_router   import router as team_router
@@ -135,6 +136,7 @@ def create_app() -> FastAPI:
     # namespace so it is obvious in review which handlers may not trust
     # their input, and so the proxy can rate-limit it separately.
     app.include_router(catalogue_router,      prefix=f"{PREFIX}/catalogue",     tags=["catalogue"])
+    app.include_router(tls_router,            prefix=f"{PREFIX}/internal",      tags=["internal"])
     app.include_router(public_router,         prefix=f"{PREFIX}/public",        tags=["public"])
     # Cross-tenant administration. Gated on staff_users.is_platform_admin,
     # which no tenant-facing endpoint can set — see the router docstring.

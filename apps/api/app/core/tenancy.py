@@ -24,6 +24,7 @@ from typing import Optional
 
 from fastapi import Request
 
+from app.core.config import settings
 from app.core.redis import get_session_redis
 
 # Set by TenantContextMiddleware, read by the SQLAlchemy transaction hook.
@@ -44,12 +45,38 @@ _SLUG_CACHE_PREFIX = "tenant_slug:"
 _SLUG_CACHE_TTL = 300  # seconds — slug->id mapping is read on every anon request
 
 
+def platform_labels() -> tuple[str, ...]:
+    """The first label of each configured platform host, longest first.
+
+    For ``rcm.ceez.ai`` and ``rcm-admin.ceez.ai`` this yields
+    ``("rcm-admin", "rcm")``. Order matters: ``acme-rcm-admin`` must be tested
+    against ``rcm-admin`` before ``rcm``, or it would strip to ``acme-rcm``.
+    """
+    labels = set()
+    for host in (settings.public_booking_host, settings.public_admin_host):
+        first = (host or "").split(":")[0].split(".")[0].strip().lower()
+        if first:
+            labels.add(first)
+    return tuple(sorted(labels, key=len, reverse=True))
+
+
 def extract_slug(host: str) -> Optional[str]:
     """Pull a tenant slug out of a Host header.
 
-    Handles the local development shape (``acme.localtest.me:3400``) and the
-    deployed shape (``acme.rcm.example.com``) identically: the slug is the first
-    label, provided there is a parent domain beneath it.
+    Two shapes are supported, because the deployment uses hyphenated hosts while
+    local development uses plain subdomains:
+
+        acme-rcm.ceez.ai        -> "acme"   (deployed; platform label suffixed)
+        acme-rcm-admin.ceez.ai  -> "acme"
+        acme.localtest.me       -> "acme"   (development; plain subdomain)
+
+    The hyphenated form exists so every tenant host sits directly under the
+    registered domain rather than a level deeper, which is what lets Caddy issue
+    one certificate per hostname on demand instead of requiring a wildcard.
+
+    A platform host on its own (``rcm.ceez.ai``, ``rcm-admin.ceez.ai``) is not a
+    tenant and returns None — otherwise the marketing site would resolve to a
+    workspace named after the platform.
     """
     if not host:
         return None
@@ -58,16 +85,25 @@ def extract_slug(host: str) -> Optional[str]:
         return None
 
     parts = host.split(".")
-    if len(parts) < 2:
+    # A bare apex has no tenant — ceez.ai, example.com, localtest.me. A tenant
+    # always sits one label below the registered domain, so three labels is the
+    # minimum for both supported shapes.
+    if len(parts) < 3:
         return None
 
-    slug = parts[0]
-    # A bare apex (example.com) has no tenant; so does a reserved label.
-    if len(parts) == 2 and parts[1] in ("localtest", "local"):
+    label = parts[0]
+
+    for platform in platform_labels():
+        if label == platform:
+            return None                      # the platform host itself
+        suffix = f"-{platform}"
+        if label.endswith(suffix):
+            label = label[: -len(suffix)]
+            break
+
+    if not label or label in RESERVED_SLUGS:
         return None
-    if slug in RESERVED_SLUGS:
-        return None
-    return slug or None
+    return label
 
 
 async def tenant_id_for_slug(session, slug: str) -> Optional[str]:

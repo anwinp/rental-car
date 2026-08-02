@@ -36,7 +36,8 @@ from app.core.redis import (
     SESSION_KEY,
     get_session_redis,
 )
-from sqlalchemy import text as _text
+from sqlalchemy import Text, bindparam, text as _text
+from sqlalchemy.dialects.postgresql import ARRAY
 
 from app.core.security import (
     _build_access_token_claims,
@@ -310,7 +311,9 @@ class AuthService:
         verified = pyotp.TOTP(user.mfa_secret).verify(code, valid_window=1)
 
         if not verified:
-            verified = await self._consume_backup_code(user_id, code)
+            verified = await self._consume_backup_code(
+                user_id, code, tenant_id=str(user.tenant_id)
+            )
 
         if not verified:
             raise InvalidCredentialsError()
@@ -322,15 +325,40 @@ class AuthService:
         await self._repo.update_last_login(user_id)
         return await self._issue_session(user, app_context, response)
 
-    async def _consume_backup_code(self, user_id: str, code: str) -> bool:
-        """Spend a single-use backup code. Returns True if one matched."""
+    async def _consume_backup_code(
+        self, user_id: str, code: str, *, tenant_id: str
+    ) -> bool:
+        """Spend a single-use backup code. Returns True if one matched.
+
+        Reads Redis first because it is the fast path, and falls back to the
+        durable copy in Postgres. Backup codes used to live ONLY in Redis —
+        which is a cache here, running volatile-lru with no persistence
+        guarantee — so flushing or replacing it permanently locked out every
+        MFA-enabled account, with no admin reset anywhere in the product to
+        recover from it.
+        """
         raw = await get_session_redis().get(MFA_BACKUP_KEY.format(user_id=user_id))
-        if not raw:
-            return False
-        try:
-            codes = json.loads(raw)
-        except (TypeError, ValueError):
-            return False
+        codes: list[str] | None = None
+        if raw:
+            try:
+                codes = json.loads(raw)
+            except (TypeError, ValueError):
+                codes = None
+
+        if codes is None:
+            row = (
+                await self._session.execute(
+                    _text(
+                        "SELECT mfa_backup_codes FROM staff_users "
+                        " WHERE user_id = :u AND tenant_id = :t"
+                    ),
+                    {"u": user_id, "t": tenant_id},
+                )
+            ).first()
+            codes = list(row[0]) if row and row[0] else None
+            if codes is None:
+                return False
+            log.info("mfa_backup_codes_from_db", user_id=user_id)
 
         upper = code.upper()
         match = None
@@ -345,9 +373,19 @@ class AuthService:
             return False
 
         codes.remove(match)
+        # Spend it in both places, or a Redis flush would resurrect a code that
+        # has already been used once.
         await get_session_redis().set(
             MFA_BACKUP_KEY.format(user_id=user_id), json.dumps(codes)
         )
+        await self._session.execute(
+            _text(
+                "UPDATE staff_users SET mfa_backup_codes = :c "
+                " WHERE user_id = :u AND tenant_id = :t"
+            ).bindparams(bindparam("c", type_=ARRAY(Text))),
+            {"c": codes, "u": user_id, "t": tenant_id},
+        )
+        await self._session.commit()
         log.info("mfa_backup_code_used", user_id=user_id, remaining=len(codes))
         return True
 
@@ -750,8 +788,6 @@ class AuthService:
         `reset_base_url` is accepted and ignored. It is kept so an old caller
         cannot silently change behaviour by passing one.
         """
-        from sqlalchemy import text as _text
-
         from app.core.config import settings
         from app.core.mailer import send_email, wrap_html
         from app.core.tenancy import tenant_host
@@ -861,9 +897,7 @@ class AuthService:
         raw = stored.decode() if isinstance(stored, bytes) else str(stored)
         user_id, _, token_tenant = raw.partition("|")
         if token_tenant:
-            from sqlalchemy import text as _text
-
-            await self._session.execute(
+                await self._session.execute(
                 _text("SELECT set_config('app.current_tenant_id', :t, true)"),
                 {"t": token_tenant},
             )
@@ -894,11 +928,38 @@ class AuthService:
 
     # ── MFA ──────────────────────────────────────────────────────────────────
 
-    async def enroll_mfa(self, user_id: str) -> MFAEnrollResponse:
-        """Generate TOTP secret and 10 backup codes.  Does NOT enable MFA yet."""
+    async def enroll_mfa(
+        self, user_id: str, current_password: str | None = None
+    ) -> MFAEnrollResponse:
+        """Generate a TOTP secret and 10 backup codes. Does NOT enable MFA yet.
+
+        Re-enrolling used to silently DISARM an account that already had MFA
+        on. It overwrote the secret and the backup codes and set
+        is_mfa_enabled=False unconditionally, with no password check and no
+        confirmation — so anyone holding a session cookie (a stolen laptop, an
+        unlocked machine at the counter) could turn the second factor off with
+        a single call, and a user who merely opened the enrolment screen and
+        closed it disarmed themselves without being told.
+
+        Now: enrolling over an armed account requires the account password.
+        That keeps the legitimate "I replaced my phone" path open while making
+        a hijacked session insufficient on its own.
+        """
         user = await self._repo.get_by_id(user_id)
         if user is None:
             raise ResourceNotFoundError("staff_users", user_id)
+
+        if user.is_mfa_enabled:
+            if not current_password or not verify_password(
+                current_password, user.hashed_password
+            ):
+                # Not InvalidCredentialsError: that one takes no message and
+                # says "Invalid email address or password", which is wrong and
+                # confusing here — the person is already signed in and the
+                # email was never in question.
+                raise AuthenticationError(
+                    "Enter your account password to set up a new authenticator."
+                )
 
         # Generate TOTP secret
         secret = pyotp.random_base32()
@@ -919,11 +980,20 @@ class AuthService:
         # No TTL. These previously expired 24 hours after enrollment, so the
         # ten codes a user is told to keep somewhere safe were dead long before
         # the day they lost their phone — which is the only day they matter.
+        hashed = [hashlib.sha256(c.encode()).hexdigest() for c in backup_codes]
         await redis.set(
-            MFA_BACKUP_KEY.format(user_id=user_id),
-            json.dumps(
-                [hashlib.sha256(c.encode()).hexdigest() for c in backup_codes]
-            ),
+            MFA_BACKUP_KEY.format(user_id=user_id), json.dumps(hashed)
+        )
+        # The durable copy. staff_users.mfa_backup_codes has existed since the
+        # original schema and was never once written — the codes lived only in
+        # Redis, which here is an evictable cache with no persistence
+        # guarantee. Redis stays the fast path; this is what survives it.
+        await self._session.execute(
+            _text(
+                "UPDATE staff_users SET mfa_backup_codes = :c "
+                " WHERE user_id = :u AND tenant_id = :t"
+            ).bindparams(bindparam("c", type_=ARRAY(Text))),
+            {"c": hashed, "u": user_id, "t": str(user.tenant_id)},
         )
 
         # Persist plaintext secret (encrypted at DB tier via pgcrypto)

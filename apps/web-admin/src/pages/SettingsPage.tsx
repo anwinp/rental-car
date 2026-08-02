@@ -1,4 +1,5 @@
 import { tenantId } from '../tenant'
+import { ChangePassword, ActiveSessions } from '../components/AccountSecurity'
 import { useState, useEffect } from 'react'
 import { useAuth } from '@rcm/ui/auth'
 import type { ReactNode } from 'react'
@@ -358,16 +359,9 @@ export function SettingsPage() {
             <span className="text-[11.5px]" style={{ color: 'var(--text-3)' }}>Read-only</span>
           </div>
         </Field>
-        <Field label="Password" hint="Must be at least 12 characters">
-          <div className="space-y-2">
-            <SettingsInput type="password" placeholder="Current password" />
-            <SettingsInput type="password" placeholder="New password" />
-            <SettingsInput type="password" placeholder="Confirm new password" />
-          </div>
+        <Field label="Password" hint="Changing it signs you out on every other device">
+          <ChangePassword />
         </Field>
-        <div className="pt-4 flex justify-end" style={{ borderTop: '1px solid var(--border-sub)' }}>
-          <button className="btn-primary">Update Profile</button>
-        </div>
       </SectionCard>
 
       {/* Notifications */}
@@ -431,10 +425,8 @@ export function SettingsPage() {
             <option>8 hours</option>
           </SettingsSelect>
         </Field>
-        <Field label="Active Sessions" hint="Sign out all other devices">
-          <button className="btn-secondary text-[13px]" style={{ borderColor: 'rgba(244,114,114,0.3)', color: 'var(--danger)' }}>
-            Sign Out All Other Devices
-          </button>
+        <Field label="Active Sessions" hint="Sign out devices you no longer use">
+          <ActiveSessions />
         </Field>
       </SectionCard>
     </div>

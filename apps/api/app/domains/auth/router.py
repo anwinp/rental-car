@@ -284,8 +284,20 @@ async def reset_password(
 
 # ── MFA ───────────────────────────────────────────────────────────────────────
 
+class MFAEnrollRequest(BaseModel):
+    """Optional body for POST /auth/mfa/enroll.
+
+    The password is only required when the account ALREADY has MFA armed —
+    re-enrolling replaces the secret and the backup codes, which is a downgrade
+    until the new authenticator is confirmed. First-time enrolment needs
+    nothing beyond a session.
+    """
+    current_password: str | None = None
+
+
 @router.post("/mfa/enroll", response_model=MFAEnrollResponse)
 async def mfa_enroll(
+    payload: MFAEnrollRequest | None = None,
     claims: UserClaims = Depends(get_current_user),
     service: AuthService = Depends(_get_auth_service),
 ) -> MFAEnrollResponse:
@@ -294,7 +306,10 @@ async def mfa_enroll(
     Returns secret + QR URI + 10 backup codes.
     MFA is NOT active until verify_mfa succeeds.
     """
-    return await service.enroll_mfa(str(claims.user_id))
+    return await service.enroll_mfa(
+        str(claims.user_id),
+        current_password=payload.current_password if payload else None,
+    )
 
 
 @router.post("/mfa/verify", response_model=dict)

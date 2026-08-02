@@ -12,6 +12,7 @@ import { CheckInPage } from './pages/CheckInPage'
 import { ShiftPage } from './pages/ShiftPage'
 import { OverduePage } from './pages/OverduePage'
 import { useCounterStore, selectOfflineQueueCount } from './store/counterStore'
+import { Unbuilt, SHOW_UNBUILT } from './unbuilt'
 
 
 const COUNTER_ROLES = [
@@ -432,12 +433,20 @@ function NavBar() {
   const navigate = useNavigate()
   const offlineQueueCount = useCounterStore(selectOfflineQueueCount)
 
+  // Overdue and Shift render placeholder data rather than the tenant's own —
+  // Overdue resolves a MOCK_OVERDUE constant and Shift is a setTimeout with no
+  // network call at all. They stay out of the nav unless the demo flag is set.
+  // See src/unbuilt.tsx.
   const navItems = [
     { to: '/', label: 'Dashboard', exact: true },
     { to: '/checkout', label: 'Checkout' },
     { to: '/check-in', label: 'Check-In' },
-    { to: '/overdue', label: 'Overdue' },
-    { to: '/shift', label: 'Shift' },
+    ...(SHOW_UNBUILT
+      ? [
+          { to: '/overdue', label: 'Overdue' },
+          { to: '/shift', label: 'Shift' },
+        ]
+      : []),
   ]
 
   async function handleLogout() {
@@ -619,8 +628,8 @@ export default function App() {
                       <Route path="/" element={<Dashboard />} />
                       <Route path="/checkout" element={<CheckoutPage />} />
                       <Route path="/check-in" element={<CheckInPage />} />
-                      <Route path="/shift" element={<ShiftPage />} />
-                      <Route path="/overdue" element={<OverduePage />} />
+                      <Route path="/shift" element={<Unbuilt><ShiftPage /></Unbuilt>} />
+                      <Route path="/overdue" element={<Unbuilt><OverduePage /></Unbuilt>} />
                       <Route path="*" element={<Navigate to="/" replace />} />
                     </Routes>
                   </AppLayout>

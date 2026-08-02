@@ -47,6 +47,7 @@ import { CorporatePage } from './pages/CorporatePage'
 import { ExecutiveDashboardPage } from './pages/ExecutiveDashboardPage'
 import { RegionalDashboardPage } from './pages/RegionalDashboardPage'
 import OTALeadsPage from './pages/OTALeadsPage'
+import { Unbuilt } from './unbuilt'
 
 const ADMIN_ROLES = [
   UserRole.COUNTER_AGENT,
@@ -763,7 +764,7 @@ export default function App() {
                       } />
                       <Route path="/corporate" element={
                         <RouteGuard roles={[...MANAGE_ROLES, UserRole.EXECUTIVE]} redirectTo="/unauthorized">
-                          <CorporatePage />
+                          <Unbuilt><CorporatePage /></Unbuilt>
                         </RouteGuard>
                       } />
                       <Route path="/executive" element={
@@ -806,7 +807,7 @@ export default function App() {
                       />
                       <Route path="/reports" element={
                         <RouteGuard roles={REPORT_ROLES} redirectTo="/unauthorized">
-                          <ReportsPage />
+                          <Unbuilt><ReportsPage /></Unbuilt>
                         </RouteGuard>
                       } />
                       <Route

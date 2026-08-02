@@ -12,6 +12,29 @@ from app.core.repository import BaseRepository
 from app.domains.pricing.models import ExtrasCatalog, RateCode, RateScheduleItem
 
 
+# Rate types that represent an entitlement rather than a price the public may
+# book. A caller reaches these only by presenting the matching CDP code; they
+# are never candidates for an anonymous quote.
+#
+# Enumerated against the rate_type enum in the database rather than guessed —
+# an omission here is a silent discount, and the two most costly members are the
+# least obvious: OTA_NET and WHOLESALE are below-retail distributor rates, so
+# leaving them public would sell every walk-up booking at a wholesaler's margin.
+#
+# Public by deliberate decision: RACK (the baseline), PROMOTIONAL (a genuine
+# public discount, auto-applied), WEEKEND_SPECIAL.
+_NEGOTIATED_RATE_TYPES = (
+    "CORPORATE",              # requires a corporate account / CDP code
+    "GOVERNMENT",             # requires proof of government employment
+    "INSURANCE_REPLACEMENT",  # booked by an insurer against a claim
+    "OTA_NET",                # net rate sold on by an OTA — below retail
+    "WHOLESALE",              # tour/wholesale allocation — below retail
+    "MEMBERSHIP",             # requires an eligible membership
+    "TOUR_OPERATOR",          # contracted operator allocation
+    "LOYALTY_REDEMPTION",     # paid in points, not currency
+)
+
+
 class PricingRepository(BaseRepository[RateCode]):
     """
     Rate-code and schedule-item queries.
@@ -69,17 +92,42 @@ class PricingRepository(BaseRepository[RateCode]):
             if row is not None:
                 return row
 
-        # Standard rate lookup — no CDP filter
+        # Public rate lookup — the caller presented no entitlement.
+        #
+        # This previously ranked CORPORATE second and RACK last (else_=10), so a
+        # visitor with no corporate account was quoted the negotiated corporate
+        # price. On the seeded tenant that meant 28.16 instead of 39.99 — a 30%
+        # discount handed to the public, on every anonymous booking, invisibly.
+        #
+        # Negotiated rates are not "more specific" versions of the public rate;
+        # they are a different entitlement. Without proof of it they must not be
+        # reachable at all, so they are excluded here rather than merely ranked
+        # lower. The CDP branch above is the only way to reach them.
         stmt = (
             select(RateCode)
-            .where(*base_conditions)
+            .where(
+                *base_conditions,
+                cast(RateCode.rate_type, Text).notin_(_NEGOTIATED_RATE_TYPES),
+                # Belt and braces: a rate carrying a CDP code or an account link
+                # is gated regardless of how its type is spelled.
+                RateCode.cdp_code.is_(None),
+                RateCode.corporate_account_id.is_(None),
+            )
             .order_by(
-                # Prefer more specific rate types first:
-                # PROMOTIONAL > CORPORATE > RACK (GOVERNMENT, INSURANCE, etc. as-is)
+                # Among rates the public may actually have:
+                #   PROMOTIONAL — a real public discount, applied automatically
+                #   RACK        — the operator's baseline walk-up price
+                #   anything else public, only when there is no rack rate
+                #
+                # WEEKEND_SPECIAL and similar sit in the last group on purpose.
+                # Nothing in the engine evaluates whether the rental actually
+                # falls on a weekend, so promoting it above RACK would make it
+                # apply to every booking — silently discounting midweek hires.
+                # Ranking it below RACK leaves it inert until that date logic
+                # exists, which is the safer of the two wrong behaviours.
                 case(
                     (cast(RateCode.rate_type, Text) == "PROMOTIONAL", 1),
-                    (cast(RateCode.rate_type, Text) == "CORPORATE", 2),
-                    (cast(RateCode.rate_type, Text) == "GOVERNMENT", 3),
+                    (cast(RateCode.rate_type, Text) == "RACK", 2),
                     else_=10,
                 ).asc(),
                 RateCode.created_at.asc(),

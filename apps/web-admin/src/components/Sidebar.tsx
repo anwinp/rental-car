@@ -2,6 +2,7 @@ import { NavLink } from 'react-router-dom'
 import { useAdminStore } from '../store/adminStore'
 import { useAuth } from '@rcm/ui/auth'
 import { UserRole } from '@rcm/shared-types'
+import { SHOW_UNBUILT } from '../unbuilt'
 
 /* ── Icons ── */
 const Ic = {
@@ -152,6 +153,11 @@ const REPORT   = [...MANAGE, UserRole.EXECUTIVE, UserRole.FINANCE_ANALYST]
 const STAFF    = [...FLEET, UserRole.COUNTER_AGENT, UserRole.SENIOR_AGENT]
 const RETURNS  = [...ADMIN, UserRole.BRANCH_MANAGER, UserRole.REGIONAL_MANAGER, UserRole.SENIOR_AGENT]
 
+// Screens that render invented data are hidden from navigation unless the
+// demo flag is set — see src/unbuilt.tsx.
+/** Routes whose pages render placeholder data rather than the tenant's own. */
+const UNBUILT_HREFS = new Set(['/corporate', '/reports'])
+
 const GROUPS = [
   { label: 'Dashboards', items: [
     { label: 'Executive Summary', href: '/executive',   roles: EXEC,   icon: <Ic.Chart /> },
@@ -249,7 +255,13 @@ export function Sidebar() {
       {/* Nav */}
       <nav className="flex-1 overflow-y-auto overflow-x-hidden py-2 px-2">
         {GROUPS.map((group, gi) => {
-          const visible = group.items.filter(i => i.roles.some(r => roles.includes(r)))
+          const visible = group.items.filter(
+            (i) =>
+              i.roles.some((r) => roles.includes(r)) &&
+              // Screens rendering invented data stay out of navigation
+              // unless the demo flag is set — see src/unbuilt.tsx.
+              (SHOW_UNBUILT || !UNBUILT_HREFS.has(i.href)),
+          )
           if (!visible.length) return null
           return (
             <div key={gi} className={gi > 0 ? 'mt-4' : ''}>

@@ -30,7 +30,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_session_untenanted
 from app.core.security import UserClaims, get_current_user
-from app.core.tenancy import RESERVED_SLUGS, invalidate_slug_cache
+from app.core.config import settings
+from app.core.tenancy import (
+    RESERVED_SLUGS,
+    invalidate_slug_cache,
+    tenant_host,
+)
 from app.core.security import hash_password
 from app.domains.tenants.provisioning import provision_tenant_defaults
 
@@ -141,6 +146,59 @@ class TenantSummary(BaseModel):
     vehicles: int = 0
     reservations: int = 0
     is_self: bool = False
+    # Deleted workspaces are listed rather than hidden, so the console can
+    # actually reach restore and purge. Null for a live one.
+    deleted_at: datetime | None = None
+    restore_days_left: int | None = None
+    subscription_tier: str | None = None
+    trial_ends_at: datetime | None = None
+
+
+class TenantDetail(BaseModel):
+    """Everything the console shows for one workspace.
+
+    Configuration is exposed as counts and booleans only. A support view must
+    never become a way to read a customer's API keys or secrets.
+    """
+    tenant_id: uuid.UUID
+    slug: str
+    name: str
+    trading_name: str | None = None
+    status: str
+    primary_email: str | None = None
+    primary_phone: str | None = None
+    created_at: datetime
+    deleted_at: datetime | None = None
+    restore_days_left: int | None = None
+
+    subscription_tier: str | None = None
+    trial_ends_at: datetime | None = None
+    subscription_ends_at: datetime | None = None
+    currency: str | None = None
+    timezone: str | None = None
+    tos_accepted_at: datetime | None = None
+    tos_version: str | None = None
+
+    # The three addresses, built the same way registration builds them, so
+    # "our booking link doesn't work" can be answered by clicking it.
+    booking_url: str
+    admin_url: str
+    counter_url: str
+
+    staff_count: int = 0
+    locations: int = 0
+    vehicles: int = 0
+    reservations: int = 0
+    reservations_30d: int = 0
+    last_reservation_at: datetime | None = None
+
+    # Readiness signals — these answer "why can't they take a booking".
+    active_rate_codes: int = 0
+    priced_extras: int = 0
+    locations_with_tax: int = 0
+
+    staff: list[dict] = []
+    is_self: bool = False
 
 
 class CreateTenantRequest(BaseModel):
@@ -194,9 +252,19 @@ async def list_tenants(
     rows = (
         await session.execute(
             text(
-                "SELECT tenant_id, slug, legal_name, status, primary_email, created_at "
-                "FROM tenants WHERE deleted_at IS NULL ORDER BY created_at"
-            )
+                # Deleted workspaces are INCLUDED. Filtering them out made the
+                # restore and purge endpoints unreachable from the product:
+                # the only way to find a workspace is this list, and a customer
+                # who deletes by mistake on Monday could not be helped on
+                # Tuesday. They are returned with their grace clock so the
+                # console can offer restore while it is still possible.
+                "SELECT tenant_id, slug, legal_name, status, primary_email, "
+                "       created_at, deleted_at, subscription_tier, trial_ends_at, "
+                "       GREATEST(0, :grace - EXTRACT(day FROM now() - deleted_at)::int) "
+                "         AS restore_days_left "
+                "  FROM tenants ORDER BY deleted_at NULLS FIRST, created_at"
+            ),
+            {"grace": _PURGE_GRACE_DAYS},
         )
     ).mappings().all()
 
@@ -231,6 +299,12 @@ async def list_tenants(
                 vehicles=counts.get("vehicles", 0),
                 reservations=counts.get("reservations", 0),
                 is_self=str(r["tenant_id"]) == str(claims.tenant_id),
+                deleted_at=r["deleted_at"],
+                restore_days_left=(
+                    r["restore_days_left"] if r["deleted_at"] else None
+                ),
+                subscription_tier=r["subscription_tier"],
+                trial_ends_at=r["trial_ends_at"],
             )
         )
 
@@ -687,4 +761,201 @@ async def purge_tenant(
         ok=True,
         message=f"Purged {row['legal_name']} ({row['slug']}) and {total} rows.",
         deleted_rows=deleted,
+    )
+
+
+class PlanChange(BaseModel):
+    """Commercial terms. Only the platform may set these."""
+    subscription_tier: str | None = None
+    trial_ends_at: datetime | None = None
+    subscription_ends_at: datetime | None = None
+
+
+@router.patch("/tenants/{tenant_id}/plan", response_model=ActionResult,
+              summary="Change a workspace's plan or trial")
+async def change_tenant_plan(
+    tenant_id: uuid.UUID,
+    body: PlanChange,
+    session: AsyncSession = Depends(get_session_untenanted),
+    claims: UserClaims = Depends(require_platform_admin),
+) -> ActionResult:
+    """Move a workspace between plans, or extend its trial.
+
+    Nothing in the product could do this. Creation hardcodes STARTER, and the
+    tenant's own update schema deliberately excludes subscription_tier with a
+    comment saying plan changes belong to the platform console — which had no
+    such endpoint. So a customer who upgraded and paid stayed capped on Starter
+    permanently, and there was no way to extend a trial for someone who asked.
+
+    Deliberately here and not on the tenant router: PATCH /tenants/{id} is
+    gated on admin:config, which a workspace's own administrator holds, and RLS
+    lets a bound tenant update its own row. Exposing the field there let any
+    operator lift their own caps by sending one request.
+    """
+    await session.execute(text("SELECT set_config('app.current_tenant_id', '', true)"))
+
+    tier = (body.subscription_tier or "").strip().upper() or None
+    if tier:
+        allowed = [
+            r[0]
+            for r in (
+                await session.execute(text("SELECT tier FROM plan_limits ORDER BY tier"))
+            ).all()
+        ]
+        # Checked against plan_limits rather than a constant, because a tier
+        # with no limits row silently reads as "unlimited" downstream — which
+        # is how PROFESSIONAL came to grant Enterprise capacity for Starter
+        # money. If it cannot be metered, it cannot be sold.
+        if tier not in allowed:
+            raise HTTPException(
+                400,
+                f"Unknown plan '{tier}'. Configured plans: {', '.join(allowed)}.",
+            )
+
+    sets, params = [], {"t": str(tenant_id)}
+    if tier:
+        sets.append("subscription_tier = :tier")
+        params["tier"] = tier
+    if body.trial_ends_at is not None:
+        sets.append("trial_ends_at = :trial")
+        params["trial"] = body.trial_ends_at
+    if body.subscription_ends_at is not None:
+        sets.append("subscription_ends_at = :subend")
+        params["subend"] = body.subscription_ends_at
+    if not sets:
+        raise HTTPException(400, "Nothing to change.")
+
+    res = await session.execute(
+        text(
+            f"UPDATE tenants SET {', '.join(sets)}, updated_at = now() "  # noqa: S608
+            " WHERE tenant_id = :t AND deleted_at IS NULL "
+            " RETURNING slug, subscription_tier"
+        ),
+        params,
+    )
+    row = res.first()
+    if not row:
+        raise HTTPException(404, "No such workspace.")
+
+    log.warning(
+        "platform_plan_changed",
+        slug=row[0], tenant_id=str(tenant_id), by=str(claims.user_id),
+        tier=row[1], trial_ends_at=str(body.trial_ends_at or ""),
+    )
+    return ActionResult(ok=True, message=f"{row[0]} is now on {row[1]}.")
+
+
+@router.get("/tenants/{tenant_id}", response_model=TenantDetail,
+            summary="Everything about one workspace")
+async def get_tenant_detail(
+    tenant_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session_untenanted),
+    claims: UserClaims = Depends(require_platform_admin),
+) -> TenantDetail:
+    """The page a support ticket is answered from.
+
+    The console was a list you could not click into, so an email arrived and
+    there was nowhere to look. This gathers what actually gets asked: where
+    their sites are, what plan they are on and how close to its caps, whether
+    they are set up enough to take a booking at all, who their staff are and
+    whether any of them can still sign in.
+
+    Configuration is reported as booleans. A support view must never become a
+    way to read customers' API keys.
+    """
+    await session.execute(text("SELECT set_config('app.current_tenant_id', '', true)"))
+
+    t = (
+        await session.execute(
+            text(
+                "SELECT tenant_id, slug, legal_name, trading_name, status, "
+                "       primary_email, primary_phone, created_at, deleted_at, "
+                "       subscription_tier, trial_ends_at, subscription_ends_at, "
+                "       default_currency, default_timezone, "
+                "       tos_accepted_at, tos_version, "
+                "       GREATEST(0, :grace - EXTRACT(day FROM now() - deleted_at)::int) "
+                "         AS restore_days_left "
+                "  FROM tenants WHERE tenant_id = :t"
+            ),
+            {"t": str(tenant_id), "grace": _PURGE_GRACE_DAYS},
+        )
+    ).mappings().first()
+    if not t:
+        raise HTTPException(404, "No such workspace.")
+
+    # Adopt the tenant so RLS scopes everything below to it.
+    await session.execute(
+        text("SELECT set_config('app.current_tenant_id', :t, true)"),
+        {"t": str(tenant_id)},
+    )
+
+    counts = (
+        await session.execute(
+            text(
+                "SELECT (SELECT count(*) FROM staff_users WHERE is_active) AS staff,"
+                "       (SELECT count(*) FROM locations WHERE is_active)   AS locations,"
+                "       (SELECT count(*) FROM vehicles WHERE deleted_at IS NULL) AS vehicles,"
+                "       (SELECT count(*) FROM reservations)                AS reservations,"
+                "       (SELECT count(*) FROM reservations "
+                "          WHERE created_at > now() - interval '30 days')   AS reservations_30d,"
+                "       (SELECT max(created_at) FROM reservations)          AS last_reservation_at,"
+                "       (SELECT count(*) FROM rate_codes WHERE status='ACTIVE') AS active_rates,"
+                "       (SELECT count(*) FROM extras_catalog "
+                "          WHERE default_price IS NOT NULL)                 AS priced_extras,"
+                "       (SELECT count(*) FROM locations "
+                "          WHERE tax_template_id IS NOT NULL)               AS locations_with_tax"
+            )
+        )
+    ).mappings().first() or {}
+
+    staff = [
+        dict(r)
+        for r in (
+            await session.execute(
+                text(
+                    "SELECT user_id::text, email, role, is_active, "
+                    "       last_login_at, email_verified_at, is_mfa_enabled, "
+                    "       locked_until, is_platform_admin "
+                    "  FROM staff_users WHERE deleted_at IS NULL "
+                    " ORDER BY is_active DESC, role, email"
+                )
+            )
+        ).mappings().all()
+    ]
+
+    await session.execute(text("SELECT set_config('app.current_tenant_id', '', true)"))
+
+    scheme = settings.public_url_scheme
+    return TenantDetail(
+        tenant_id=t["tenant_id"],
+        slug=t["slug"],
+        name=t["legal_name"],
+        trading_name=t["trading_name"],
+        status=t["status"],
+        primary_email=t["primary_email"],
+        primary_phone=t["primary_phone"],
+        created_at=t["created_at"],
+        deleted_at=t["deleted_at"],
+        restore_days_left=t["restore_days_left"] if t["deleted_at"] else None,
+        subscription_tier=t["subscription_tier"],
+        trial_ends_at=t["trial_ends_at"],
+        subscription_ends_at=t["subscription_ends_at"],
+        currency=t["default_currency"],
+        timezone=t["default_timezone"],
+        tos_accepted_at=t["tos_accepted_at"],
+        tos_version=t["tos_version"],
+        booking_url=f"{scheme}://{tenant_host(t['slug'], settings.public_booking_host)}",
+        admin_url=f"{scheme}://{tenant_host(t['slug'], settings.public_admin_host)}",
+        counter_url=f"{scheme}://{tenant_host(t['slug'], settings.public_counter_host)}",
+        staff_count=counts.get("staff", 0),
+        locations=counts.get("locations", 0),
+        vehicles=counts.get("vehicles", 0),
+        reservations=counts.get("reservations", 0),
+        reservations_30d=counts.get("reservations_30d", 0),
+        last_reservation_at=counts.get("last_reservation_at"),
+        active_rate_codes=counts.get("active_rates", 0),
+        priced_extras=counts.get("priced_extras", 0),
+        locations_with_tax=counts.get("locations_with_tax", 0),
+        staff=staff,
+        is_self=str(tenant_id) == str(claims.tenant_id),
     )

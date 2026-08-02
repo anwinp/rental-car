@@ -280,54 +280,95 @@ export default function PlatformBillingPage() {
           passed.
         </p>
 
-        <form
-          className="mt-4 flex flex-wrap items-end gap-3"
-          onSubmit={(e) => {
-            e.preventDefault()
-            void call('/config/verify', { current_password: password }, 'POST',
-              'Checked.')
-          }}
-        >
-          <div className="min-w-[200px] flex-1">
-            <label className={label} htmlFor="pw2">Your password</label>
-            <input id="pw2" type="password" required autoComplete="current-password"
-                   value={password} onChange={(e) => setPassword(e.target.value)}
-                   className={`${field} mt-1`} />
-          </div>
-          <button type="submit" disabled={busy || !password || !cfg.secret_key_set}
-                  className="rounded-lg border border-slate-700 px-4 py-2 text-sm text-slate-200 hover:border-slate-500 disabled:opacity-40">
+        {/* The password is cleared after every action, so this box is empty
+            each time you return to it. Buttons here are NOT disabled when it
+            is blank: a greyed control with no explanation reads as broken, and
+            the first version of this page greyed all three the moment a save
+            succeeded. They stay clickable and say what is missing. */}
+        <div className="mt-4">
+          <label className={label} htmlFor="pw2">
+            Your password — needed again for each of these
+          </label>
+          <input id="pw2" type="password" autoComplete="current-password"
+                 value={password} onChange={(e) => setPassword(e.target.value)}
+                 placeholder="Required to check, switch on, or remove"
+                 className={`${field} mt-1 max-w-sm`} />
+        </div>
+
+        {/* Every step that is still outstanding, named. */}
+        <ol className="mt-4 space-y-1.5 text-xs">
+          {[
+            { done: cfg.secret_key_set, text: 'Secret key saved' },
+            { done: cfg.webhook_secret_set, text: 'Webhook signing secret saved' },
+            { done: verified, text: 'Checked against Stripe' },
+            { done: cfg.is_enabled, text: 'Billing switched on' },
+          ].map((step) => (
+            <li key={step.text} className="flex items-center gap-2">
+              <span className={step.done ? 'text-emerald-400' : 'text-slate-600'}>
+                {step.done ? '✓' : '○'}
+              </span>
+              <span className={step.done ? 'text-slate-400' : 'text-slate-300'}>
+                {step.text}
+              </span>
+            </li>
+          ))}
+        </ol>
+
+        <div className="mt-4 flex flex-wrap gap-3">
+          <button
+            type="button" disabled={busy}
+            onClick={() => {
+              if (!password) { setError('Enter your password above first.'); return }
+              if (!cfg.secret_key_set) { setError('Save a secret key first.'); return }
+              void call('/config/verify', { current_password: password }, 'POST', 'Checked.')
+            }}
+            className="rounded-lg border border-slate-700 px-4 py-2 text-sm text-slate-200 hover:border-slate-500 disabled:opacity-40">
             Check against Stripe
           </button>
-          <button type="button"
-                  disabled={busy || !password || (!cfg.is_enabled && !verified)}
-                  onClick={() => {
-                    if (!cfg.is_enabled && live && !window.confirm(
-                      'Switch billing on in LIVE mode?\n\n' +
-                      'Real cards will be charged from this point.'
-                    )) return
-                    void call('/config/enable',
-                      { current_password: password, is_enabled: !cfg.is_enabled },
-                      'POST', cfg.is_enabled ? 'Billing is off.' : 'Billing is on.')
-                  }}
-                  className={`rounded-lg px-4 py-2 text-sm font-semibold text-white disabled:opacity-40 ${
-                    cfg.is_enabled ? 'bg-slate-700 hover:bg-slate-600' : 'bg-emerald-700 hover:bg-emerald-600'}`}>
+
+          <button
+            type="button" disabled={busy}
+            onClick={() => {
+              if (!password) { setError('Enter your password above first.'); return }
+              if (!cfg.is_enabled) {
+                if (!cfg.secret_key_set || !cfg.webhook_secret_set) {
+                  setError('Both the secret key and the webhook signing secret are needed first.')
+                  return
+                }
+                if (!verified) {
+                  setError('Check the credentials against Stripe first — otherwise "on" only means "we hope".')
+                  return
+                }
+                if (live && !window.confirm(
+                  'Switch billing on in LIVE mode?\n\nReal cards will be charged from this point.'
+                )) return
+              }
+              void call('/config/enable',
+                { current_password: password, is_enabled: !cfg.is_enabled },
+                'POST', cfg.is_enabled ? 'Billing is off.' : 'Billing is on.')
+            }}
+            className={`rounded-lg px-4 py-2 text-sm font-semibold text-white disabled:opacity-40 ${
+              cfg.is_enabled ? 'bg-slate-700 hover:bg-slate-600' : 'bg-emerald-700 hover:bg-emerald-600'}`}>
             {cfg.is_enabled ? 'Switch billing off' : 'Switch billing on'}
           </button>
-          <button type="button" disabled={busy || !password}
-                  onClick={() => {
-                    if (!window.confirm(
-                      'Remove the stored Stripe credentials?\n\n' +
-                      'Billing switches off. Nothing already charged is affected.'
-                    )) return
-                    void call('/config', { current_password: password }, 'DELETE',
-                      'Credentials removed.')
-                  }}
-                  className="rounded-lg border border-red-900/60 px-4 py-2 text-sm text-red-300 hover:border-red-700 disabled:opacity-40">
+
+          <button
+            type="button" disabled={busy}
+            onClick={() => {
+              if (!password) { setError('Enter your password above first.'); return }
+              if (!window.confirm(
+                'Remove the stored Stripe credentials?\n\n' +
+                'Billing switches off. Nothing already charged is affected.'
+              )) return
+              void call('/config', { current_password: password }, 'DELETE', 'Credentials removed.')
+            }}
+            className="rounded-lg border border-red-900/60 px-4 py-2 text-sm text-red-300 hover:border-red-700 disabled:opacity-40">
             Remove
           </button>
-          {error && <p className="w-full text-sm text-red-300">{error}</p>}
-          {notice && <p className="w-full text-sm text-emerald-400">{notice}</p>}
-        </form>
+        </div>
+
+        {error && <p className="mt-3 text-sm text-red-300">{error}</p>}
+        {notice && <p className="mt-3 text-sm text-emerald-400">{notice}</p>}
       </section>
 
       <p className="mt-5 text-xs text-slate-600">

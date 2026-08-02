@@ -1,0 +1,326 @@
+<title>Making the sold features real — Ceez Rentals</title>
+<style>
+  :root {
+    --ink:#16181c; --ink-2:#4c525b; --ink-3:#7b828c;
+    --paper:#fbfaf8; --panel:#fff; --rule:#e4e2dd; --rule-soft:#efedea;
+    --accent:#7c5cff; --accent-soft:rgba(124,92,255,.10);
+    --bad:#b3311c; --bad-soft:rgba(179,49,28,.10);
+    --warn:#94610f; --warn-soft:rgba(148,97,15,.12); --ok:#1a7a50;
+    --mono:ui-monospace,"SF Mono",Menlo,monospace;
+    --sans:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --ink:#e9e7e4; --ink-2:#a9a7a3; --ink-3:#76746f;
+      --paper:#131316; --panel:#1b1b1f; --rule:#2d2d33; --rule-soft:#242429;
+      --accent:#9d84ff; --accent-soft:rgba(157,132,255,.14);
+      --bad:#ea7159; --bad-soft:rgba(234,113,89,.13);
+      --warn:#d9a441; --warn-soft:rgba(217,164,65,.13); --ok:#4fbe8b; }
+  }
+  :root[data-theme="light"] { --ink:#16181c; --ink-2:#4c525b; --ink-3:#7b828c;
+    --paper:#fbfaf8; --panel:#fff; --rule:#e4e2dd; --rule-soft:#efedea;
+    --accent:#7c5cff; --accent-soft:rgba(124,92,255,.10);
+    --bad:#b3311c; --bad-soft:rgba(179,49,28,.10);
+    --warn:#94610f; --warn-soft:rgba(148,97,15,.12); --ok:#1a7a50; }
+  :root[data-theme="dark"] { --ink:#e9e7e4; --ink-2:#a9a7a3; --ink-3:#76746f;
+    --paper:#131316; --panel:#1b1b1f; --rule:#2d2d33; --rule-soft:#242429;
+    --accent:#9d84ff; --accent-soft:rgba(157,132,255,.14);
+    --bad:#ea7159; --bad-soft:rgba(234,113,89,.13);
+    --warn:#d9a441; --warn-soft:rgba(217,164,65,.13); --ok:#4fbe8b; }
+
+  body{background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:16px;
+       line-height:1.62;margin:0;padding:0 24px 96px;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:880px;margin:0 auto}
+  header.mast{padding:72px 0 32px;border-bottom:1px solid var(--rule);margin-bottom:40px}
+  .eyebrow{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.16em;
+           color:var(--ink-3);margin:0 0 14px}
+  h1{font-size:clamp(30px,5vw,42px);font-weight:600;line-height:1.12;letter-spacing:-.022em;
+     margin:0 0 18px;text-wrap:balance}
+  .standfirst{font-size:18px;color:var(--ink-2);margin:0;max-width:62ch;text-wrap:pretty}
+  h2{font-size:23px;font-weight:600;letter-spacing:-.015em;margin:56px 0 4px;padding-top:26px;
+     border-top:1px solid var(--rule-soft);text-wrap:balance}
+  h2:first-of-type{border-top:0;padding-top:0}
+  h2 .num{font-family:var(--mono);font-size:13px;font-weight:500;color:var(--accent);
+          margin-right:12px;letter-spacing:0}
+  h3{font-size:16px;font-weight:600;margin:26px 0 4px}
+  p{margin:0 0 14px;max-width:70ch;text-wrap:pretty}
+  ul,ol{margin:0 0 14px;padding-left:22px;max-width:68ch}
+  li{margin-bottom:6px}
+  code{font-family:var(--mono);font-size:.87em;background:var(--accent-soft);
+       padding:1px 5px;border-radius:3px}
+  .lede{color:var(--ink-2);font-size:15px;margin:0 0 20px}
+  .scroller{overflow-x:auto;margin:20px 0 24px}
+  table{border-collapse:collapse;width:100%;font-size:14.5px;min-width:560px}
+  th{text-align:left;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.09em;
+     color:var(--ink-3);padding:0 14px 9px 0;border-bottom:1px solid var(--rule);white-space:nowrap}
+  td{padding:11px 14px 11px 0;border-bottom:1px solid var(--rule-soft);vertical-align:top}
+  td.mono{font-family:var(--mono);font-size:13px;white-space:nowrap}
+  .num-c{font-variant-numeric:tabular-nums;white-space:nowrap}
+  .tag{display:inline-block;font-size:10.5px;font-weight:700;text-transform:uppercase;
+       letter-spacing:.07em;padding:2px 7px;border-radius:3px;white-space:nowrap}
+  .tag.bad{color:var(--bad);background:var(--bad-soft)}
+  .tag.warn{color:var(--warn);background:var(--warn-soft)}
+  .tag.ok{color:var(--ok);background:rgba(26,122,80,.12)}
+  .panel{background:var(--panel);border:1px solid var(--rule);border-radius:6px;
+         padding:18px 20px;margin:22px 0}
+  .panel h3{margin-top:0}
+  .panel p:last-child,.panel ul:last-child{margin-bottom:0}
+  .now{border-left:3px solid var(--bad);background:var(--bad-soft);border-radius:0 4px 4px 0;
+       padding:15px 18px;margin:22px 0}
+  .now p:last-child{margin-bottom:0}
+  .decide{border-left:3px solid var(--accent);background:var(--accent-soft);
+          border-radius:0 4px 4px 0;padding:14px 18px;margin:18px 0}
+  .decide .label{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.11em;
+                 color:var(--accent);display:block;margin-bottom:5px}
+  .decide p{font-size:15px}.decide p:last-child{margin-bottom:0}
+  .meta{display:flex;flex-wrap:wrap;gap:8px 20px;margin:0 0 16px;font-size:12.5px;color:var(--ink-3)}
+  .meta b{color:var(--ink-2);font-weight:600}
+  footer{margin-top:64px;padding-top:22px;border-top:1px solid var(--rule);font-size:13px;color:var(--ink-3)}
+</style>
+
+<div class="wrap">
+
+<header class="mast">
+  <p class="eyebrow">Ceez Rentals · 2 August 2026</p>
+  <h1>Making the sold features real</h1>
+  <p class="standfirst">
+    Four capabilities are on the price list and are not deliverable. This is
+    what each one actually needs, what it costs, and the order I would take
+    them in — starting with the ten-minute change that stops the
+    misrepresentation today.
+  </p>
+</header>
+
+<div class="now">
+  <p>
+    <strong>Before anything is built.</strong> Untick <code>corporate_accounts</code>,
+    <code>telematics</code> and <code>api_access</code> on every plan at
+    <em>rcm-admin.ceez.ai/platform/plans</em>. That takes a minute and is the
+    only item here with a deadline: every hour those boxes stay ticked, the
+    pricing page promises things the product cannot do. Leave
+    <code>advanced_reporting</code> ticked — it is partially real and finishing
+    it is the first build below.
+  </p>
+</div>
+
+<h2>What each one really is</h2>
+<p class="lede">Verified against the database and the source, not the roadmap.</p>
+
+<div class="scroller">
+<table>
+  <thead>
+    <tr><th>Feature</th><th>Exists today</th><th>Missing</th><th>Effort</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td class="mono">advanced_reporting</td>
+      <td>Two Celery triggers returning 202</td>
+      <td>Storage, retrieval, any UI at all</td>
+      <td class="num-c">~2 days</td>
+    </tr>
+    <tr>
+      <td class="mono">api_access</td>
+      <td>Nothing. No key store, no machine auth</td>
+      <td>The whole thing</td>
+      <td class="num-c">~3 days</td>
+    </tr>
+    <tr>
+      <td class="mono">corporate_accounts</td>
+      <td>A 12-line router with a health check. No tables</td>
+      <td>The whole thing</td>
+      <td class="num-c">~8 days</td>
+    </tr>
+    <tr>
+      <td class="mono">telematics</td>
+      <td>A well-shaped partitioned table holding 0 rows</td>
+      <td>Ingest, device auth, readers, UI, a provider</td>
+      <td class="num-c">~5 days + integration</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<h2><span class="num">01</span>Advanced reporting — finish it</h2>
+<div class="meta">
+  <span><b>Size</b> ~2 days</span>
+  <span><b>Blocked on</b> nothing</span>
+  <span><b>Closest to done</b></span>
+</div>
+<p>
+  Two endpoints trigger Celery tasks and return 202. The tasks compute a result
+  dict and return it to nowhere: there is no report table, no retrieval
+  endpoint, and the admin page is hidden behind <code>VITE_SHOW_UNBUILT</code>.
+  A tenant can start a report and can never see one.
+</p>
+
+<h3>Build</h3>
+<ol>
+  <li><strong><code>generated_reports</code></strong> — tenant, kind, parameters, status, row counts, the object key of the file, requested_by, timestamps. Tenant-scoped with RLS like everything else.</li>
+  <li><strong>Write the output to object storage.</strong> MinIO is already deployed and the export feature already writes zips through it, so this is reuse, not new infrastructure.</li>
+  <li><strong><code>GET /reporting/reports</code></strong> and a short-lived download URL. The report is the deliverable; a 202 is not.</li>
+  <li><strong>Unhide the page</strong> and give it a list, a state per row, and a download. The nav entry already exists behind the flag.</li>
+  <li><strong>Two more reports</strong> beyond revenue and utilisation, chosen from what operators actually ask for — my guess is fleet ageing and a tax summary, but that is a guess.</li>
+</ol>
+<p>
+  Worth doing first regardless of priority: it is the only one of the four where
+  most of the computation already exists, so it converts a hollow promise into a
+  real feature faster than anything else here.
+</p>
+
+<h2><span class="num">02</span>API access — build the machine door</h2>
+<div class="meta">
+  <span><b>Size</b> ~3 days</span>
+  <span><b>Blocked on</b> a scope decision</span>
+</div>
+<p>
+  There is no machine authentication anywhere in the system. Every route
+  authenticates a human through a session cookie. The <code>API_PARTNER</code>
+  role exists in the database enum and grants nothing.
+</p>
+
+<h3>Build</h3>
+<ol>
+  <li><strong><code>api_keys</code></strong> — tenant, label, <em>hash</em> of the key, prefix for display, scopes, created_by, last_used_at, expires_at, revoked_at. Store a hash, never the key: the same rule the Stripe credentials follow, for the same reason.</li>
+  <li><strong>Issue once, show once.</strong> The full key is returned by the create call and never again, with the UI saying so before the button is pressed.</li>
+  <li><strong>An <code>X-API-Key</code> dependency</strong> that resolves the tenant from the key itself. It must bind <code>app.current_tenant_id</code> exactly as a session does, so RLS covers machine callers with no second implementation to keep in step.</li>
+  <li><strong>Scopes, enforced.</strong> At minimum <code>read</code> and <code>write</code>, per domain. A key that can do everything is the one that leaks.</li>
+  <li><strong>Its own rate limit</strong>, keyed on the key, plus <code>last_used_at</code> so a customer can spot a key that is still live and should not be.</li>
+  <li><strong>Public documentation</strong> for the subset that is supported. An API nobody can read the shape of is not a feature.</li>
+</ol>
+
+<div class="decide">
+  <span class="label">Decision needed</span>
+  <p>
+    How wide is the API? My recommendation: <strong>read-only to start</strong> —
+    availability, fleet, reservations, customers — plus creating a reservation.
+    That covers the integrations people actually ask for and keeps the blast
+    radius of a leaked key small. Full write access across every domain is a
+    much larger surface to secure and to support.
+  </p>
+</div>
+
+<h2><span class="num">03</span>Corporate accounts — greenfield</h2>
+<div class="meta">
+  <span><b>Size</b> ~8 days</span>
+  <span><b>Blocked on</b> what it must do</span>
+</div>
+<p>
+  A twelve-line router with a health check, and no tables. Everything the name
+  implies has to be built. It is also the most valuable of the four
+  commercially: negotiated corporate rates are how a rental operator wins
+  contracted business rather than walk-ups.
+</p>
+
+<h3>Build</h3>
+<ol>
+  <li><strong><code>corporate_accounts</code></strong> — the company, billing address, payment terms, credit limit, an account code the counter can search.</li>
+  <li><strong><code>corporate_rate_agreements</code></strong> — negotiated rates per vehicle class, valid between dates. This must join the existing rate-selection path rather than sit beside it, or a corporate booking will quietly be quoted the public price.</li>
+  <li><strong><code>corporate_bookers</code></strong> — who may book on the account, and the <code>CORPORATE_BOOKER</code> role already in the enum, finally meaning something.</li>
+  <li><strong>Bill to account, not to card.</strong> A reservation gains an optional account reference; the counter can close a rental without taking payment, and the account is invoiced.</li>
+  <li><strong>Statements</strong> — what a company owes across all its bookings in a period. This is the thing a finance department asks for on day one.</li>
+  <li><strong>Admin UI</strong>, plus a booker-facing view, plus the account picker at the counter.</li>
+</ol>
+
+<div class="decide">
+  <span class="label">Decision needed</span>
+  <p>
+    What is the minimum that counts as shipped? The honest small version is
+    <strong>accounts + negotiated rates + bill-to-account</strong>, leaving
+    statements and self-service booker portals for later. That is roughly half
+    the estimate. Tell me if invoicing has to be in the first cut, because it
+    changes the shape considerably.
+  </p>
+</div>
+
+<h2><span class="num">04</span>Telematics — needs a provider before it needs code</h2>
+<div class="meta">
+  <span><b>Size</b> ~5 days once decided</span>
+  <span><b>Blocked on</b> hardware and provider</span>
+</div>
+<p>
+  The table is already there and well designed — partitioned by month, with
+  vehicle, device, position, speed, heading and odometer. Nothing writes to it
+  and nothing reads it. Notably, the schema is the easy part; the integration is
+  the work, and it cannot start until it is known what is sending the data.
+</p>
+
+<h3>Build, once a provider is chosen</h3>
+<ol>
+  <li><strong>An ingest endpoint per provider</strong>, authenticated by a shared secret and signature — the webhook pattern the Stripe receiver already establishes. Devices cannot hold a session, so the signature is the authentication, and the same three checks apply: signature over raw bytes, a timestamp tolerance, constant-time comparison.</li>
+  <li><strong>Device registration</strong> mapping a device id to a vehicle, so a reading can be attributed at all.</li>
+  <li><strong>Odometer reconciliation.</strong> This is the payoff and the trap: telematics odometer and the counter's typed odometer will disagree, and deciding which wins — and what happens to a mileage charge when they do — is a business rule, not a technical one.</li>
+  <li><strong>Live map and last-known position</strong> in the back office; an alert when a vehicle leaves an agreed area or an overdue rental stops moving.</li>
+  <li><strong>Retention.</strong> Position history is personal data about a driver. The partitions exist; a drop policy does not.</li>
+</ol>
+
+<div class="decide">
+  <span class="label">Decision needed</span>
+  <p>
+    Which devices? A managed provider (Geotab, Samsara) means an integration
+    against a documented API and no hardware to support. Generic OBD dongles
+    posting JSON are cheaper per vehicle and put the support burden on you.
+    Until this is answered there is nothing to build against, which is why this
+    one sits last regardless of its appeal.
+  </p>
+</div>
+
+<h2><span class="num">05</span>Stop this recurring</h2>
+<div class="meta"><span><b>Size</b> ~half a day</span><span><b>Blocked on</b> nothing</span></div>
+<p>
+  The gating mechanism worked perfectly while gating three things that do not
+  exist, which is why nobody noticed. That is the same failure mode as every
+  other bug found this week, and it has the same kind of answer.
+</p>
+<p>
+  <code>tests/plan_enforcement_lint.py</code> already asserts that every column
+  of <code>plans</code> is read by a query somewhere. Extend it to features:
+</p>
+<ul>
+  <li>Every key in the <code>FEATURES</code> registry must appear in at least one <code>require_feature(...)</code> call or an explicit allowlist entry with a reason.</li>
+  <li>Every gated router must have at least one route beyond <code>/health</code> — the check that would have caught <code>corporate_accounts</code>, whose router is gated, mounted, and empty.</li>
+  <li>Fail the build otherwise.</li>
+</ul>
+<p>
+  Half a day, and it is the only item here that prevents a repeat rather than
+  fixing an instance.
+</p>
+
+<h2><span class="num">06</span>Order, and what I need from you</h2>
+
+<div class="scroller">
+<table>
+  <thead><tr><th>Order</th><th>Item</th><th>Size</th><th>Blocked on</th></tr></thead>
+  <tbody>
+    <tr><td class="num-c">now</td><td>Untick the three hollow features</td><td class="num-c">1 min</td><td>Nothing — please do this today</td></tr>
+    <tr><td class="num-c">1</td><td>Feature lint</td><td class="num-c">~0.5 day</td><td>Nothing</td></tr>
+    <tr><td class="num-c">2</td><td>Advanced reporting</td><td class="num-c">~2 days</td><td>Which extra reports matter</td></tr>
+    <tr><td class="num-c">3</td><td>API access</td><td class="num-c">~3 days</td><td>Read-only, or read+write</td></tr>
+    <tr><td class="num-c">4</td><td>Corporate accounts</td><td class="num-c">~8 days</td><td>Whether invoicing is in the first cut</td></tr>
+    <tr><td class="num-c">5</td><td>Telematics</td><td class="num-c">~5 days</td><td>Device and provider choice</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>
+  The lint sits first for the same reason it did in the enforcement plan: it is
+  half a day, and everything after it lands safer for having it.
+</p>
+
+<div class="panel">
+  <h3>An alternative worth considering</h3>
+  <p>
+    Four features is roughly three and a half weeks. If the aim is a coherent
+    product rather than a full checklist, <strong>drop telematics and corporate
+    accounts from the price list entirely</strong> and sell Growth on capacity
+    plus channels and reporting. Both can return when they are real. A short
+    list of things that all work sells better than a long one where three
+    entries lead to a support conversation, and it is a considerably cheaper
+    path to a defensible Enterprise tier.
+  </p>
+</div>
+
+<footer>
+  Ceez Rentals · feature remediation plan · 2 August 2026 ·
+  effort estimates assume the existing patterns are reused, not reinvented
+</footer>
+
+</div>

@@ -25,6 +25,31 @@ function slugify(name: string): string {
     .slice(0, 40)
 }
 
+/**
+ * Provisioning steps, as a new operator should read them.
+ *
+ * Only two of the four keys the API returns were mapped, so a fresh workspace
+ * showed two labelled rows and two bullets with no text beside them — the
+ * catalogue clone and the rate bands both rendered blank. Unknown keys now drop
+ * out entirely rather than leaving an empty bullet behind.
+ */
+function provisionedLabel(step: string): string | null {
+  // rate_schedule_items carries its count: "rate_schedule_items:12".
+  const [key, value] = step.split(':')
+  switch (key) {
+    case 'catalogues_cloned':
+      return 'Vehicle classes and extras added'
+    case 'starter_location':
+      return 'Starter branch created'
+    case 'rack_rate_code':
+      return 'Standard rate code created'
+    case 'rate_schedule_items':
+      return value ? `Priced ${value} vehicle classes` : 'Rate bands created'
+    default:
+      return null
+  }
+}
+
 export default function SignupPage() {
   const navigate = useNavigate()
 
@@ -204,11 +229,10 @@ export default function SignupPage() {
                 Ready and waiting for you
               </p>
               <ul className="mt-2.5 space-y-1.5">
-                {created.provisioned.map((step) => (
-                  <li key={step} className="flex items-center gap-2.5 text-sm text-slate-300">
+                {created.provisioned.map(provisionedLabel).filter(Boolean).map((label) => (
+                  <li key={label} className="flex items-center gap-2.5 text-sm text-slate-300">
                     <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
-                    {step === 'starter_location' ? 'Starter branch created' : null}
-                    {step === 'rack_rate_code' ? 'Standard rate code created' : null}
+                    {label}
                   </li>
                 ))}
               </ul>

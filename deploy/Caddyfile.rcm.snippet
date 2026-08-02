@@ -67,39 +67,65 @@
 # platform hosts above are unaffected.
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Uncomment once DNS resolves and the API is deployed with the tls-allowed route.
+# APPLIED IN PRODUCTION 2026-08-02. This is the live configuration, copied back
+# from /root/ceez_ai_beta_launch/ceez-ai-main/Caddyfile after reload.
 #
-# {
-# 	on_demand_tls {
-# 		ask      http://rcm-api:8000/api/v1/internal/tls-allowed
-# 		interval 2m
-# 		burst    5
-# 	}
-# }
+# Two corrections were needed against the draft above:
 #
-# https:// {
-# 	tls {
-# 		on_demand
-# 	}
+#   1. `interval` and `burst` are no longer supported inside on_demand_tls on
+#      the installed Caddy; the ask gate is the whole rate-limiting mechanism
+#      now. Leaving them in fails validation outright.
 #
-# 	# Back office: <slug>-rcm-admin.ceez.ai
-# 	@admin header_regexp host Host ^[a-z0-9-]+-rcm-admin\.ceez\.ai$
-# 	handle @admin {
-# 		handle /api/v1/* {
-# 			reverse_proxy rcm-api:8000
-# 		}
-# 		handle {
-# 			reverse_proxy rcm-admin:80
-# 		}
-# 	}
+#   2. The storefront must split /api/v1 to the API IN CADDY. Leaving it to the
+#      Next.js rewrite proxies server-side and rewrites Host to rcm-api:8000, so
+#      extract_slug sees no tenant and every per-tenant storefront call fails to
+#      resolve. Verified: with the split, /api/v1/locations/public on
+#      test-rental-co-rcm.ceez.ai returns that workspace's locations with no
+#      X-Tenant-ID header at all.
 #
-# 	# Storefront: <slug>-rcm.ceez.ai — Next.js handles its own /api routes
-# 	handle {
-# 		reverse_proxy rcm-booking:3000
-# 	}
-#
-# 	encode zstd gzip
-# }
+# The global options block must be FIRST in the Caddyfile; the tenant block LAST.
+
+# Global options — must be the first block in the file.
+# RCM per-tenant hosts get certificates on demand; the ask gate is what
+# stops this being an open issuance relay against the ceez.ai rate limit.
+{
+	on_demand_tls {
+		ask      http://rcm-api:8000/api/v1/internal/tls-allowed
+	}
+}
+
+# ── RCM per-tenant hosts — MUST STAY LAST ────────────────────────────────
+# Catch-all for <slug>-rcm.ceez.ai and <slug>-rcm-admin.ceez.ai. Every
+# explicit host block above is matched first, so no existing app is affected.
+https:// {
+	tls {
+		on_demand
+	}
+	@admin header_regexp host Host ^[a-z0-9-]+-rcm-admin\.ceez\.ai$
+	handle @admin {
+		handle /api/v1/* {
+			reverse_proxy rcm-api:8000
+		}
+		handle {
+			reverse_proxy rcm-admin:80
+		}
+	}
+	# Storefront: <slug>-rcm.ceez.ai
+	# /api/v1 is split off here rather than left to the Next.js rewrite. A Next
+	# rewrite proxies server-side and sets Host to rcm-api:8000, so the tenant
+	# slug is lost and the API cannot tell which workspace the request is for.
+	# Caddy preserves the original Host, which is the whole basis of per-tenant
+	# hostname resolution. /api/auth/* stays with Next — those are its own route
+	# handlers, not FastAPI.
+	handle /api/v1/* {
+		reverse_proxy rcm-api:8000
+	}
+	handle {
+		reverse_proxy rcm-booking:3000
+	}
+	encode zstd gzip
+}
+
 
 # Customer booking — Next.js SSR. Next handles its own /api/v1 + /api/auth.
 # Note this is the APEX host: its first label is "rcm", a reserved slug, so no

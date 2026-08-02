@@ -679,7 +679,9 @@ export default function PlatformLanding() {
                       {custom ? (
                         <ButtonOutline href="mailto:hello@ceez.ai">Contact us</ButtonOutline>
                       ) : (
-                        <ButtonOutline href="/signup">Start free</ButtonOutline>
+                        <ButtonOutline href={`${ORIGINS.signup}?plan=${plan.code}`}>
+                          Start free
+                        </ButtonOutline>
                       )}
                     </div>
                   </div>

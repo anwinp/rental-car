@@ -416,6 +416,9 @@ async def _upsert(
             # The trial is over once money has changed hands. Left in place, it
             # would sit in the past and re-expire the workspace overnight.
             "trial_ends_at = NULL",
+            # They have arrived where they were heading, so stop pointing
+            # them at a checkout they have already completed.
+            "signup_plan_code = NULL",
             "updated_at = now()",
         ]
         params: dict = {"ends": ends_at, "t": tenant_id}

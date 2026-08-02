@@ -63,6 +63,19 @@ export default function SignupPage() {
   const [showPassword, setShowPassword] = useState(false)
 
   const [slugState, setSlugState] = useState<SlugState>({ kind: 'idle' })
+  // Carried from the pricing page. Recorded as an intention only — the
+  // workspace starts on the free default and stays there until a payment
+  // clears, so arriving here with ?plan=ENTERPRISE grants nothing.
+  const [plans, setPlans] = useState<{ code: string; name: string; price_cents: number | null; currency: string | null; billing_period: string }[]>([])
+  const [planCode, setPlanCode] = useState(
+    new URLSearchParams(window.location.search).get('plan')?.toUpperCase() ?? '',
+  )
+  useEffect(() => {
+    fetch('/api/v1/public/plans')
+      .then((r) => (r.ok ? r.json() : []))
+      .then((rows) => setPlans(Array.isArray(rows) ? rows : []))
+      .catch(() => setPlans([]))
+  }, [])
   const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [created, setCreated] = useState<null | {
@@ -153,6 +166,7 @@ export default function SignupPage() {
           admin_last_name: lastName.trim(),
           admin_email: email.trim(),
           admin_password: password,
+          plan_code: planCode || null,
         }),
       })
       const data = await res.json()
@@ -501,6 +515,41 @@ export default function SignupPage() {
               </p>
             </div>
           </div>
+
+          {/* Chosen here, paid for after the email is confirmed. Charging
+              before an address is proven leaves a paid workspace nobody can
+              sign into and a refund conversation, so the order is deliberate
+              and is stated rather than left to be discovered. */}
+          {plans.length > 0 && (
+            <div className="mt-6">
+              <label htmlFor="plan" className="block text-sm font-medium text-slate-200">
+                Plan
+              </label>
+              <select
+                id="plan"
+                value={planCode}
+                onChange={(e) => setPlanCode(e.target.value)}
+                className="mt-1.5 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm text-white focus:border-indigo-500 focus:outline-none"
+              >
+                <option value="">Start free — decide later</option>
+                {plans
+                  .filter((p) => p.price_cents !== null && p.price_cents > 0)
+                  .map((p) => (
+                    <option key={p.code} value={p.code}>
+                      {p.name} — {((p.price_cents ?? 0) / 100).toLocaleString(undefined, {
+                        style: 'currency', currency: p.currency || 'USD',
+                        maximumFractionDigits: 0,
+                      })}/{p.billing_period === 'YEARLY' ? 'yr' : 'mo'}
+                    </option>
+                  ))}
+              </select>
+              <p className="mt-1.5 text-xs text-slate-500">
+                {planCode
+                  ? 'Nothing is charged now. Confirm your email address first, then pay — your workspace runs on the free plan until you do.'
+                  : 'You can pick a paid plan at any time from inside your workspace.'}
+              </p>
+            </div>
+          )}
 
           <button
             type="submit"

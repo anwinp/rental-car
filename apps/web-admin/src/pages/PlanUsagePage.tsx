@@ -39,6 +39,8 @@ interface PlanInfo {
   days_left: number | null
   usage: { staff: CapUsage; vehicles: CapUsage; locations: CapUsage }
   features: FeatureRow[]
+  chosen_plan_code: string | null
+  chosen_plan_name: string | null
 }
 
 const CAPS: { key: keyof PlanInfo['usage']; label: string; noun: string }[] = [
@@ -130,6 +132,29 @@ export function PlanUsagePage() {
           What is included, and how much of it you are using.
         </p>
       </header>
+
+      {/* The plan they chose at signup and have not paid for. Shown above
+          everything else because it is the one outstanding action, and because
+          a workspace quietly running on the free plan when its owner believes
+          they bought Growth is a support ticket waiting to happen. */}
+      {d.chosen_plan_code && d.chosen_plan_code !== d.plan_code && (
+        <section className="mt-6 rounded-xl p-5"
+                 style={{ background: 'var(--accent-sub)', border: '1px solid var(--accent)' }}>
+          <h2 className="text-sm font-semibold" style={{ color: 'var(--text-1)' }}>
+            Finish setting up {d.chosen_plan_name}
+          </h2>
+          <p className="mt-1 text-sm" style={{ color: 'var(--text-2)' }}>
+            You chose {d.chosen_plan_name} when you signed up. Nothing has been
+            charged, and your workspace is running on {d.plan} until it is.
+          </p>
+          <button onClick={() => void upgrade(d.chosen_plan_code!)}
+                  disabled={Boolean(busy)}
+                  className="mt-3 rounded-lg px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                  style={{ background: 'var(--accent)' }}>
+            {busy === d.chosen_plan_code ? 'Opening Stripe…' : `Pay for ${d.chosen_plan_name}`}
+          </button>
+        </section>
+      )}
 
       <section className="mt-6 rounded-xl p-5"
                style={{ background: 'var(--card-bg)', border: '1px solid var(--border)' }}>

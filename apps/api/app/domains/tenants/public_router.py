@@ -64,6 +64,10 @@ class RegisterRequest(BaseModel):
     country_code: str = Field(default="US", min_length=2, max_length=2)
     timezone: str = Field(default="America/New_York", max_length=64)
     currency: str = Field(default="USD", min_length=3, max_length=3)
+    # What they picked on the pricing page. Recorded as an intention, not
+    # granted — see migration 079. Optional: arriving straight at the form
+    # without going past the prices is a perfectly normal way to sign up.
+    plan_code: str | None = None
 
     @field_validator("slug")
     @classmethod
@@ -267,6 +271,22 @@ async def register(
     now = datetime.now(timezone.utc)
 
     # Unverified until the address is proven. The login path refuses every
+    # The chosen plan is resolved BEFORE the insert so an unknown or archived
+    # code is simply ignored rather than failing a registration. Somebody
+    # mistyping a query string should still end up with a workspace.
+    chosen = None
+    if body.plan_code:
+        chosen = (
+            await session.execute(
+                text(
+                    "SELECT code FROM plans "
+                    " WHERE code = :c AND is_active "
+                    "   AND price_cents IS NOT NULL AND price_cents > 0"
+                ),
+                {"c": body.plan_code.strip().upper()},
+            )
+        ).scalar()
+
     # non-ACTIVE status, so an unconfirmed workspace cannot be signed into.
     await session.execute(
         text(
@@ -300,6 +320,14 @@ async def register(
             "now": now,
         },
     )
+    if chosen:
+        await session.execute(
+            text(
+                "UPDATE tenants SET signup_plan_code = :p "
+                " WHERE tenant_id = CAST(:t AS uuid)"
+            ),
+            {"p": chosen, "t": str(tenant_id)},
+        )
 
     # From here on this transaction acts AS the new tenant. Every table below
     # enforces WITH CHECK (tenant_id = current_tenant), so without this the

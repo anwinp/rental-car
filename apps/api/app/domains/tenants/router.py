@@ -363,9 +363,12 @@ async def my_plan(
     term = (
         await session.execute(
             text(
-                "SELECT status, "
-                "       COALESCE(subscription_ends_at, trial_ends_at) AS term_end, "
-                "       p.display_name, p.price_cents, p.currency, p.billing_period "
+                "SELECT t.status, "
+                "       COALESCE(t.subscription_ends_at, t.trial_ends_at) AS term_end, "
+                "       p.display_name, p.price_cents, p.currency, p.billing_period, "
+                "       t.signup_plan_code, "
+                "       (SELECT display_name FROM plans WHERE code = t.signup_plan_code) "
+                "         AS signup_plan_name "
                 "  FROM tenants t "
                 "  LEFT JOIN plans p ON p.code = t.subscription_tier "
                 " WHERE t.tenant_id = :t"
@@ -412,4 +415,8 @@ async def my_plan(
              "included": f.key in granted}
             for f in FEATURES
         ],
+        # What they picked at signup and have not paid for yet. Null once
+        # the subscription goes live, so a paying customer is never nagged.
+        "chosen_plan_code": term.get("signup_plan_code"),
+        "chosen_plan_name": term.get("signup_plan_name"),
     }

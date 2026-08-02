@@ -138,6 +138,45 @@ export default function TeamPage() {
     }
   }
 
+  /**
+   * Change someone's role.
+   *
+   * The endpoint did not exist until now, which is why the roster was
+   * read-only: the last-admin guard tells you to give someone else the
+   * administrator role, and there was no way to do it.
+   */
+  async function changeRole(m: Member, role: string) {
+    setError(''); setNotice('')
+    const res = await fetch(`/api/v1/team/members/${m.user_id}/role`, {
+      method: 'PATCH',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ role }),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (res.ok) {
+      setNotice(String(data.message ?? `${m.email} updated.`))
+      await load()
+    } else {
+      setError(String(data.detail ?? 'Could not change that role.'))
+    }
+  }
+
+  async function reactivate(m: Member) {
+    setError(''); setNotice('')
+    const res = await fetch(`/api/v1/team/members/${m.user_id}/reactivate`, {
+      method: 'POST',
+      credentials: 'include',
+    })
+    const data = await res.json().catch(() => ({}))
+    if (res.ok) {
+      setNotice(String(data.message ?? `${m.email} reactivated.`))
+      await load()
+    } else {
+      setError(String(data.detail ?? 'Could not reactivate that person.'))
+    }
+  }
+
   async function deactivate(m: Member) {
     setError('')
     const res = await fetch(`/api/v1/team/members/${m.user_id}/deactivate`, {
@@ -146,7 +185,7 @@ export default function TeamPage() {
     })
     const data = await res.json().catch(() => ({}))
     if (res.ok) {
-      setNotice(`${m.email} deactivated.`)
+      setNotice(String(data.message ?? `${m.email} deactivated.`))
       await load()
     } else {
       setError(String(data.detail ?? 'Could not deactivate that person.'))
@@ -286,18 +325,42 @@ export default function TeamPage() {
               </p>
               <p className="text-xs text-slate-500">{m.email}</p>
             </div>
-            <span className="rounded-full bg-slate-800 px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wider text-slate-300">
-              {pretty(m.role)}
-            </span>
+            {/* A select, not a badge. The API rank-checks both the role being
+                granted and the person being acted on, so an option the caller
+                cannot use comes back as a 403 with a reason rather than
+                failing silently. */}
+            <select
+              value={m.role}
+              aria-label={`Role for ${m.email}`}
+              onChange={(e) => void changeRole(m, e.target.value)}
+              className="rounded-lg border border-slate-700 bg-slate-950 px-2.5 py-1.5 text-xs text-slate-200 focus:border-indigo-500 focus:outline-none"
+            >
+              {ROLES.map(([value, label]) => (
+                <option key={value} value={value}>{label}</option>
+              ))}
+              {!ROLES.some(([v]) => v === m.role) && (
+                <option value={m.role}>{pretty(m.role)}</option>
+              )}
+            </select>
+
             {!m.is_active && (
-              <span className="text-[11px] font-semibold uppercase tracking-wider text-amber-400">
-                inactive
-              </span>
+              <>
+                <span className="text-[11px] font-semibold uppercase tracking-wider text-amber-400">
+                  inactive
+                </span>
+                <button
+                  onClick={() => void reactivate(m)}
+                  className="text-xs font-medium text-slate-500 transition hover:text-emerald-300"
+                >
+                  Reactivate
+                </button>
+              </>
             )}
             {m.is_active && (
               <button
-                onClick={() => deactivate(m)}
+                onClick={() => void deactivate(m)}
                 className="text-xs font-medium text-slate-500 transition hover:text-red-300"
+                title="Signs them out of every device immediately"
               >
                 Deactivate
               </button>

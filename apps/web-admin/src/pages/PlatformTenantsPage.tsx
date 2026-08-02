@@ -24,6 +24,10 @@ interface Tenant {
   vehicles: number
   reservations: number
   is_self: boolean
+  deleted_at?: string | null
+  restore_days_left?: number | null
+  subscription_tier?: string | null
+  trial_ends_at?: string | null
 }
 
 const STATUS_STYLE: Record<string, string> = {
@@ -40,6 +44,7 @@ export default function PlatformTenantsPage() {
   const [busy, setBusy] = useState<string | null>(null)
 
   const [showCreate, setShowCreate] = useState(false)
+  const [purging, setPurging] = useState<Tenant | null>(null)
   const [deleting, setDeleting] = useState<Tenant | null>(null)
   const [confirmText, setConfirmText] = useState('')
 
@@ -188,8 +193,43 @@ export default function PlatformTenantsPage() {
                 <td className="px-4 py-3">
                   {t.is_self ? (
                     <span className="text-xs text-slate-600">—</span>
+                  ) : t.deleted_at ? (
+                    /* Deleted workspaces used to be filtered out of this list
+                       entirely, which made the restore and purge endpoints
+                       unreachable — the only way to find a workspace is here. */
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        disabled={busy === t.tenant_id}
+                        onClick={() => act(t, '/restore')}
+                        className="rounded-md bg-emerald-500/10 px-2.5 py-1.5 text-xs font-medium text-emerald-300 hover:bg-emerald-500/20 disabled:text-slate-500"
+                      >
+                        Restore
+                      </button>
+                      {(t.restore_days_left ?? 0) > 0 ? (
+                        <span className="text-[11px] text-slate-500">
+                          purgeable in {t.restore_days_left}d
+                        </span>
+                      ) : (
+                        <button
+                          disabled={busy === t.tenant_id}
+                          onClick={() => {
+                            setPurging(t)
+                            setConfirmText('')
+                          }}
+                          className="rounded-md bg-red-500/10 px-2.5 py-1.5 text-xs font-medium text-red-300 hover:bg-red-500/20 disabled:text-slate-500"
+                        >
+                          Purge permanently
+                        </button>
+                      )}
+                    </div>
                   ) : (
                     <div className="flex flex-wrap gap-2">
+                      <a
+                        href={`/platform/${t.tenant_id}`}
+                        className="rounded-md bg-slate-800 px-2.5 py-1.5 text-xs font-medium text-slate-200 hover:bg-slate-700"
+                      >
+                        Open
+                      </a>
                       {t.status === 'SUSPENDED' ? (
                         <button
                           disabled={busy === t.tenant_id}
@@ -232,13 +272,23 @@ export default function PlatformTenantsPage() {
             <h2 className="text-lg font-bold text-white">
               Delete {deleting.name}?
             </h2>
+            {/* This said "It cannot be undone" until deletion became
+                recoverable. Telling an operator a reversible action is
+                permanent makes them reach for Suspend when they meant Delete,
+                or panic afterwards over something that is fine. */}
             <p className="mt-2 text-sm leading-relaxed text-slate-400">
-              This permanently removes the workspace and everything in it —{' '}
+              This takes the workspace out of service and signs everyone out —{' '}
               <strong className="text-slate-200">
                 {deleting.staff} staff, {deleting.locations} branches,{' '}
                 {deleting.vehicles} vehicles, {deleting.reservations} bookings
               </strong>
-              . It cannot be undone. Suspend instead if you may need the data later.
+              . Their booking site, back office and counter all stop working
+              immediately.
+            </p>
+            <p className="mt-2 text-sm leading-relaxed text-slate-400">
+              The data is kept and can be restored for{' '}
+              <strong className="text-slate-200">30 days</strong>. After that it can
+              be purged permanently, which is a separate deliberate action.
             </p>
             <label htmlFor="confirm" className="mt-5 block text-sm font-medium text-slate-300">
               Type <span className="font-mono text-red-300">{deleting.slug}</span> to confirm
@@ -264,7 +314,58 @@ export default function PlatformTenantsPage() {
                 }}
                 className="rounded-lg bg-red-500 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-red-400 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-500"
               >
-                Delete permanently
+                Delete workspace
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {purging && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/70 p-6">
+          <div className="w-full max-w-md rounded-2xl border border-red-500/40 bg-slate-900 p-6">
+            <h2 className="text-lg font-bold text-white">
+              Purge {purging.name}?
+            </h2>
+            {/* This is the irreversible one. It is deliberately reachable only
+                after a workspace has been deleted and its grace period has
+                elapsed, so destruction is never a side effect of taking a
+                customer out of service. */}
+            <p className="mt-2 text-sm leading-relaxed text-slate-400">
+              This destroys every row this workspace owns — bookings, customers,
+              agreements, payments, and the archived and audit copies of all of
+              them. <strong className="text-red-300">There is no undo.</strong>
+            </p>
+            <p className="mt-2 text-sm leading-relaxed text-slate-400">
+              Consider exporting their data first if anyone may ask for it.
+            </p>
+            <label htmlFor="purge-confirm" className="mt-5 block text-sm font-medium text-slate-300">
+              Type <span className="font-mono text-red-300">{purging.slug}</span> to confirm
+            </label>
+            <input
+              id="purge-confirm"
+              value={confirmText}
+              onChange={(e) => setConfirmText(e.target.value)}
+              className="mt-1.5 w-full rounded-lg border border-slate-700 bg-slate-950 px-3.5 py-2.5 font-mono text-sm text-white focus:border-red-500 focus:outline-none"
+            />
+            <div className="mt-6 flex justify-end gap-3">
+              <button
+                onClick={() => setPurging(null)}
+                className="rounded-lg px-4 py-2.5 text-sm font-medium text-slate-300 hover:text-white"
+              >
+                Cancel
+              </button>
+              <button
+                disabled={confirmText !== purging.slug || busy === purging.tenant_id}
+                onClick={async () => {
+                  const ok = await act(purging, '/purge', 'POST', {
+                    confirm_slug: confirmText,
+                  })
+                  if (ok) setPurging(null)
+                }}
+                className="rounded-lg bg-red-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-red-500 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-500"
+              >
+                Purge permanently
               </button>
             </div>
           </div>

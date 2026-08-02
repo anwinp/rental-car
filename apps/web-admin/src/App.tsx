@@ -14,6 +14,7 @@ const _TENANT_HEADERS = () => tenantHeaders()
 import { AuthProvider, RouteGuard, useAuth } from '@rcm/ui/auth'
 import { ForgotPasswordPage } from './pages/ForgotPasswordPage'
 import { ResetPasswordPage } from './pages/ResetPasswordPage'
+import { PlatformTenantDetailPage } from './pages/PlatformTenantDetailPage'
 import SignupPage from './pages/SignupPage'
 import OnboardingPage from './pages/OnboardingPage'
 import VerifyPage from './pages/VerifyPage'
@@ -739,6 +740,7 @@ export default function App() {
                       {/* Access is enforced server-side by the platform-admin
                           flag; the page renders "not found" for everyone else. */}
                       <Route path="/platform" element={<PlatformTenantsPage />} />
+                      <Route path="/platform/:tenantId" element={<PlatformTenantDetailPage />} />
                       <Route path="/team" element={<TeamPage />} />
                       <Route path="/dashboard" element={
                         <RouteGuard roles={MANAGE_ROLES} redirectTo="/unauthorized">

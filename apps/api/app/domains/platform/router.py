@@ -37,18 +37,57 @@ from app.domains.tenants.provisioning import provision_tenant_defaults
 router = APIRouter()
 log = structlog.get_logger()
 
-# Tables a tenant's data lives in, ordered so children go before parents.
-# Used only by hard delete.
+# Every table a tenant's data lives in, ordered so children go before parents.
+# Used only by purge.
+#
+# This list was hand-maintained and had drifted badly: it missed the entire
+# archive schema — retired copies of customers, payments, reservations,
+# agreements and damage claims, carrying exactly the same personal data as the
+# live tables — plus the audit log, the notification log, telematics and
+# webhook records. None of those has an FK to tenants, so DELETE FROM tenants
+# succeeded and left them orphaned against a UUID that no longer resolves.
+#
+# The effect was worse than incomplete. A customer deleting their workspace to
+# discharge a GDPR erasure request was told "deleted N rows" while their
+# renters' names, licence numbers and payment records stayed behind. The report
+# was not merely partial, it was affirmatively wrong.
+#
+# Derived once by querying information_schema for every table carrying a
+# tenant_id, so it can be re-derived rather than remembered:
+#
+#   SELECT table_schema||'.'||table_name FROM information_schema.columns
+#    WHERE column_name = 'tenant_id';
+#
+# Partition children (…_default and the pg_partman monthly partitions) are
+# deliberately absent: deleting through the parent covers them.
 _TENANT_TABLES = (
-    "email_verifications", "task_comments", "tasks", "shift_logs",
-    "customer_goodwill_ledger", "damage_claims", "payments",
+    # Archive first — it references nothing and nothing references it, but it
+    # holds PII and is the part that was silently surviving deletion.
+    "archive.object_registry",
+    "archive.damage_claims", "archive.payments",
+    "archive.rental_agreements", "archive.reservations", "archive.customers",
+    # Logs and ledgers.
+    "audit.audit_events", "notification_log", "telematics_events",
+    "processed_webhooks",
+    # Live data, children before parents.
+    "email_verifications", "staff_invitations", "task_comments", "tasks",
+    "shift_logs", "customer_goodwill_ledger", "damage_claims", "payments",
     "reservation_versions", "rental_agreements", "reservations",
     "vehicle_status_log", "vehicle_blocks", "vehicles",
     "promotion_codes", "rate_schedule_items", "rate_codes",
-    "ota_leads", "ota_channels", "notification_templates", "tax_templates",
-    "extras_catalog", "vehicle_classes", "customers", "locations",
+    "ota_leads", "ota_channels", "notification_templates",
+    "extras_catalog", "vehicle_classes", "customers",
+    # locations before tax_templates: locations.tax_template_id references it
+    # (migration 067 linked every branch to a template), so deleting templates
+    # first is a foreign-key violation. The original ordering had it the wrong
+    # way round and nobody noticed, because the failure was swallowed and the
+    # purge still reported success.
+    "locations", "tax_templates",
     "staff_users",
 )
+
+# How long a soft-deleted workspace is recoverable before it may be purged.
+_PURGE_GRACE_DAYS = 30
 
 
 # ── Access control ───────────────────────────────────────────────────────────
@@ -419,7 +458,7 @@ async def reactivate_tenant(
 # ── Delete ───────────────────────────────────────────────────────────────────
 
 @router.delete("/tenants/{tenant_id}", response_model=ActionResult,
-               summary="Permanently delete a workspace and all its data")
+               summary="Delete a workspace (recoverable for 30 days)")
 async def delete_tenant(
     tenant_id: uuid.UUID,
     body: DeleteTenantRequest,
@@ -427,78 +466,225 @@ async def delete_tenant(
     session: AsyncSession = Depends(get_session_untenanted),
     claims: UserClaims = Depends(require_platform_admin),
 ) -> ActionResult:
-    """Destroy a workspace and every row it owns. There is no undo.
+    """Take a workspace out of service, recoverably.
 
-    Guarded three ways: the caller's own workspace is refused, the slug must be
-    typed back, and the row counts removed are returned and logged so the action
-    leaves a trail.
+    This used to destroy everything immediately with no undo. One correct HTTP
+    call — the slug typed back, which protects against a mis-click but not
+    against a script — and a business's entire operating record was gone.
+
+    Now it marks the workspace deleted and signs everyone out. It stops
+    resolving at once: tenant_id_for_slug filters deleted_at, so the storefront,
+    back office and counter all go dark immediately and the data is still there.
+    Purging is a separate, explicit act (POST .../purge) and is refused until
+    the grace period has elapsed.
+
+    tenants.deleted_at has existed since the original schema and was filtered
+    in eight places while being written by nothing at all — soft delete was
+    scaffolding nobody had connected.
     """
     if str(tenant_id) == str(claims.tenant_id):
         raise HTTPException(400, "You cannot delete the workspace you are signed in to.")
 
+    # The caller's own tenant is bound onto every transaction by the ContextVar
+    # hook, even on an untenanted session, so clear it or this only ever sees
+    # the platform admin's own row — the bug that made suspend and reactivate
+    # silently useless.
+    await session.execute(text("SELECT set_config('app.current_tenant_id', '', true)"))
+
     row = (
         await session.execute(
-            text("SELECT slug, legal_name FROM tenants WHERE tenant_id = :t"),
+            text(
+                "SELECT slug, legal_name, deleted_at FROM tenants "
+                " WHERE tenant_id = :t"
+            ),
             {"t": str(tenant_id)},
         )
     ).mappings().first()
     if not row:
         raise HTTPException(404, "No such workspace.")
+    if row["deleted_at"] is not None:
+        raise HTTPException(409, f"'{row['slug']}' is already deleted.")
 
     if body.confirm_slug.strip().lower() != row["slug"].lower():
-        raise HTTPException(
-            400,
-            f"Type '{row['slug']}' exactly to confirm deletion.",
-        )
+        raise HTTPException(400, f"Type '{row['slug']}' exactly to confirm deletion.")
 
-    # Adopt the target so RLS scopes every delete to it — a missing WHERE clause
-    # here cannot reach another workspace's rows.
+    await session.execute(
+        text(
+            "UPDATE tenants SET deleted_at = now(), status = 'CANCELLED', "
+            "       updated_at = now() "
+            " WHERE tenant_id = :t"
+        ),
+        {"t": str(tenant_id)},
+    )
+    signed_out = await _revoke_tenant_sessions(session, str(tenant_id))
+    await invalidate_slug_cache(row["slug"])
+
+    log.warning(
+        "platform_tenant_soft_deleted",
+        slug=row["slug"], tenant_id=str(tenant_id), by=str(claims.user_id),
+        ip=request.client.host if request.client else None,
+        sessions_ended=signed_out,
+    )
+    return ActionResult(
+        ok=True,
+        message=(
+            f"{row['legal_name']} ({row['slug']}) is deleted and {signed_out} "
+            f"staff signed out. Data is retained and recoverable for "
+            f"{_PURGE_GRACE_DAYS} days."
+        ),
+    )
+
+
+@router.post("/tenants/{tenant_id}/restore", response_model=ActionResult,
+             summary="Undo a deletion within the grace period")
+async def restore_tenant(
+    tenant_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session_untenanted),
+    claims: UserClaims = Depends(require_platform_admin),
+) -> ActionResult:
+    """Bring back a soft-deleted workspace.
+
+    Restored SUSPENDED rather than ACTIVE: whatever prompted the deletion is
+    unlikely to have resolved itself, and an operator finding their storefront
+    live again without anyone deciding so is the wrong surprise. Reactivate is
+    a separate, deliberate step.
+    """
+    await session.execute(text("SELECT set_config('app.current_tenant_id', '', true)"))
+
+    res = await session.execute(
+        text(
+            "UPDATE tenants SET deleted_at = NULL, status = 'SUSPENDED', "
+            "       updated_at = now() "
+            " WHERE tenant_id = :t AND deleted_at IS NOT NULL RETURNING slug"
+        ),
+        {"t": str(tenant_id)},
+    )
+    row = res.first()
+    if not row:
+        raise HTTPException(404, "No deleted workspace with that id.")
+
+    await invalidate_slug_cache(row[0])
+    log.warning("platform_tenant_restored", slug=row[0], by=str(claims.user_id))
+    return ActionResult(
+        ok=True,
+        message=f"{row[0]} is restored, and suspended. Reactivate it to resume trading.",
+    )
+
+
+@router.post("/tenants/{tenant_id}/purge", response_model=ActionResult,
+             summary="Permanently destroy a deleted workspace's data")
+async def purge_tenant(
+    tenant_id: uuid.UUID,
+    body: DeleteTenantRequest,
+    request: Request,
+    session: AsyncSession = Depends(get_session_untenanted),
+    claims: UserClaims = Depends(require_platform_admin),
+) -> ActionResult:
+    """Destroy every row a deleted workspace owns. There is no undo.
+
+    Separated from delete so that destruction is never a side effect of
+    removing a customer from service. Refused unless the workspace is already
+    soft-deleted and the grace period has elapsed, so the irreversible step
+    cannot be reached in a single call.
+
+    Unlike the old delete, a table that fails is reported as a failure. That
+    version caught every exception per table, logged a warning nobody reads,
+    and still returned ok=True with the table simply absent from the counts —
+    indistinguishable from "it had no rows".
+    """
+    if str(tenant_id) == str(claims.tenant_id):
+        raise HTTPException(400, "You cannot purge the workspace you are signed in to.")
+
+    await session.execute(text("SELECT set_config('app.current_tenant_id', '', true)"))
+
+    row = (
+        await session.execute(
+            text(
+                "SELECT slug, legal_name, deleted_at, "
+                "       (now() - deleted_at) >= make_interval(days => :g) AS ripe "
+                "  FROM tenants WHERE tenant_id = :t"
+            ),
+            {"t": str(tenant_id), "g": _PURGE_GRACE_DAYS},
+        )
+    ).mappings().first()
+    if not row:
+        raise HTTPException(404, "No such workspace.")
+    if row["deleted_at"] is None:
+        raise HTTPException(
+            409,
+            "Delete this workspace first. Purge only destroys data that is "
+            "already out of service.",
+        )
+    if not row["ripe"]:
+        raise HTTPException(
+            409,
+            f"'{row['slug']}' was deleted less than {_PURGE_GRACE_DAYS} days ago. "
+            "It stays recoverable until then.",
+        )
+    if body.confirm_slug.strip().lower() != row["slug"].lower():
+        raise HTTPException(400, f"Type '{row['slug']}' exactly to confirm.")
+
+    # Adopt the target so RLS scopes every delete to it — a missing WHERE
+    # clause here cannot reach another workspace's rows.
     await session.execute(
         text("SELECT set_config('app.current_tenant_id', :t, true)"),
         {"t": str(tenant_id)},
     )
 
     deleted: dict[str, int] = {}
+    failed: dict[str, str] = {}
     for table in _TENANT_TABLES:
         # Each delete gets its own SAVEPOINT. In PostgreSQL a single failed
-        # statement aborts the entire transaction and every later command is
-        # ignored, so catching the error without a savepoint would silently turn
-        # the rest of the deletion into no-ops and still report success.
+        # statement aborts the whole transaction and every later command is
+        # ignored, so catching without a savepoint would turn the rest of the
+        # purge into no-ops and still report success.
         try:
             async with session.begin_nested():
                 # ALWAYS scope by tenant_id explicitly. Relying on RLS alone is
                 # wrong for deletion in two ways, both of which destroyed data
-                # the first time this ran:
-                #   * shared-catalogue tables have USING (tenant_id IS NULL OR
-                #     ...), and DELETE is filtered by USING — so an unscoped
-                #     DELETE removed the GLOBAL rows every tenant shares;
-                #   * tables without RLS (email_verifications) were not filtered
-                #     at all, so it removed every tenant's rows.
-                res = await session.execute(  # noqa: S608
+                # the first time this ran: shared-catalogue policies admit
+                # tenant_id IS NULL and DELETE is filtered by USING, so an
+                # unscoped DELETE removed the GLOBAL rows every tenant shares;
+                # and tables without RLS were not filtered at all.
+                res = await session.execute(  # noqa: S608 — names are a literal tuple
                     text(f"DELETE FROM {table} WHERE tenant_id = :t"),
                     {"t": str(tenant_id)},
                 )
                 if res.rowcount:
                     deleted[table] = res.rowcount
-        except Exception as exc:  # noqa: BLE001 — absent table, or a FK we do not own
-            log.warning("platform_delete_skipped", table=table, error=str(exc)[:160])
+        except Exception as exc:  # noqa: BLE001
+            failed[table] = str(exc)[:200]
+            log.error("platform_purge_table_failed", table=table, error=str(exc)[:200])
 
-    await session.execute(
-        text("SELECT set_config('app.current_tenant_id', '', true)")
-    )
+    await session.execute(text("SELECT set_config('app.current_tenant_id', '', true)"))
+
+    if failed:
+        # Do not remove the tenant row: it is the only handle left on whatever
+        # survived, and reporting success over a partial purge is how personal
+        # data goes missing from a deletion report while remaining in the
+        # database.
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"Purge incomplete — {len(failed)} table(s) failed and the "
+                f"workspace was NOT removed: {', '.join(sorted(failed))}. "
+                "Nothing has been reported as deleted that was not."
+            ),
+        )
+
     await session.execute(
         text("DELETE FROM tenants WHERE tenant_id = :t"), {"t": str(tenant_id)}
     )
     await invalidate_slug_cache(row["slug"])
 
     log.warning(
-        "platform_tenant_deleted",
+        "platform_tenant_purged",
         slug=row["slug"], tenant_id=str(tenant_id), by=str(claims.user_id),
         ip=request.client.host if request.client else None, rows=deleted,
     )
     total = sum(deleted.values())
     return ActionResult(
         ok=True,
-        message=f"Deleted {row['legal_name']} ({row['slug']}) and {total} rows.",
+        message=f"Purged {row['legal_name']} ({row['slug']}) and {total} rows.",
         deleted_rows=deleted,
     )

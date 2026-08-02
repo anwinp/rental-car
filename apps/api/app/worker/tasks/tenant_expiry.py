@@ -227,3 +227,112 @@ async def _revoke_all(session, tenant_id: str) -> None:
     except Exception:  # noqa: BLE001 — the epoch is the durable half
         log.warning("expiry_session_sweep_failed", tenant_id=tenant_id, exc_info=True)
     await session.execute(text("SELECT set_config('app.current_tenant_id', '', true)"))
+
+
+# ── Abandoned paid signups ───────────────────────────────────────────────────
+
+# How long a workspace that chose a paid plan may sit unpaid. Long enough to
+# survive somebody signing up on a Friday evening, closing the tab, and coming
+# back on Monday morning via the link in their email.
+_UNPAID_GRACE_HOURS = 48
+
+
+@celery_app.task(name="tenants.sweep_unpaid_signups")
+def sweep_unpaid_signups() -> dict:
+    """Remove workspaces created for a paid plan that was never paid for.
+
+    Without this, every abandoned checkout leaves a workspace holding a slug
+    nobody else can have — and the address is the scarce thing here, not the
+    row.
+
+    Deliberately a SOFT delete, not a purge. "Delete it" has to mean the
+    workspace stops existing for the person who abandoned it and the address
+    comes free; it does not have to mean the data is unrecoverable within the
+    hour. Somebody whose card was declined twice and then succeeded on a
+    different device should be recoverable by support, and the existing 30-day
+    restore window does that. The purge path erases it properly when the grace
+    period is up.
+
+    Four conditions, all required, because the cost of being wrong here is
+    deleting a paying customer's business:
+
+      * they chose a paid plan and it is still outstanding
+      * no subscription exists for them in any state Stripe would call live
+      * the grace period has elapsed
+      * the workspace holds no operational data — the same guard
+        sweep_unverified uses, so a workspace that somehow started trading is
+        left alone for a human
+    """
+    return asyncio.run(_sweep_unpaid())
+
+
+async def _sweep_unpaid() -> dict:
+    from app.core.database import AsyncSessionLocal
+
+    removed: list[str] = []
+    kept: list[str] = []
+
+    async with AsyncSessionLocal() as session:
+        rows = (
+            await session.execute(
+                text(
+                    """
+                    SELECT t.tenant_id::text AS tid, t.slug, t.primary_email
+                      FROM tenants t
+                     WHERE t.deleted_at IS NULL
+                       AND t.signup_plan_code IS NOT NULL
+                       AND t.created_at < now() - make_interval(hours => :grace)
+                       AND NOT EXISTS (
+                             SELECT 1 FROM tenant_subscriptions s
+                              WHERE s.tenant_id = t.tenant_id
+                                AND s.status IN ('trialing','active','past_due','unpaid')
+                           )
+                    """
+                ),
+                {"grace": _UNPAID_GRACE_HOURS},
+            )
+        ).mappings().all()
+
+        for row in rows:
+            await session.execute(
+                text("SELECT set_config('app.current_tenant_id', :t, true)"),
+                {"t": row["tid"]},
+            )
+            counts = (
+                await session.execute(
+                    text(
+                        "SELECT (SELECT count(*) FROM reservations) AS res,"
+                        "       (SELECT count(*) FROM vehicles)     AS veh,"
+                        "       (SELECT count(*) FROM customers)    AS cust"
+                    )
+                )
+            ).mappings().first() or {}
+            if any(counts.get(k, 0) for k in ("res", "veh", "cust")):
+                # They started using it. Whatever happened with the payment,
+                # that is a conversation, not a deletion.
+                kept.append(row["slug"])
+                log.warning("unpaid_signup_has_data", slug=row["slug"], **counts)
+                continue
+
+            await session.execute(
+                text("SELECT set_config('app.current_tenant_id', '', true)")
+            )
+            await session.execute(
+                text(
+                    "UPDATE tenants "
+                    "   SET deleted_at = now(), status = 'CANCELLED', "
+                    "       signup_plan_code = NULL, updated_at = now() "
+                    " WHERE tenant_id = CAST(:t AS uuid)"
+                ),
+                {"t": row["tid"]},
+            )
+            await _revoke_all(session, row["tid"])
+            removed.append(row["slug"])
+            log.warning("unpaid_signup_removed", slug=row["slug"],
+                        email=row["primary_email"])
+
+        await session.commit()
+
+    log.info("sweep_unpaid_complete", removed=len(removed), kept=len(kept),
+             removed_slugs=removed)
+    return {"removed": removed, "kept": kept}

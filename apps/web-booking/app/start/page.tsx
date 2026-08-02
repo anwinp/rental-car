@@ -61,7 +61,14 @@ export default function StartPage() {
   const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const [done, setDone] = useState<null | { admin_url: string; email_sent: boolean }>(null)
+  const [done, setDone] = useState<null | {
+    admin_url: string
+    booking_url: string
+    counter_url: string
+    slug: string
+    email_sent: boolean
+    checkout_url: string | null
+  }>(null)
 
   useEffect(() => {
     const wanted = new URLSearchParams(window.location.search).get('plan')?.toUpperCase() ?? ''
@@ -105,13 +112,19 @@ export default function StartPage() {
         setError(String(detail ?? 'Could not create the workspace.'))
         return
       }
-      // Straight to Stripe when there is something to pay. Anything else and
-      // the workspace is already usable once the address is confirmed.
-      if (data.checkout_url) {
-        window.location.href = data.checkout_url
-        return
-      }
-      setDone({ admin_url: data.admin_url, email_sent: Boolean(data.email_sent) })
+      // Never redirect straight to Stripe. Somebody who has just typed their
+      // company details deserves to see what was created before being asked to
+      // pay for it — the previous version threw them at a payment page having
+      // shown them nothing at all, so they had no idea whether it had worked
+      // or what they were buying.
+      setDone({
+        admin_url: data.admin_url,
+        booking_url: data.booking_url,
+        counter_url: data.counter_url,
+        slug: data.slug,
+        email_sent: Boolean(data.email_sent),
+        checkout_url: data.checkout_url ?? null,
+      })
     } catch {
       setError('Could not reach the server.')
     } finally {
@@ -141,23 +154,69 @@ export default function StartPage() {
         {done ? (
           <div style={{ marginTop: space.lg }}>
             <h1 style={{ ...t.displayLg, color: color.ink, margin: `0 0 ${space.xs}px` }}>
-              Your workspace is ready.
+              {done.checkout_url ? 'Your workspace is reserved.' : 'Your workspace is ready.'}
             </h1>
-            <p style={{ ...t.bodyMd, color: color.body, margin: `0 0 ${space.sm}px` }}>
-              {done.email_sent
-                ? 'Confirm your email address using the link we just sent, then sign in.'
-                : 'Confirm your email address, then sign in.'}
+            <p style={{ ...t.bodyMd, color: color.body, margin: `0 0 ${space.md}px` }}>
+              {done.checkout_url
+                ? 'These are your three addresses. They go live as soon as your payment goes through.'
+                : done.email_sent
+                  ? 'These are your three addresses. Confirm your email using the link we just sent, then sign in.'
+                  : 'These are your three addresses. Confirm your email address, then sign in.'}
             </p>
-            <a
-              href={done.admin_url}
-              style={{
-                ...t.button, display: 'inline-block', background: color.primary,
-                color: color.onPrimary, padding: `${space.xxs}px ${space.sm}px`,
-                borderRadius: rounded.none, textDecoration: 'none',
-              }}
-            >
-              Go to your workspace
-            </a>
+
+            {/* Shown before payment, not after. What they are buying should be
+                visible at the moment they are asked to pay for it. */}
+            <div style={{ display: 'grid', gap: space.xs, marginBottom: space.md }}>
+              {[
+                ['Booking site', done.booking_url, 'Where your customers reserve cars.'],
+                ['Back office', done.admin_url, 'Where you run the business.'],
+                ['Counter', done.counter_url, 'Check-out and check-in on a tablet.'],
+              ].map(([label, url, blurb]) => (
+                <div key={label} style={{ border: `1px solid ${color.hairline}`, padding: space.xs }}>
+                  <p style={{ ...t.captionUpper, color: color.muted, margin: 0 }}>{label}</p>
+                  <a href={url} style={{ ...t.bodyMd, color: color.ink, textDecoration: 'none',
+                                         wordBreak: 'break-all', display: 'block',
+                                         margin: `${space.xxxs}px 0` }}>
+                    {url}
+                  </a>
+                  <p style={{ ...t.bodyMd, fontSize: 13, color: color.muted, margin: 0 }}>{blurb}</p>
+                </div>
+              ))}
+            </div>
+
+            {done.checkout_url ? (
+              <>
+                <a
+                  href={done.checkout_url}
+                  style={{
+                    ...t.button, display: 'inline-block', background: color.primary,
+                    color: color.onPrimary, padding: `${space.xs}px ${space.sm}px`,
+                    borderRadius: rounded.none, textDecoration: 'none',
+                  }}
+                >
+                  Pay and activate
+                </a>
+                {/* Said plainly, because it is true and because a workspace
+                    quietly disappearing without warning would be worse. */}
+                <p style={{ ...t.bodyMd, fontSize: 13, color: color.muted,
+                            margin: `${space.xs}px 0 0` }}>
+                  Payment is taken by Stripe; card details never reach this site.
+                  If it is not completed within 48 hours this workspace is
+                  removed and the address is released for someone else.
+                </p>
+              </>
+            ) : (
+              <a
+                href={done.admin_url}
+                style={{
+                  ...t.button, display: 'inline-block', background: color.primary,
+                  color: color.onPrimary, padding: `${space.xs}px ${space.sm}px`,
+                  borderRadius: rounded.none, textDecoration: 'none',
+                }}
+              >
+                Go to your workspace
+              </a>
+            )}
           </div>
         ) : (
           <>

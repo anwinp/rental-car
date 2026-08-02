@@ -164,6 +164,14 @@ celery_app.conf.update(
             "schedule": crontab(minute=35, hour=3),
             "options": {"queue": "batch", "expires": 3600},
         },
+        # Abandoned paid signups — hourly. A slug held by a workspace nobody
+        # paid for is an address nobody else can have, so this runs often
+        # enough to release it promptly once the 48-hour grace has passed.
+        "sweep-unpaid-signups": {
+            "task": "tenants.sweep_unpaid_signups",
+            "schedule": crontab(minute=15),
+            "options": {"queue": "batch", "expires": 3000},
+        },
         # Pre-auth renewal — every 6 hours
         "renew-expiring-preauths": {
             "task": "app.worker.tasks.rate_filing.renew_expiring_preauths",

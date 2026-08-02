@@ -158,8 +158,10 @@ const RETURNS  = [...ADMIN, UserRole.BRANCH_MANAGER, UserRole.REGIONAL_MANAGER, 
 /** Routes whose pages render placeholder data rather than the tenant's own. */
 const // /reports was a chart of invented constants; it is now driven by the
 // reporting API and every figure belongs to the workspace reading it.
-// /corporate stays hidden: its router still holds only a health check.
-UNBUILT_HREFS = new Set(['/corporate'])
+// Both pages are now driven by real APIs. Nothing is hidden, so the set is
+// empty rather than the flag being removed — the next fabricated page has
+// somewhere to go.
+UNBUILT_HREFS = new Set<string>([])
 
 const GROUPS = [
   { label: 'Dashboards', items: [

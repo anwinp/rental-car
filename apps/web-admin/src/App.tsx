@@ -362,7 +362,7 @@ function LoginPage() {
               <button key={m} type="button" onClick={() => { setLoginMethod(m); setOtpSent(false); setOtpError('') }}
                 style={{ flex: 1, height: 36, fontSize: 12, fontWeight: 600, borderRadius: 0,
                   background: loginMethod === m ? 'var(--text-1)' : 'var(--card-bg)',
-                  color: loginMethod === m ? 'var(--canvas)' : 'var(--text-2)',
+                  color: loginMethod === m ? 'var(--page-bg)' : 'var(--text-2)',
                   border: '1px solid var(--border)', cursor: 'pointer' }}>
                 {m === 'email' ? 'Email & Password' : 'Phone (OTP)'}
               </button>

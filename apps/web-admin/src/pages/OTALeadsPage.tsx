@@ -86,7 +86,7 @@ export default function OTALeadsPage() {
             <button key={f} onClick={() => setFilter(f)} style={{
               height: 32, padding: '0 14px', fontSize: 12, fontWeight: 600, borderRadius: 0,
               background: filter === f ? 'var(--text-1)' : 'var(--card-bg)',
-              color: filter === f ? 'var(--canvas)' : 'var(--text-2)',
+              color: filter === f ? 'var(--page-bg)' : 'var(--text-2)',
               border: '1px solid var(--border)', cursor: 'pointer',
             }}>{f}</button>
           ))}
@@ -169,7 +169,7 @@ export default function OTALeadsPage() {
             <p style={{ fontSize: 13, color: 'var(--text-2)', margin: 0 }}>Reject booking from {rejectTarget.customer_name}?</p>
             <textarea value={rejectReason} onChange={e => setRejectReason(e.target.value)}
               placeholder="Reason for rejection" rows={3}
-              style={{ width: '100%', padding: 10, fontSize: 13, background: 'var(--canvas)', color: 'var(--text-1)', border: '1px solid var(--border)', borderRadius: 4, resize: 'vertical', boxSizing: 'border-box' }} />
+              style={{ width: '100%', padding: 10, fontSize: 13, background: 'var(--card-bg)', color: 'var(--text-1)', border: '1px solid var(--border)', borderRadius: 4, resize: 'vertical', boxSizing: 'border-box' }} />
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
               <button onClick={() => setRejectTarget(null)} style={{ height: 36, padding: '0 16px', fontSize: 12, background: 'var(--card-bg)', color: 'var(--text-1)', border: '1px solid var(--border)', borderRadius: 0, cursor: 'pointer' }}>Cancel</button>
               <button onClick={() => rejectMutation.mutate({ leadId: rejectTarget.lead_id, reason: rejectReason })}

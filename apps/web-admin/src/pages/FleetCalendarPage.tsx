@@ -410,7 +410,7 @@ export function FleetCalendarPage() {
               <button key={mode} onClick={() => setViewMode(mode)} style={{
                 height: 32, padding: '0 12px', fontSize: 12, fontWeight: 600, borderRadius: 0,
                 background: viewMode === mode ? 'var(--text-1)' : 'var(--card-bg)',
-                color: viewMode === mode ? 'var(--canvas)' : 'var(--text-2)',
+                color: viewMode === mode ? 'var(--page-bg)' : 'var(--text-2)',
                 border: '1px solid var(--border)', cursor: 'pointer',
               }}>{mode === 'twoweek' ? '2 Weeks' : 'Month'}</button>
             ))}

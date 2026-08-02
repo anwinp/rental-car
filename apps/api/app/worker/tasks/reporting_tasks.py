@@ -343,10 +343,15 @@ def calculate_fleet_utilization(
             report_id, tenant_id,
             status="READY",
             object_key=f"tenants/{tenant_id}/utilization/{period_start}_{period_end}/fleet_utilization.csv",
-            row_count=result.get("vehicle_count"),
+            # Keys taken from what the task actually returns. The first
+            # version guessed at vehicle_count and utilization_pct, neither of
+            # which exists, so every summary field came back null and the list
+            # showed a report with nothing in it.
+            row_count=result.get("total_vehicles"),
             summary={
-                "utilization_pct": result.get("utilization_pct"),
-                "vehicles": result.get("vehicle_count"),
+                "utilisation": f"{result.get('overall_utilization_pct')}%",
+                "vehicles": result.get("total_vehicles"),
+                "vehicle_days_rented": result.get("total_vehicle_days_rented"),
                 "period": f"{period_start} to {period_end}",
             },
             completed_at=datetime.now(timezone.utc),

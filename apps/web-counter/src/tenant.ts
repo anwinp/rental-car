@@ -74,11 +74,21 @@ export function currentSlug(): string | null {
   return slugFromHostname() ?? fromQuery ?? storedSlug()
 }
 
-/** Ask the server which workspace this is. Null when there is no such slug. */
-export async function fetchTenantConfig(slug: string): Promise<TenantConfig | null> {
+/**
+ * Ask the server which workspace this is. Null when there is no such slug.
+ *
+ * Passing no slug is the normal case: the API derives the tenant from the Host
+ * header using the same rules it enforces isolation with. Deriving it here
+ * re-implements those rules in the browser, and slugFromHostname does not know
+ * about the "-rcm-counter" platform suffix — so on a tenant hostname it asked
+ * for a workspace named "acme-rcm-counter" and took a 404.
+ */
+export async function fetchTenantConfig(slug?: string | null): Promise<TenantConfig | null> {
   try {
     const res = await fetch(
-      `/api/v1/public/tenant-config?slug=${encodeURIComponent(slug)}`,
+      slug
+        ? `/api/v1/public/tenant-config?slug=${encodeURIComponent(slug)}`
+        : '/api/v1/public/tenant-config',
     )
     if (!res.ok) return null
     return (await res.json()) as TenantConfig
@@ -104,9 +114,19 @@ export function setCachedTenant(config: TenantConfig | null): void {
 /** Resolve the active workspace, using the cache when already known. */
 export async function resolveTenant(): Promise<TenantConfig | null> {
   if (cached) return cached
-  const slug = currentSlug()
-  if (!slug) return null
-  const config = await fetchTenantConfig(slug)
+
+  // On a tenant hostname, ask with no slug and let the server read the Host.
+  // The stored/query slug stays as the fallback for local development, where
+  // the host carries no tenant label at all.
+  const onTenantHost = !NON_TENANT_HOSTS.has(window.location.hostname)
+  let config = onTenantHost ? await fetchTenantConfig() : null
+
+  if (!config) {
+    const fallback =
+      new URLSearchParams(window.location.search).get('workspace') ?? storedSlug()
+    if (fallback) config = await fetchTenantConfig(fallback)
+  }
+
   if (config) setCachedTenant(config)
   return config
 }

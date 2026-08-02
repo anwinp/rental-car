@@ -209,6 +209,16 @@ async def stripe_webhook(
         log.info("webhook_no_tenant", type=event_type, event_id=event_id)
         return Response(status_code=200)
 
+    # Adopt the workspace the event is about, before touching anything under
+    # RLS. processed_webhooks is tenant-scoped, and with no tenant bound the
+    # policy fails in BOTH directions: the insert is rejected outright, and —
+    # more quietly — the dedup SELECT below matches nothing, so every Stripe
+    # retry would be treated as a first delivery and applied again.
+    await session.execute(
+        text("SELECT set_config('app.current_tenant_id', :t, true)"),
+        {"t": tenant_id},
+    )
+
     # Idempotency. Stripe delivers at least once and retries on any non-2xx, so
     # a handler that is not idempotent will eventually double-apply something.
     already = (

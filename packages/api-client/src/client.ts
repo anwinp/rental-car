@@ -79,7 +79,16 @@ apiClient.use({
   onResponse({ response }) {
     if (!response.ok) {
       const ct = response.headers.get('content-type') ?? ''
-      if (ct.includes('application/json')) {
+      // Any JSON media type, not just "application/json". The API returns its
+      // errors as RFC 7807 "application/problem+json", which does NOT contain
+      // the substring "application/json" — so the old check sent every single
+      // API error down the non-JSON path below and replaced the message the
+      // server wrote with "Server error: 401 Unauthorized".
+      //
+      // That is how a workspace awaiting email confirmation reported a raw
+      // status code instead of "Confirm your email address to activate this
+      // workspace.", and it applied to every error surface in the app.
+      if (ct.includes('json')) {
         return response.json().then((body: Record<string, unknown>) => {
           const err = new Error(
             typeof body?.detail === 'string' ? body.detail : response.statusText

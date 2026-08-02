@@ -228,7 +228,7 @@ function LoginPage() {
           setMfaCode('')
           return
         }
-        setError(typeof apiError === 'string' ? apiError : 'Invalid email or password')
+        setError(messageFrom(apiError, 'Invalid email or password'))
         return
       }
       goToLanding(data)
@@ -250,7 +250,9 @@ function LoginPage() {
         body: { challenge_id: mfaChallenge, code: mfaCode.trim() },
       })
       if (apiError || !data) {
-        setError('That code was not accepted. Check your authenticator and try again.')
+        setError(
+          messageFrom(apiError, 'That code was not accepted. Check your authenticator and try again.'),
+        )
         setMfaCode('')
         return
       }
@@ -645,6 +647,30 @@ function TenantBoot({ children }: { children: React.ReactNode }) {
   return <>{children}</>
 }
 
+
+/**
+ * The message the API actually sent, in preference to a guess.
+ *
+ * Sign-in previously reported every failure as "Invalid email or password", or
+ * fell through to a raw "error: 401". Both are wrong when the real cause is
+ * something the operator can act on — an unactivated workspace returns
+ * "Confirm your email address to activate this workspace.", and showing a
+ * status code instead left people retrying a password that was never wrong.
+ *
+ * Responses are RFC 7807 problem+json, so `detail` is the human-facing field.
+ */
+function messageFrom(apiError: unknown, fallback: string): string {
+  if (typeof apiError === 'string' && apiError.trim()) return apiError
+  const e = apiError as { detail?: unknown; title?: unknown; message?: unknown } | null
+  if (e && typeof e.detail === 'string' && e.detail.trim()) return e.detail
+  if (Array.isArray(e?.detail)) {
+    const first = (e!.detail as Array<{ msg?: unknown }>)[0]
+    if (first?.msg) return String(first.msg)
+  }
+  if (e && typeof e.title === 'string' && e.title.trim()) return e.title
+  if (e && typeof e.message === 'string' && e.message.trim()) return e.message
+  return fallback
+}
 
 export default function App() {
   const EXEC_ROLES   = [UserRole.EXECUTIVE, UserRole.SYSTEM_ADMIN, UserRole.SUPER_ADMIN]

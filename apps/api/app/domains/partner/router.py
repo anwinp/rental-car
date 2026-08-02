@@ -129,7 +129,7 @@ async def list_vehicles(
                 "  LEFT JOIN vehicle_classes vc ON vc.class_id = v.vehicle_class_id "
                 "  LEFT JOIN locations l ON l.location_id = v.home_location_id "
                 " WHERE v.tenant_id = :t AND v.deleted_at IS NULL "
-                "   AND (:st IS NULL OR v.status::text = :st) "
+                "   AND (CAST(:st AS text) IS NULL OR v.status::text = CAST(:st AS text)) "
                 " ORDER BY v.created_at DESC LIMIT :lim OFFSET :off"
             ),
             {"t": str(caller.tenant_id), "st": status, "lim": limit, "off": offset},
@@ -187,8 +187,8 @@ async def list_reservations(
                 "  FROM reservations r "
                 "  LEFT JOIN vehicle_classes vc ON vc.class_id = r.vehicle_class_id "
                 " WHERE r.tenant_id = :t AND r.deleted_at IS NULL "
-                "   AND (:since IS NULL OR r.created_at >= :since) "
-                "   AND (:st IS NULL OR r.status::text = :st) "
+                "   AND (CAST(:since AS date) IS NULL OR r.created_at >= CAST(:since AS date)) "
+                "   AND (CAST(:st AS text) IS NULL OR r.status::text = CAST(:st AS text)) "
                 " ORDER BY r.created_at DESC LIMIT :lim OFFSET :off"
             ),
             {"t": str(caller.tenant_id), "since": since, "st": status, "lim": limit, "off": offset},

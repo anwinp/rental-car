@@ -12,7 +12,7 @@ import { useNavigate } from 'react-router-dom'
 type SlugState =
   | { kind: 'idle' }
   | { kind: 'checking' }
-  | { kind: 'available'; slug: string }
+  | { kind: 'available'; slug: string; bookingUrl?: string }
   | { kind: 'taken'; reason: string }
 
 function slugify(name: string): string {
@@ -61,6 +61,20 @@ export default function SignupPage() {
     if (!slugTouched) setSlug(slugify(companyName))
   }, [companyName, slugTouched])
 
+  // Shown before the first availability response lands. Derived from the host
+  // this app is served on: rcm-admin.ceez.ai -> "-rcm.ceez.ai", because a
+  // workspace sits alongside the platform label rather than below it. Falls
+  // back to a plain subdomain on a two-label apex, which is the dev shape.
+  const hostSuffix = (() => {
+    if (typeof window === 'undefined') return ''
+    const [name, port] = window.location.host.split(':')
+    const parts = name.split('.').filter(Boolean)
+    const tail = port ? `:${port}` : ''
+    if (parts.length < 3) return `.${name}${tail}`
+    const platform = parts[0].replace(/-admin$/, '')
+    return `-${platform}.${parts.slice(1).join('.')}${tail}`
+  })()
+
   useEffect(() => {
     if (slug.length < 3) {
       setSlugState({ kind: 'idle' })
@@ -76,7 +90,7 @@ export default function SignupPage() {
         const data = await res.json()
         setSlugState(
           data.available
-            ? { kind: 'available', slug: data.slug }
+            ? { kind: 'available', slug: data.slug, bookingUrl: data.booking_url }
             : { kind: 'taken', reason: data.reason ?? 'Not available.' },
         )
       } catch {
@@ -373,8 +387,12 @@ export default function SignupPage() {
                   placeholder="harbor-rentals"
                   className="min-w-0 flex-1 bg-transparent px-3.5 py-2.5 font-mono text-sm text-white placeholder-slate-600 focus:outline-none"
                 />
+                {/* The suffix is whatever this deployment actually serves. It
+                    was hardcoded to ".rcm.app" — a domain that does not exist
+                    here — so the address shown during signup was never the one
+                    the workspace got. */}
                 <span className="flex items-center border-l border-slate-700 bg-slate-800/60 px-3 font-mono text-xs text-slate-400">
-                  .rcm.app
+                  {hostSuffix}
                 </span>
               </div>
               <p className="mt-1.5 min-h-[1.25rem] text-xs">
@@ -383,7 +401,8 @@ export default function SignupPage() {
                 )}
                 {slugState.kind === 'available' && (
                   <span className="text-emerald-400">
-                    {slugState.slug}.rcm.app is available
+                    {slugState.bookingUrl?.replace(/^https?:\/\//, '') ??
+                      `${slugState.slug}${hostSuffix}`}{' '}is available
                   </span>
                 )}
                 {slugState.kind === 'taken' && (

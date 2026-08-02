@@ -29,6 +29,7 @@ from app.core.tenancy import (
     RESERVED_SLUGS,
     extract_slug,
     invalidate_slug_cache,
+    tenant_host,
     tenant_id_for_slug,
 )
 from app.domains.tenants.provisioning import provision_tenant_defaults
@@ -126,6 +127,11 @@ class SlugCheckResponse(BaseModel):
     slug: str
     available: bool
     reason: str | None = None
+    # The address the workspace would actually get. Returned so the signup form
+    # shows the real hostname instead of guessing one — it used to render a
+    # hardcoded ".rcm.app", a domain this deployment does not serve.
+    booking_url: str | None = None
+    admin_url: str | None = None
 
 
 class TenantConfigResponse(BaseModel):
@@ -212,7 +218,13 @@ async def slug_available(
         return SlugCheckResponse(
             slug=candidate, available=False, reason="Already taken."
         )
-    return SlugCheckResponse(slug=candidate, available=True)
+    scheme = settings.public_url_scheme
+    return SlugCheckResponse(
+        slug=candidate,
+        available=True,
+        booking_url=f"{scheme}://{tenant_host(candidate, settings.public_booking_host)}",
+        admin_url=f"{scheme}://{tenant_host(candidate, settings.public_admin_host)}",
+    )
 
 
 @router.post(
@@ -323,8 +335,12 @@ async def register(
     await invalidate_slug_cache(body.slug)
 
     scheme = settings.public_url_scheme
-    booking_url = f"{scheme}://{body.slug}.{settings.public_booking_host}"
-    admin_url = f"{scheme}://{body.slug}.{settings.public_admin_host}"
+    # Built through tenant_host, not string-concatenated. Composing these by
+    # hand produced acme.rcm.ceez.ai — two labels below the registered domain,
+    # which a DNS wildcard does not cover — so every workspace was handed a URL
+    # that did not resolve.
+    booking_url = f"{scheme}://{tenant_host(body.slug, settings.public_booking_host)}"
+    admin_url = f"{scheme}://{tenant_host(body.slug, settings.public_admin_host)}"
 
     # Mint the confirmation token inside the same transaction as the tenant, so
     # a workspace can never exist with no way to activate it.

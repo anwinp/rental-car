@@ -106,6 +106,42 @@ def extract_slug(host: str) -> Optional[str]:
     return label
 
 
+def tenant_host(slug: str, platform_host: str) -> str:
+    """Build the hostname a workspace is actually reachable at.
+
+    The inverse of extract_slug, and it must stay that way. Registration used to
+    compose these by hand as f"{slug}.{host}", which is right for development
+    (acme.localtest.me) and wrong everywhere it matters: against a deployed host
+    like rcm.ceez.ai it produces acme.rcm.ceez.ai — two labels below the
+    registered domain. A DNS wildcard matches exactly ONE label, so *.ceez.ai
+    does not cover it and the name does not resolve at all.
+
+    Every workspace that signed up was therefore handed a dead URL, in the
+    success screen and in its verification email.
+
+        tenant_host("acme", "rcm.ceez.ai")       -> "acme-rcm.ceez.ai"
+        tenant_host("acme", "rcm-admin.ceez.ai") -> "acme-rcm-admin.ceez.ai"
+        tenant_host("acme", "localtest.me:3400") -> "acme.localtest.me:3400"
+
+    Hyphenate when the platform host carries its own label below the registered
+    domain; fall back to a plain subdomain when it is a bare apex, which is the
+    development shape extract_slug also accepts.
+    """
+    host = (platform_host or "").strip().lower()
+    if not host:
+        return slug
+
+    name, _, port = host.partition(":")
+    suffix = f":{port}" if port else ""
+    parts = [p for p in name.split(".") if p]
+
+    # Three or more labels means the first one is the platform label (the "rcm"
+    # in rcm.ceez.ai), and tenants sit alongside it: <slug>-rcm.ceez.ai.
+    if len(parts) >= 3:
+        return f"{slug}-{parts[0]}." + ".".join(parts[1:]) + suffix
+    return f"{slug}.{name}{suffix}"
+
+
 async def tenant_id_for_slug(session, slug: str) -> Optional[str]:
     """Resolve slug -> tenant_id, cached in Redis.
 

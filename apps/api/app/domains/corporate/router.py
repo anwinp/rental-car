@@ -15,8 +15,9 @@ so.
 """
 from __future__ import annotations
 
+import json as _json
 import uuid
-from datetime import datetime
+from datetime import date, datetime, timezone
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -413,3 +414,498 @@ async def _one(session: AsyncSession, tenant_id: str, account_id: str) -> Accoun
     if not row:
         raise HTTPException(status_code=404, detail="No such account.")
     return Account(**row)
+
+
+# ── Invoicing ────────────────────────────────────────────────────────────────
+#
+# An issued invoice is immutable. A customer's finance department files the PDF,
+# quotes its number on a payment and reconciles against it months later, so the
+# line items are copies rather than a live view over reservations — a rental
+# corrected after billing must not rewrite paper already sent. Corrections are
+# a credit note against the original, which is what an accountant expects.
+
+class InvoiceLine(BaseModel):
+    line_id: uuid.UUID
+    description: str
+    reference: str | None = None
+    line_date: date | None = None
+    quantity: float
+    unit_cents: int
+    amount_cents: int
+
+
+class Invoice(BaseModel):
+    invoice_id: uuid.UUID
+    corporate_account_id: uuid.UUID
+    account_name: str | None = None
+    invoice_number: str
+    status: str
+    period_start: date
+    period_end: date
+    issued_at: datetime | None = None
+    due_at: datetime | None = None
+    paid_at: datetime | None = None
+    voided_at: datetime | None = None
+    subtotal_cents: int
+    tax_cents: int
+    total_cents: int
+    currency: str
+    line_count: int = 0
+    has_pdf: bool = False
+    notes: str | None = None
+    created_at: datetime
+
+
+class InvoiceDetail(Invoice):
+    lines: list[InvoiceLine] = []
+
+
+class GenerateIn(BaseModel):
+    corporate_account_id: uuid.UUID
+    period_start: date
+    period_end: date
+    notes: str | None = Field(default=None, max_length=1000)
+
+
+class VoidIn(BaseModel):
+    reason: str = Field(min_length=3, max_length=300)
+
+
+_INVOICE_SELECT = (
+    "SELECT i.invoice_id, i.corporate_account_id, a.name AS account_name, "
+    "       i.invoice_number, i.status, i.period_start, i.period_end, "
+    "       i.issued_at, i.due_at, i.paid_at, i.voided_at, i.subtotal_cents, "
+    "       i.tax_cents, i.total_cents, i.currency, i.notes, i.created_at, "
+    "       (SELECT count(*) FROM corporate_invoice_lines l "
+    "         WHERE l.invoice_id = i.invoice_id) AS line_count, "
+    "       i.pdf_object_key IS NOT NULL AS has_pdf "
+    "  FROM corporate_invoices i "
+    "  JOIN corporate_accounts a ON a.corporate_account_id = i.corporate_account_id "
+    " WHERE i.tenant_id = :t "
+)
+
+
+@router.get("/invoices", response_model=list[Invoice])
+async def list_invoices(
+    account_id: uuid.UUID | None = None,
+    session: AsyncSession = Depends(get_session),
+    claims: UserClaims = Depends(require_permission("corporate", "read")),
+) -> list[Invoice]:
+    rows = (
+        await session.execute(
+            text(
+                _INVOICE_SELECT
+                + "   AND (CAST(:a AS uuid) IS NULL "
+                  "        OR i.corporate_account_id = CAST(:a AS uuid)) "
+                  " ORDER BY i.created_at DESC LIMIT 200"
+            ),
+            {"t": str(claims.tenant_id), "a": str(account_id) if account_id else None},
+        )
+    ).mappings().all()
+    return [Invoice(**r) for r in rows]
+
+
+@router.post("/invoices", response_model=InvoiceDetail,
+             status_code=status.HTTP_201_CREATED)
+async def generate_invoice(
+    body: GenerateIn,
+    session: AsyncSession = Depends(get_session),
+    claims: UserClaims = Depends(require_permission("corporate", "write")),
+) -> InvoiceDetail:
+    """Draft an invoice from the account's unbilled rentals in a period.
+
+    Only rentals that were actually placed on the account are collected, and
+    only ones not already on another live invoice — a unique index enforces
+    that second rule rather than trusting this query, because double-billing a
+    corporate customer is the kind of mistake that ends the relationship.
+    """
+    account = (
+        await session.execute(
+            text(
+                "SELECT corporate_account_id, name, cdp_code, contact_name, "
+                "       contact_email, payment_terms_days, currency, status "
+                "  FROM corporate_accounts "
+                " WHERE corporate_account_id = CAST(:a AS uuid) AND tenant_id = :t "
+                "   AND deleted_at IS NULL"
+            ),
+            {"a": str(body.corporate_account_id), "t": str(claims.tenant_id)},
+        )
+    ).mappings().first()
+    if not account:
+        raise HTTPException(status_code=404, detail="No such account.")
+    if account["status"] == "CLOSED":
+        raise HTTPException(status_code=409, detail="That account is closed.")
+
+    # Completed rentals on this account, in the window, not already billed.
+    candidates = (
+        await session.execute(
+            text(
+                "SELECT r.reservation_id, r.confirmation_number, "
+                "       r.pickup_datetime, r.return_datetime, "
+                "       r.vehicle_class_name, r.grand_total, r.taxes_total, r.currency "
+                "  FROM reservations r "
+                " WHERE r.tenant_id = :t "
+                "   AND r.corporate_account_id = CAST(:a AS uuid) "
+                "   AND r.deleted_at IS NULL "
+                "   AND r.status NOT IN ('CANCELLED', 'NO_SHOW') "
+                "   AND r.pickup_datetime >= CAST(:ps AS date) "
+                "   AND r.pickup_datetime < (CAST(:pe AS date) + INTERVAL '1 day') "
+                "   AND NOT EXISTS (SELECT 1 FROM corporate_invoice_lines l "
+                "                    WHERE l.reservation_id = r.reservation_id) "
+                " ORDER BY r.pickup_datetime"
+            ),
+            {"t": str(claims.tenant_id), "a": str(body.corporate_account_id),
+             "ps": body.period_start, "pe": body.period_end},
+        )
+    ).mappings().all()
+
+    subtotal = tax = 0
+    lines: list[dict] = []
+    for i, r in enumerate(candidates):
+        gross = int(round(float(r["grand_total"] or 0) * 100))
+        line_tax = int(round(float(r["taxes_total"] or 0) * 100))
+        net = gross - line_tax
+        subtotal += net
+        tax += line_tax
+        lines.append({
+            "description": f"Vehicle rental — {r['vehicle_class_name'] or 'vehicle'}",
+            "reference": r["confirmation_number"],
+            "line_date": r["pickup_datetime"].date() if r["pickup_datetime"] else None,
+            "quantity": 1,
+            "unit_cents": net,
+            "amount_cents": net,
+            "reservation_id": str(r["reservation_id"]),
+            "sort_order": i,
+        })
+
+    invoice_id = str(uuid.uuid4())
+    # Sequential per workspace and per year, so the number reads like a number a
+    # finance department expects rather than a UUID they have to transcribe.
+    seq = (
+        await session.execute(
+            text(
+                "SELECT count(*) + 1 FROM corporate_invoices "
+                " WHERE tenant_id = :t AND date_part('year', created_at) "
+                "       = date_part('year', now())"
+            ),
+            {"t": str(claims.tenant_id)},
+        )
+    ).scalar() or 1
+    number = f"INV-{datetime.now(timezone.utc).year}-{int(seq):05d}"
+
+    await session.execute(
+        text(
+            "INSERT INTO corporate_invoices "
+            "  (invoice_id, tenant_id, corporate_account_id, invoice_number, "
+            "   period_start, period_end, subtotal_cents, tax_cents, total_cents, "
+            "   currency, bill_to, notes, created_by) "
+            "VALUES (CAST(:i AS uuid), CAST(:t AS uuid), CAST(:a AS uuid), :num, "
+            "        :ps, :pe, :sub, :tax, :tot, :cur, CAST(:bt AS jsonb), :notes, "
+            "        CAST(:u AS uuid))"
+        ),
+        {
+            "i": invoice_id, "t": str(claims.tenant_id),
+            "a": str(body.corporate_account_id), "num": number,
+            "ps": body.period_start, "pe": body.period_end,
+            "sub": subtotal, "tax": tax, "tot": subtotal + tax,
+            "cur": account["currency"] or "USD",
+            # Captured now. A customer that later changes its billing details
+            # must not retroactively alter an invoice already sent.
+            "bt": _json.dumps({
+                "name": account["name"],
+                "contact_name": account["contact_name"],
+                "email": account["contact_email"],
+                "cdp_code": account["cdp_code"],
+                "terms_days": account["payment_terms_days"],
+            }),
+            "notes": body.notes, "u": str(claims.user_id),
+        },
+    )
+    for ln in lines:
+        await session.execute(
+            text(
+                "INSERT INTO corporate_invoice_lines "
+                "  (tenant_id, invoice_id, reservation_id, description, reference, "
+                "   line_date, quantity, unit_cents, amount_cents, sort_order) "
+                "VALUES (CAST(:t AS uuid), CAST(:i AS uuid), CAST(:r AS uuid), :d, "
+                "        :ref, :ld, :q, :u, :amt, :so)"
+            ),
+            {"t": str(claims.tenant_id), "i": invoice_id, "r": ln["reservation_id"],
+             "d": ln["description"], "ref": ln["reference"], "ld": ln["line_date"],
+             "q": ln["quantity"], "u": ln["unit_cents"], "amt": ln["amount_cents"],
+             "so": ln["sort_order"]},
+        )
+    await session.commit()
+
+    log.info("corporate_invoice_drafted", tenant_id=str(claims.tenant_id),
+             invoice=number, lines=len(lines), total_cents=subtotal + tax)
+    return await _invoice(session, str(claims.tenant_id), invoice_id)
+
+
+@router.get("/invoices/{invoice_id}", response_model=InvoiceDetail)
+async def get_invoice(
+    invoice_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    claims: UserClaims = Depends(require_permission("corporate", "read")),
+) -> InvoiceDetail:
+    return await _invoice(session, str(claims.tenant_id), str(invoice_id))
+
+
+@router.post("/invoices/{invoice_id}/issue", response_model=InvoiceDetail)
+async def issue_invoice(
+    invoice_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    claims: UserClaims = Depends(require_permission("corporate", "write")),
+) -> InvoiceDetail:
+    """Issue the invoice and render its PDF.
+
+    Issuing is the point of no return: after this the document exists outside
+    this system, so nothing may edit it. A draft with no lines is refused —
+    sending a customer an invoice for nothing is worse than sending nothing.
+    """
+    inv = await _invoice(session, str(claims.tenant_id), str(invoice_id))
+    if inv.status != "DRAFT":
+        raise HTTPException(
+            status_code=409,
+            detail=f"This invoice is already {inv.status.lower()}.",
+        )
+    if not inv.lines:
+        raise HTTPException(status_code=409, detail="This invoice has no lines.")
+
+    terms = (
+        await session.execute(
+            text(
+                "SELECT payment_terms_days FROM corporate_accounts "
+                " WHERE corporate_account_id = CAST(:a AS uuid) AND tenant_id = :t"
+            ),
+            {"a": str(inv.corporate_account_id), "t": str(claims.tenant_id)},
+        )
+    ).scalar() or 30
+
+    await session.execute(
+        text(
+            "UPDATE corporate_invoices "
+            "   SET status = 'ISSUED', issued_at = now(), "
+            "       due_at = now() + make_interval(days => :d), updated_at = now() "
+            " WHERE invoice_id = CAST(:i AS uuid) AND tenant_id = :t "
+            "   AND status = 'DRAFT'"
+        ),
+        {"i": str(invoice_id), "t": str(claims.tenant_id), "d": int(terms)},
+    )
+    await session.commit()
+
+    await _render_and_store(session, str(claims.tenant_id), str(invoice_id))
+    log.warning("corporate_invoice_issued", tenant_id=str(claims.tenant_id),
+                invoice=inv.invoice_number, total_cents=inv.total_cents,
+                by=str(claims.user_id))
+    return await _invoice(session, str(claims.tenant_id), str(invoice_id))
+
+
+@router.post("/invoices/{invoice_id}/paid", response_model=InvoiceDetail)
+async def mark_paid(
+    invoice_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    claims: UserClaims = Depends(require_permission("corporate", "write")),
+) -> InvoiceDetail:
+    res = await session.execute(
+        text(
+            "UPDATE corporate_invoices SET status = 'PAID', paid_at = now(), "
+            "       updated_at = now() "
+            " WHERE invoice_id = CAST(:i AS uuid) AND tenant_id = :t "
+            "   AND status = 'ISSUED' RETURNING invoice_number"
+        ),
+        {"i": str(invoice_id), "t": str(claims.tenant_id)},
+    )
+    row = res.first()
+    if not row:
+        raise HTTPException(
+            status_code=409, detail="Only an issued invoice can be marked paid."
+        )
+    await session.commit()
+    log.info("corporate_invoice_paid", tenant_id=str(claims.tenant_id), invoice=row[0])
+    return await _invoice(session, str(claims.tenant_id), str(invoice_id))
+
+
+@router.post("/invoices/{invoice_id}/void", response_model=InvoiceDetail)
+async def void_invoice(
+    invoice_id: uuid.UUID,
+    body: VoidIn,
+    session: AsyncSession = Depends(get_session),
+    claims: UserClaims = Depends(require_permission("corporate", "write")),
+) -> InvoiceDetail:
+    """Void an invoice, with a reason.
+
+    Voiding rather than deleting, and the reason is required. An invoice that
+    vanishes leaves a gap in a numbered sequence, which is the first thing an
+    auditor asks about; a voided one answers the question itself. Its rentals
+    become billable again, because the unique index on reservation_id ignores
+    lines belonging to voided invoices.
+    """
+    res = await session.execute(
+        text(
+            "UPDATE corporate_invoices SET status = 'VOID', voided_at = now(), "
+            "       void_reason = :r, updated_at = now() "
+            " WHERE invoice_id = CAST(:i AS uuid) AND tenant_id = :t "
+            "   AND status <> 'VOID' RETURNING invoice_number"
+        ),
+        {"i": str(invoice_id), "t": str(claims.tenant_id), "r": body.reason},
+    )
+    row = res.first()
+    if not row:
+        raise HTTPException(status_code=409, detail="That invoice is already void.")
+    # The lines go with it, so those rentals can be billed correctly next time.
+    await session.execute(
+        text(
+            "DELETE FROM corporate_invoice_lines "
+            " WHERE invoice_id = CAST(:i AS uuid) AND tenant_id = :t"
+        ),
+        {"i": str(invoice_id), "t": str(claims.tenant_id)},
+    )
+    await session.commit()
+    log.warning("corporate_invoice_voided", tenant_id=str(claims.tenant_id),
+                invoice=row[0], reason=body.reason, by=str(claims.user_id))
+    return await _invoice(session, str(claims.tenant_id), str(invoice_id))
+
+
+@router.get("/invoices/{invoice_id}/pdf")
+async def download_invoice_pdf(
+    invoice_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    claims: UserClaims = Depends(require_permission("corporate", "read")),
+) -> dict:
+    """A short-lived signed URL for the rendered invoice."""
+    row = (
+        await session.execute(
+            text(
+                "SELECT pdf_object_key, status FROM corporate_invoices "
+                " WHERE invoice_id = CAST(:i AS uuid) AND tenant_id = :t"
+            ),
+            {"i": str(invoice_id), "t": str(claims.tenant_id)},
+        )
+    ).mappings().first()
+    if not row:
+        raise HTTPException(status_code=404, detail="No such invoice.")
+    if not row["pdf_object_key"]:
+        raise HTTPException(
+            status_code=409,
+            detail="No PDF yet — issue the invoice to generate one.",
+        )
+
+    from app.core.config import settings
+    from app.core.s3 import get_presign_client
+
+    try:
+        url = get_presign_client().generate_presigned_url(
+            "get_object",
+            Params={"Bucket": settings.s3_documents_bucket,
+                    "Key": row["pdf_object_key"]},
+            ExpiresIn=300,
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail="Storage is unavailable.") from exc
+    return {"url": url, "expires_in": 300}
+
+
+async def _render_and_store(session: AsyncSession, tenant_id: str, invoice_id: str) -> None:
+    """Render the PDF and record its key. Never loses an issued invoice."""
+    from app.core.config import settings
+    from app.domains.corporate.invoice_pdf import render_invoice_pdf
+
+    inv = (
+        await session.execute(
+            text(
+                "SELECT i.*, a.name AS account_name, a.cdp_code, "
+                "       a.payment_terms_days "
+                "  FROM corporate_invoices i "
+                "  JOIN corporate_accounts a "
+                "    ON a.corporate_account_id = i.corporate_account_id "
+                " WHERE i.invoice_id = CAST(:i AS uuid) AND i.tenant_id = :t"
+            ),
+            {"i": invoice_id, "t": tenant_id},
+        )
+    ).mappings().first()
+    lines = [
+        dict(r) for r in (
+            await session.execute(
+                text(
+                    "SELECT description, reference, line_date, quantity, "
+                    "       unit_cents, amount_cents FROM corporate_invoice_lines "
+                    " WHERE invoice_id = CAST(:i AS uuid) AND tenant_id = :t "
+                    " ORDER BY sort_order"
+                ),
+                {"i": invoice_id, "t": tenant_id},
+            )
+        ).mappings().all()
+    ]
+    tenant = (
+        await session.execute(
+            text(
+                "SELECT slug, legal_name, trading_name, billing_address, "
+                "       vat_tax_id, logo_url FROM tenants WHERE tenant_id = :t"
+            ),
+            {"t": tenant_id},
+        )
+    ).mappings().first() or {}
+
+    payload = dict(inv)
+    payload["issued_on"] = inv["issued_at"].date() if inv["issued_at"] else None
+    payload["due_on"] = inv["due_at"].date() if inv["due_at"] else None
+    payload["terms_days"] = inv["payment_terms_days"]
+
+    try:
+        pdf = render_invoice_pdf(
+            invoice=payload, lines=lines, tenant=dict(tenant),
+            account={"name": inv["account_name"], "cdp_code": inv["cdp_code"]},
+        )
+    except Exception:  # noqa: BLE001
+        # The invoice is issued and that stands. A failed render is a missing
+        # attachment, not a reason to un-issue a document the customer may
+        # already have been told about.
+        log.error("invoice_pdf_render_failed", invoice_id=invoice_id, exc_info=True)
+        return
+
+    key = f"tenants/{tenant_id}/invoices/{inv['invoice_number']}.pdf"
+    try:
+        from app.core.s3 import get_s3_client, supports_sse
+
+        extra = {"ServerSideEncryption": "AES256"} if supports_sse() else {}
+        get_s3_client().put_object(
+            Bucket=settings.s3_documents_bucket, Key=key, Body=pdf,
+            ContentType="application/pdf", **extra,
+        )
+    except Exception:  # noqa: BLE001
+        log.error("invoice_pdf_upload_failed", invoice_id=invoice_id, exc_info=True)
+        return
+
+    await session.execute(
+        text(
+            "UPDATE corporate_invoices SET pdf_object_key = :k, updated_at = now() "
+            " WHERE invoice_id = CAST(:i AS uuid) AND tenant_id = :t"
+        ),
+        {"k": key, "i": invoice_id, "t": tenant_id},
+    )
+    await session.commit()
+    log.info("invoice_pdf_stored", invoice_id=invoice_id, bytes=len(pdf))
+
+
+async def _invoice(session: AsyncSession, tenant_id: str, invoice_id: str) -> InvoiceDetail:
+    row = (
+        await session.execute(
+            text(_INVOICE_SELECT + "   AND i.invoice_id = CAST(:i AS uuid)"),
+            {"t": tenant_id, "i": invoice_id},
+        )
+    ).mappings().first()
+    if not row:
+        raise HTTPException(status_code=404, detail="No such invoice.")
+    lines = (
+        await session.execute(
+            text(
+                "SELECT line_id, description, reference, line_date, quantity, "
+                "       unit_cents, amount_cents FROM corporate_invoice_lines "
+                " WHERE invoice_id = CAST(:i AS uuid) AND tenant_id = :t "
+                " ORDER BY sort_order"
+            ),
+            {"i": invoice_id, "t": tenant_id},
+        )
+    ).mappings().all()
+    return InvoiceDetail(**row, lines=[InvoiceLine(**l) for l in lines])

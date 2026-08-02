@@ -19,10 +19,25 @@ RUN pip install --prefix=/install --no-cache-dir -r requirements.txt
 # ─── Stage 2: runtime image ────────────────────────────────────────────────
 FROM python:3.12-slim AS runtime
 
-# Runtime-only system deps (libpq for asyncpg, curl for health check)
+# Runtime-only system deps.
+#
+# libpq5 for asyncpg, curl for the health check, and the Pango/Cairo stack
+# WeasyPrint binds to through cffi. Those were missing, so `import weasyprint`
+# raised OSError on dlopen — which is how a PDF library sat in requirements.txt
+# for a long time while nothing could render a page. The requirements file even
+# carries a note pinning pydyf for a render bug "invisible until now because
+# weasyprint was installed and never imported"; it was never imported because
+# it could not be.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq5 \
     curl \
+    libpango-1.0-0 \
+    libpangoft2-1.0-0 \
+    libharfbuzz0b \
+    libcairo2 \
+    libgdk-pixbuf-2.0-0 \
+    libffi8 \
+    fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user (uid 1000, gid 1000)

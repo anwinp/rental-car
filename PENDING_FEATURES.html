@@ -131,10 +131,10 @@
 
   <dl class="meta">
     <div><dt>API operations</dt><dd>162</dd></div>
-    <div><dt>Blockers remaining</dt><dd>3 code · 2 ops</dd></div>
-    <div><dt>Shipped since this card</dt><dd>5</dd></div>
+    <div><dt>Blockers remaining</dt><dd>3 code · 1 ops</dd></div>
+    <div><dt>Shipped since this card</dt><dd>6</dd></div>
     <div><dt>Tables, zero cross-tenant leak</dt><dd>31</dd></div>
-    <div><dt>Migrations ahead of prod</dt><dd>20</dd></div>
+    <div><dt>Migrations ahead of prod</dt><dd>0</dd></div>
   </dl>
 
   <div class="callout">
@@ -449,14 +449,16 @@ browser caught a crash the typechecker could not</div>
 have   *.ceez.ai  A  65.250.55.137   ← checked today, still wrong</div>
   </div>
 
-  <div class="item blocker">
-    <div class="row"><span class="title">Production is 20 migrations behind</span><span class="tag">ops</span></div>
+  <div class="item shipped">
+    <div class="row"><span class="title">Production is 20 migrations behind</span><span class="tag">ops</span><span class="tag ship">shipped</span></div>
     <p class="why">
-      Live runs a build predating all of this work. None of the isolation,
-      pricing, MFA, catalogue, agreement-document or export changes are deployed,
-      and nothing has been pushed to a remote.
+      Live ran a build predating all of this work. Now deployed and verified:
+      row counts unchanged across customers, reservations, vehicles, payments and
+      agreements, with no orphaned rows after the per-tenant catalogue migration.
     </p>
-    <div class="ev">local 069_snapshot_extras   ·   production 049_user_role_enum_values</div>
+    <div class="ev">production 069_snapshot_extras   ·   branch pushed to origin
+Fixed en route: celery beat had never started · app ran as DB superuser
+                565 macOS sidecar files in the image · TLS gate refused every tenant</div>
   </div>
 
   <footer>

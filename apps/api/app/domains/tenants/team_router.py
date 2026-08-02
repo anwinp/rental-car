@@ -256,7 +256,7 @@ async def list_team(
         await session.execute(
             text(
                 "SELECT p.max_staff FROM tenants t "
-                "LEFT JOIN plan_limits p ON p.tier = t.subscription_tier "
+                "LEFT JOIN plans p ON p.code = t.subscription_tier "
                 "WHERE t.tenant_id = :t"
             ),
             {"t": str(claims.tenant_id)},

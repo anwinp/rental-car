@@ -277,7 +277,15 @@ async def register(
                 status, tos_accepted_at, created_at, updated_at
             ) VALUES (
                 :id, :slug, :name, :email, '{}',
-                :cur, :tz, 'STARTER',
+                :cur, :tz,
+                -- The plan marked default in the catalogue, not a literal.
+                -- Hardcoding 'STARTER' meant a newly created plan could never
+                -- become the one new workspaces land on, however it was
+                -- configured. COALESCE keeps signup working if the flag is
+                -- ever cleared: a workspace with no plan is worse than one on
+                -- the wrong plan.
+                COALESCE((SELECT code FROM plans
+                           WHERE is_default AND is_active LIMIT 1), 'STARTER'),
                 'PENDING_VERIFICATION', :now, :now, :now
             )
             """

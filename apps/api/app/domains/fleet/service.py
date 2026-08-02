@@ -15,6 +15,7 @@ from app.core.exceptions import (
 )
 from app.core.redis import AVAIL_KEY, get_avail_redis
 from app.domains.fleet.models import Vehicle, VehicleBlock, VehicleClass
+from app.domains.tenants.limits import assert_within_limit
 from app.domains.fleet.repository import (
     FleetRepository,
     VehicleBlockRepository,
@@ -95,6 +96,12 @@ class FleetService:
         Raises DuplicateError if VIN already exists for this tenant.
         Logs the initial status in vehicle_status_log.
         """
+        # max_vehicles existed in the plan table and in the admin UI, and was
+        # checked nowhere: a Starter workspace could add ten thousand vehicles
+        # against a limit of 25. Checked before the VIN lookup so a workspace at
+        # its cap is told about the cap, not about a duplicate.
+        await assert_within_limit(session, tenant_id, "vehicles")
+
         repo = FleetRepository(session, tenant_id)
 
         existing = await repo.get_by_vin(data.vin)

@@ -10,8 +10,17 @@ Deliberate choices:
   and simply cannot add more. Retroactively disabling data someone is mid-rental
   with would be worse than the overage.
 - **NULL means unlimited**, so Enterprise needs no special-casing.
-- **A missing tier row also means unlimited.** Failing open is right here: a
+- **A missing plan row also means unlimited.** Failing open is right here: a
   configuration gap should not block a paying customer from adding a vehicle.
+  Since migration 074 a foreign key makes the gap nearly impossible, but the
+  behaviour stays — the caller is a customer creating a record, not an admin
+  screen, and a broken catalogue is our problem, not theirs.
+
+Two of the three caps were dead until 074. max_staff was enforced at three call
+sites; max_vehicles and max_locations were defined here, displayed in the admin
+UI, and checked nowhere — a Starter workspace could add ten thousand vehicles
+against a limit of 25. They are now enforced where vehicles and branches are
+created, which is what makes the numbers in the plan editor mean anything.
 """
 from __future__ import annotations
 
@@ -45,7 +54,7 @@ async def get_usage(session: AsyncSession, tenant_id: uuid.UUID | str) -> dict:
                        (SELECT count(*) FROM locations
                          WHERE tenant_id = :t AND deleted_at IS NULL)      AS locations
                 FROM tenants t
-                LEFT JOIN plan_limits p ON p.tier = t.subscription_tier
+                LEFT JOIN plans p ON p.code = t.subscription_tier
                 WHERE t.tenant_id = :t
                 """
             ),
@@ -76,7 +85,7 @@ async def assert_within_limit(
                        (SELECT count(*) FROM {table}
                          WHERE tenant_id = :t AND deleted_at IS NULL) AS used
                 FROM tenants t
-                LEFT JOIN plan_limits p ON p.tier = t.subscription_tier
+                LEFT JOIN plans p ON p.code = t.subscription_tier
                 WHERE t.tenant_id = :t
                 """  # noqa: S608 — column and table come from the fixed map above
             ),

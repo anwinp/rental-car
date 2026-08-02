@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ConflictError, ResourceNotFoundError
 from app.domains.locations.models import Location
+from app.domains.tenants.limits import assert_within_limit
 from app.domains.locations.repository import LocationRepository
 from app.domains.locations.schemas import (
     HoursComplianceResult,
@@ -42,6 +43,9 @@ class LocationService:
         Validates short_code uniqueness within the tenant.
         Airport type requires airport_code (enforced in schema too, but validated here for clarity).
         """
+        # max_locations was decorative in the same way max_vehicles was.
+        await assert_within_limit(session, tenant_id, "locations")
+
         repo = LocationRepository(session, tenant_id)
 
         if await repo.short_code_exists(data.short_code):

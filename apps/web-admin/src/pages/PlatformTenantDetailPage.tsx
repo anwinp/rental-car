@@ -56,7 +56,6 @@ interface Detail {
   is_self: boolean
 }
 
-const PLANS = ['STARTER', 'TRIAL', 'GROWTH', 'ENTERPRISE']
 
 // Narrower than the database enum on purpose: CUSTOMER, CORPORATE_BOOKER,
 // API_PARTNER and AGENT_SERVICE are not employees, and minting one of those
@@ -94,6 +93,18 @@ export function PlatformTenantDetailPage() {
   const [adding, setAdding] = useState(false)
   const [draft, setDraft] = useState({ email: '', first_name: '', last_name: '', role: 'COUNTER_AGENT' })
   const [editing, setEditing] = useState<string | null>(null)
+  // Fetched, not hardcoded: a plan created in the catalogue has to be
+  // assignable here, and a constant is exactly how the four lists drifted
+  // apart before migration 074. Archived plans are left out — they are not
+  // assignable — but the plan this workspace is already on is kept, so an
+  // archived plan does not silently read as a different one in the select.
+  const [plans, setPlans] = useState<{ code: string; display_name: string; is_active: boolean }[]>([])
+  useEffect(() => {
+    fetch('/api/v1/platform/plans', { credentials: 'include' })
+      .then((r) => (r.ok ? r.json() : []))
+      .then(setPlans)
+      .catch(() => setPlans([]))
+  }, [])
 
   async function load() {
     try {
@@ -303,7 +314,13 @@ export function PlatformTenantDetailPage() {
               onChange={(e) => void changePlan({ subscription_tier: e.target.value })}
               className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none disabled:opacity-50"
             >
-              {PLANS.map((p) => <option key={p} value={p}>{p}</option>)}
+              {plans
+                .filter((p) => p.is_active || p.code === d.subscription_tier)
+                .map((p) => (
+                  <option key={p.code} value={p.code}>
+                    {p.display_name}{p.is_active ? '' : ' (archived)'}
+                  </option>
+                ))}
             </select>
             <button
               disabled={busy || d.is_self}

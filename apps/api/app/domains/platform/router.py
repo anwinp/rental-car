@@ -23,6 +23,7 @@ also the most dangerous one in the codebase. Three rules shape it:
 """
 from __future__ import annotations
 
+import re
 import secrets
 import uuid
 from datetime import datetime, timezone
@@ -824,10 +825,10 @@ async def change_tenant_plan(
         allowed = [
             r[0]
             for r in (
-                await session.execute(text("SELECT tier FROM plan_limits ORDER BY tier"))
+                await session.execute(text("SELECT code FROM plans ORDER BY sort_order, code"))
             ).all()
         ]
-        # Checked against plan_limits rather than a constant, because a tier
+        # Checked against the plans catalogue rather than a constant, because a plan
         # with no limits row silently reads as "unlimited" downstream — which
         # is how PROFESSIONAL came to grant Enterprise capacity for Starter
         # money. If it cannot be metered, it cannot be sold.
@@ -1515,3 +1516,337 @@ async def remove_staff_member(
         ok=True,
         message=f"{target['email']} removed and signed out everywhere.",
     )
+
+
+# ── The plan catalogue ───────────────────────────────────────────────────────
+#
+# A plan is a row in `plans` and tenants.subscription_tier is a foreign key to
+# it. That FK is doing real work here: the database refuses to delete a plan
+# somebody is on, so the guard below is a better error message rather than the
+# thing standing between a customer and a broken account.
+
+_BILLING_PERIODS = ("MONTHLY", "YEARLY", "CUSTOM")
+_CODE_RE = re.compile(r"^[A-Z][A-Z0-9_]{1,31}$")
+
+
+class PlanIn(BaseModel):
+    code: str = Field(description="Immutable-ish identifier, e.g. GROWTH")
+    display_name: str = Field(min_length=1, max_length=60)
+    description: str | None = Field(default=None, max_length=400)
+    # None means unlimited, everywhere. Enterprise needs no special case.
+    max_staff: int | None = Field(default=None, gt=0)
+    max_vehicles: int | None = Field(default=None, gt=0)
+    max_locations: int | None = Field(default=None, gt=0)
+    price_cents: int | None = Field(default=None, ge=0)
+    currency: str = Field(default="USD", min_length=3, max_length=3)
+    billing_period: str = "MONTHLY"
+    is_active: bool = True
+    sort_order: int = 100
+
+    @field_validator("code")
+    @classmethod
+    def _code_shape(cls, v: str) -> str:
+        v = v.strip().upper()
+        if not _CODE_RE.match(v):
+            raise ValueError(
+                "Code must be 2–32 characters: A–Z, 0–9 and underscore, "
+                "starting with a letter."
+            )
+        return v
+
+    @field_validator("billing_period")
+    @classmethod
+    def _period(cls, v: str) -> str:
+        v = v.strip().upper()
+        if v not in _BILLING_PERIODS:
+            raise ValueError(f"Billing period must be one of: {', '.join(_BILLING_PERIODS)}")
+        return v
+
+    @field_validator("currency")
+    @classmethod
+    def _currency(cls, v: str) -> str:
+        return v.strip().upper()
+
+
+class PlanPatch(BaseModel):
+    """Every attribute of a plan is editable except its code.
+
+    The code is a foreign key target. ON UPDATE CASCADE would carry a rename
+    through to every tenant safely, but a code is also what appears in logs,
+    exports and support conversations — renaming it silently rewrites history
+    that people have already read. display_name is the label; change that.
+    """
+    display_name: str | None = Field(default=None, min_length=1, max_length=60)
+    description: str | None = Field(default=None, max_length=400)
+    max_staff: int | None = Field(default=None, gt=0)
+    max_vehicles: int | None = Field(default=None, gt=0)
+    max_locations: int | None = Field(default=None, gt=0)
+    price_cents: int | None = Field(default=None, ge=0)
+    currency: str | None = Field(default=None, min_length=3, max_length=3)
+    billing_period: str | None = None
+    is_active: bool | None = None
+    is_default: bool | None = None
+    sort_order: int | None = None
+    # A cap set to None means unlimited, which is indistinguishable from "not
+    # supplied" in a PATCH body. Name the ones to clear explicitly.
+    unlimited: list[str] = Field(default_factory=list)
+
+    @field_validator("billing_period")
+    @classmethod
+    def _period(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        v = v.strip().upper()
+        if v not in _BILLING_PERIODS:
+            raise ValueError(f"Billing period must be one of: {', '.join(_BILLING_PERIODS)}")
+        return v
+
+    @field_validator("unlimited")
+    @classmethod
+    def _caps(cls, v: list[str]) -> list[str]:
+        allowed = {"max_staff", "max_vehicles", "max_locations"}
+        bad = [c for c in v if c not in allowed]
+        if bad:
+            raise ValueError(f"Not a cap: {', '.join(bad)}")
+        return v
+
+
+class Plan(BaseModel):
+    code: str
+    display_name: str
+    description: str | None = None
+    max_staff: int | None = None
+    max_vehicles: int | None = None
+    max_locations: int | None = None
+    price_cents: int | None = None
+    currency: str = "USD"
+    billing_period: str = "MONTHLY"
+    is_active: bool = True
+    is_default: bool = False
+    sort_order: int = 100
+    # What makes the page safe to act on: you can see what deleting would cost
+    # before you try.
+    tenants: int = 0
+
+
+_PLAN_COLUMNS = (
+    "code, display_name, description, max_staff, max_vehicles, max_locations, "
+    "price_cents, currency, billing_period, is_active, is_default, sort_order"
+)
+
+
+async def _plan_rows(session: AsyncSession) -> list[dict]:
+    await session.execute(text("SELECT set_config('app.current_tenant_id', '', true)"))
+    return [
+        dict(r)
+        for r in (
+            await session.execute(
+                text(
+                    f"SELECT {_PLAN_COLUMNS}, "
+                    "       (SELECT count(*) FROM tenants t "
+                    "         WHERE t.subscription_tier = p.code "
+                    "           AND t.deleted_at IS NULL) AS tenants "
+                    "  FROM plans p ORDER BY p.sort_order, p.code"
+                )
+            )
+        ).mappings().all()
+    ]
+
+
+@router.get("/plans", response_model=list[Plan])
+async def list_plans(
+    session: AsyncSession = Depends(get_session_untenanted),
+    claims: PlatformClaims = Depends(require_platform_admin),
+) -> list[Plan]:
+    return [Plan(**r) for r in await _plan_rows(session)]
+
+
+@router.post("/plans", response_model=Plan, status_code=status.HTTP_201_CREATED)
+async def create_plan(
+    payload: PlanIn,
+    request: Request,
+    session: AsyncSession = Depends(get_session_untenanted),
+    claims: PlatformClaims = Depends(require_platform_admin),
+) -> Plan:
+    """Add a plan. Before migration 074 this needed a schema change."""
+    await enforce_limit(
+        request, bucket="platform-plans", limit=60, window_seconds=3600,
+        subject=str(claims.admin_id), message="Too many changes. Try again shortly.",
+    )
+    await session.execute(text("SELECT set_config('app.current_tenant_id', '', true)"))
+
+    if (
+        await session.execute(
+            text("SELECT 1 FROM plans WHERE code = :c"), {"c": payload.code}
+        )
+    ).first():
+        raise HTTPException(status_code=409, detail=f"A plan called {payload.code} already exists.")
+
+    await session.execute(
+        text(
+            "INSERT INTO plans (code, display_name, description, max_staff, "
+            "  max_vehicles, max_locations, price_cents, currency, "
+            "  billing_period, is_active, sort_order, updated_at) "
+            "VALUES (:code, :display_name, :description, :max_staff, "
+            "  :max_vehicles, :max_locations, :price_cents, :currency, "
+            "  :billing_period, :is_active, :sort_order, now())"
+        ),
+        payload.model_dump(),
+    )
+    await session.commit()
+
+    log.warning("platform_plan_created", by=str(claims.admin_id),
+                by_email=claims.email, code=payload.code)
+    rows = [r for r in await _plan_rows(session) if r["code"] == payload.code]
+    return Plan(**rows[0])
+
+
+@router.patch("/plans/{code}", response_model=Plan)
+async def update_plan(
+    code: str,
+    payload: PlanPatch,
+    request: Request,
+    session: AsyncSession = Depends(get_session_untenanted),
+    claims: PlatformClaims = Depends(require_platform_admin),
+) -> Plan:
+    """Change a plan's attributes.
+
+    Caps take effect at the next creation attempt, not retroactively: a
+    workspace already over a lowered cap keeps working and simply cannot add
+    more. Disabling data somebody is mid-rental with would be worse than the
+    overage — see domains/tenants/limits.py.
+    """
+    await enforce_limit(
+        request, bucket="platform-plans", limit=60, window_seconds=3600,
+        subject=str(claims.admin_id), message="Too many changes. Try again shortly.",
+    )
+    code = code.strip().upper()
+    await session.execute(text("SELECT set_config('app.current_tenant_id', '', true)"))
+
+    current = (
+        await session.execute(
+            text("SELECT is_default, is_active FROM plans WHERE code = :c"), {"c": code}
+        )
+    ).mappings().first()
+    if not current:
+        raise HTTPException(status_code=404, detail="No such plan.")
+
+    sets: list[str] = []
+    params: dict = {"c": code}
+    for field in (
+        "display_name", "description", "max_staff", "max_vehicles",
+        "max_locations", "price_cents", "currency", "billing_period",
+        "is_active", "sort_order",
+    ):
+        value = getattr(payload, field)
+        if value is not None:
+            sets.append(f"{field} = :{field}")
+            params[field] = value
+
+    for cap in payload.unlimited:
+        sets.append(f"{cap} = NULL")
+        params.pop(cap, None)
+        sets = [s for s in sets if s != f"{cap} = :{cap}"]
+
+    # Signups land on the default plan, so it must stay assignable. Archiving it
+    # would send every new workspace to the COALESCE fallback in the signup
+    # insert — working, but not what anyone configured.
+    if payload.is_active is False and current["is_default"]:
+        raise HTTPException(
+            status_code=409,
+            detail="This is the plan new signups get. Make another plan the default first.",
+        )
+
+    if payload.is_default is True:
+        if payload.is_active is False:
+            raise HTTPException(
+                status_code=409, detail="An archived plan cannot be the signup default.",
+            )
+        if not current["is_active"] and payload.is_active is not True:
+            raise HTTPException(
+                status_code=409,
+                detail="This plan is archived. Reactivate it before making it the default.",
+            )
+        # One default, and the unique index says so. Clear the incumbent in the
+        # same transaction or the index rejects the write.
+        await session.execute(text("UPDATE plans SET is_default = false WHERE is_default"))
+        sets.append("is_default = true")
+    elif payload.is_default is False and current["is_default"]:
+        raise HTTPException(
+            status_code=409,
+            detail="Make another plan the default instead — signups need one.",
+        )
+
+    if not sets:
+        raise HTTPException(status_code=400, detail="Nothing to change.")
+
+    sets.append("updated_at = now()")
+    await session.execute(
+        text(f"UPDATE plans SET {', '.join(sets)} WHERE code = :c"), params
+    )
+    await session.commit()
+
+    log.warning("platform_plan_updated", by=str(claims.admin_id), by_email=claims.email,
+                code=code, changed=sorted(params.keys() - {"c"}) + payload.unlimited)
+    rows = [r for r in await _plan_rows(session) if r["code"] == code]
+    return Plan(**rows[0])
+
+
+@router.delete("/plans/{code}", response_model=ActionResult)
+async def delete_plan(
+    code: str,
+    request: Request,
+    session: AsyncSession = Depends(get_session_untenanted),
+    claims: PlatformClaims = Depends(require_platform_admin),
+) -> ActionResult:
+    """Delete a plan nobody is on.
+
+    A plan with workspaces on it is not deletable and should not be: the
+    foreign key would refuse, and even if it cascaded, the result would be
+    workspaces with no plan and therefore no limits. Archiving is the operation
+    that was actually wanted — it stops new assignments and leaves everyone
+    where they are — so the error says so rather than just refusing.
+    """
+    await enforce_limit(
+        request, bucket="platform-plans", limit=60, window_seconds=3600,
+        subject=str(claims.admin_id), message="Too many changes. Try again shortly.",
+    )
+    code = code.strip().upper()
+    await session.execute(text("SELECT set_config('app.current_tenant_id', '', true)"))
+
+    row = (
+        await session.execute(
+            text(
+                "SELECT p.is_default, "
+                "       (SELECT count(*) FROM tenants t "
+                "         WHERE t.subscription_tier = p.code) AS tenants "
+                "  FROM plans p WHERE p.code = :c"
+            ),
+            {"c": code},
+        )
+    ).mappings().first()
+    if not row:
+        raise HTTPException(status_code=404, detail="No such plan.")
+
+    if row["tenants"]:
+        n = row["tenants"]
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"{n} workspace{'s are' if n != 1 else ' is'} on this plan. "
+                "Move them to another plan first, or archive this one to stop "
+                "new assignments without disturbing them."
+            ),
+        )
+    if row["is_default"]:
+        raise HTTPException(
+            status_code=409,
+            detail="This is the plan new signups get. Make another plan the default first.",
+        )
+
+    await session.execute(text("DELETE FROM plans WHERE code = :c"), {"c": code})
+    await session.commit()
+
+    log.warning("platform_plan_deleted", by=str(claims.admin_id),
+                by_email=claims.email, code=code)
+    return ActionResult(ok=True, message=f"Plan {code} deleted.")

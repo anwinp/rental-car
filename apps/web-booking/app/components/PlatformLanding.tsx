@@ -32,8 +32,16 @@ import { useEffect, useState } from 'react'
 import { Logo, LogoMark } from './Logo'
 import { MAX_WIDTH, color, rounded, space, type as t } from '../lib/designTokens'
 
-/** Set to a photograph URL to replace the CSS cinema plate. */
-const HERO_IMAGE: string | null = null
+/**
+ * Full-bleed hero photograph. The system's strongest signature is cinematic
+ * imagery carrying the page chrome, and this asset already shipped as the
+ * booking site's hero, so it is the product's own art rather than something
+ * new brought in.
+ *
+ * Swap the path to change it; the CSS cinema plate below stays as the fallback
+ * if this is ever set back to null.
+ */
+const HERO_IMAGE: string | null = '/assets/hero_cinema.png'
 
 const ORIGINS = (() => {
   if (typeof window === 'undefined') return { admin: '', signup: '', signin: '' }
@@ -258,6 +266,9 @@ export default function PlatformLanding() {
         }
         @media (max-width: 768px) {
           .rcm-nav-links { display: none; }
+          /* Art direction: the crop tightens on the subject rather than
+             letting a portrait viewport fill with sky and road. */
+          .rcm-hero-img { object-position: 58% 58% !important; }
           .rcm-hero-h1 { font-size: 32px; letter-spacing: -0.6px; }
           .rcm-grid-3, .rcm-grid-2, .rcm-specs { grid-template-columns: 1fr; }
           .rcm-grid-2 { gap: ${space.md}px; }
@@ -318,18 +329,54 @@ export default function PlatformLanding() {
       <section
         style={{
           position: 'relative',
-          minHeight: 620,
+          minHeight: 640,
+          height: '86vh',
+          maxHeight: 980,
           display: 'flex',
           alignItems: 'flex-end',
           overflow: 'hidden',
         }}
       >
         {HERO_IMAGE ? (
-          <img
-            src={HERO_IMAGE}
-            alt=""
-            style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }}
-          />
+          <>
+            <img
+              src={HERO_IMAGE}
+              alt=""
+              aria-hidden="true"
+              className="rcm-hero-img"
+              style={{
+                position: 'absolute',
+                inset: 0,
+                width: '100%',
+                height: '100%',
+                objectFit: 'cover',
+                // The subject sits low in the frame; bias the crop downward so a
+                // wide viewport keeps the car rather than empty sky.
+                objectPosition: 'center 62%',
+              }}
+            />
+            {/* Scrim. Light at the top so the sticky nav stays readable against
+                a bright sky, heavy at the bottom where the display type sits —
+                the headline floats over the photograph rather than beneath it. */}
+            <div
+              aria-hidden
+              style={{
+                position: 'absolute',
+                inset: 0,
+                background:
+                  // Horizontal first: the copy is left-aligned and the subject
+                  // sits centre-right, so darkening the left column keeps the
+                  // type legible without flattening the photograph. Body copy
+                  // over the bright red panel was close to unreadable without it.
+                  `linear-gradient(90deg, rgba(24,24,24,0.92) 0%, rgba(24,24,24,0.72) 34%, ` +
+                  `rgba(24,24,24,0.18) 62%, transparent 82%), ` +
+                  // Vertical: a touch at the top so the sticky nav holds against
+                  // sky, and a deep foot that hands off to the canvas.
+                  `linear-gradient(180deg, rgba(24,24,24,0.55) 0%, rgba(24,24,24,0.05) 22%, ` +
+                  `rgba(24,24,24,0.45) 62%, rgba(24,24,24,0.9) 88%, ${color.canvas} 100%)`,
+              }}
+            />
+          </>
         ) : (
           <div className="rcm-cinema" aria-hidden />
         )}
@@ -355,8 +402,12 @@ export default function PlatformLanding() {
             style={{
               ...t.bodyMd,
               fontSize: 17,
-              color: color.body,
-              maxWidth: '54ch',
+              // Ink on the hero is set narrower than elsewhere so it stays
+              // inside the scrimmed left column rather than running across the
+              // subject, where it was fighting a bright red panel for contrast.
+              color: color.ink,
+              opacity: 0.86,
+              maxWidth: '42ch',
               margin: `${space.sm}px 0 0`,
             }}
           >

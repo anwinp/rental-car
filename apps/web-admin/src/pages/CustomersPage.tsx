@@ -1,5 +1,5 @@
 import { tenantId } from '../tenant'
-import { useState, useEffect, type FormEvent } from 'react'
+import { useState, useEffect, useCallback, type FormEvent } from 'react'
 
 // ── API helper ────────────────────────────────────────────────────────────────
 async function fetchJSON(path: string, opts?: RequestInit) {
@@ -47,36 +47,104 @@ type Customer = {
   customer_id: string; first_name: string; last_name: string; email: string
   phone: string | null; is_dnr: boolean; dnr_reason: string | null
   loyalty_tier: 'BRONZE' | 'SILVER' | 'GOLD' | 'PLATINUM' | null
-  loyalty_points: number; total_rentals: number; lifetime_value: number; since: string
+  loyalty_points: number; since: string
 }
 
-const INIT_CUSTOMERS: Customer[] = [
-  { customer_id:'1', first_name:'Alice',  last_name:'Johnson', email:'alice@example.com',  phone:'+1-555-0101', is_dnr:false, dnr_reason:null,                             loyalty_tier:'GOLD',     loyalty_points:4250,  total_rentals:23, lifetime_value:4812.50,  since:'2022-03-14' },
-  { customer_id:'2', first_name:'Bob',    last_name:'Smith',   email:'bob@example.com',    phone:null,          is_dnr:true,  dnr_reason:'Vehicle damage, refused payment', loyalty_tier:null,       loyalty_points:0,     total_rentals:5,  lifetime_value:890.00,   since:'2023-08-01' },
-  { customer_id:'3', first_name:'Carol',  last_name:'Davis',   email:'carol@example.com',  phone:'+1-555-0303', is_dnr:false, dnr_reason:null,                             loyalty_tier:'PLATINUM', loyalty_points:18500, total_rentals:87, lifetime_value:24350.00, since:'2019-05-22' },
-  { customer_id:'4', first_name:'Dan',    last_name:'Wilson',  email:'dan@example.com',    phone:'+1-555-0404', is_dnr:false, dnr_reason:null,                             loyalty_tier:'BRONZE',   loyalty_points:320,   total_rentals:3,  lifetime_value:450.00,   since:'2025-01-08' },
-  { customer_id:'5', first_name:'Eve',    last_name:'Martinez',email:'eve@example.com',    phone:'+1-555-0505', is_dnr:false, dnr_reason:null,                             loyalty_tier:'SILVER',   loyalty_points:2100,  total_rentals:12, lifetime_value:3100.00,  since:'2021-09-30' },
-  { customer_id:'6', first_name:'Frank',  last_name:'Lee',     email:'frank@example.com',  phone:'+1-555-0606', is_dnr:false, dnr_reason:null,                             loyalty_tier:'GOLD',     loyalty_points:7820,  total_rentals:34, lifetime_value:8900.00,  since:'2020-11-15' },
-]
+/**
+ * The customers API, mapped to what this page renders.
+ *
+ * The list was seeded from a hardcoded INIT_CUSTOMERS array, so a tenant with
+ * 629 real customers saw the same six invented people as an empty one — and
+ * "adding" a customer only pushed onto local state, vanishing on refresh. The
+ * /customers API has been complete throughout: nine routes including DNR and
+ * GDPR erasure.
+ *
+ * total_rentals and lifetime_value are gone from this type. They were rendered
+ * from the fake seed and have no field in the API; they are now derived from
+ * the customer's actual reservations instead of being carried as data.
+ */
+interface ApiCustomer {
+  customer_id: string
+  first_name: string
+  last_name: string
+  email: string | null
+  phone: string | null
+  dnr_flag: boolean | null
+  loyalty_tier: string | null
+  loyalty_points: number | null
+  created_at: string | null
+}
+
+interface CustomerRental {
+  reservation_id: string
+  confirmation_number: string
+  pickup_date: string | null
+  return_date: string | null
+  class_name: string | null
+  status: string
+  total: string | number | null
+}
+
+function fromApi(c: ApiCustomer): Customer {
+  return {
+    customer_id: c.customer_id,
+    first_name: c.first_name,
+    last_name: c.last_name,
+    email: c.email ?? '',
+    phone: c.phone,
+    is_dnr: Boolean(c.dnr_flag),
+    // The list endpoint does not carry the reason; it is kept locally after a
+    // flag action and otherwise left blank rather than guessed.
+    dnr_reason: null,
+    loyalty_tier: (c.loyalty_tier || null) as Customer['loyalty_tier'],
+    loyalty_points: c.loyalty_points ?? 0,
+    since: (c.created_at ?? '').slice(0, 10),
+  }
+}
+
+/** Prefer the API's own message — they are written for the operator. */
+async function apiError(res: Response): Promise<string> {
+  try {
+    const b = await res.json()
+    if (typeof b?.detail === 'string') return b.detail
+    if (Array.isArray(b?.detail) && b.detail[0]?.msg) return String(b.detail[0].msg)
+  } catch {
+    /* fall through to the status */
+  }
+  return `Request failed (${res.status})`
+}
+
 
 const TIER: Record<string, { label: string; color: string; bg: string }> = {
+  MEMBER:   { label:'Member',   color:'#94a3b8', bg:'rgba(148,163,184,0.10)' },
   BRONZE:   { label:'Bronze',   color:'#f59e0b', bg:'rgba(245,158,11,0.12)'  },
   SILVER:   { label:'Silver',   color:'#94a3b8', bg:'rgba(148,163,184,0.12)' },
   GOLD:     { label:'Gold',     color:'#fbbf24', bg:'rgba(251,191,36,0.12)'  },
   PLATINUM: { label:'Platinum', color:'#a78bfa', bg:'rgba(167,139,250,0.12)' },
 }
 
+/**
+ * Tier styling for a value that may not be in the map.
+ *
+ * The hardcoded seed only ever used four tiers, so a bare TIER[x] lookup was
+ * always safe. Real data has a fifth — MEMBER, held by 348 of this tenant's
+ * customers — and the undefined lookup blanked the whole page. Unknown tiers now
+ * render with their own name rather than crashing.
+ */
+function tierStyle(tier: string | null) {
+  if (!tier) return null
+  return TIER[tier] ?? {
+    label: tier.charAt(0) + tier.slice(1).toLowerCase(),
+    color: 'var(--text-3)',
+    bg: 'var(--elevated)',
+  }
+}
+
 const AVATAR_COLORS = ['#8b5cf6','#7c3aed','#0ea5e9','#10b981','#f47272','#f59e0b']
 const avatarColor = (id: string) => AVATAR_COLORS[parseInt(id, 10) % AVATAR_COLORS.length]
 const initials    = (f: string, l: string) => `${f[0] ?? '?'}${l[0] ?? ''}`.toUpperCase()
 
-const RECENT = [
-  { conf:'CNF-20260610-0055', dates:'Jun 10 – Jun 15', vehicle:'BMW 3 Series',  amount:'$825.00' },
-  { conf:'CNF-20260520-0031', dates:'May 20 – May 24', vehicle:'Toyota Camry',  amount:'$312.00' },
-  { conf:'CNF-20260415-0012', dates:'Apr 15 – Apr 20', vehicle:'Honda Civic',   amount:'$195.00' },
-]
 
-let nextCid = INIT_CUSTOMERS.length + 1
 
 function ModalLabel({ children }: { children: React.ReactNode }) {
   return (
@@ -101,7 +169,9 @@ function CloseBtn({ onClick }: { onClick: () => void }) {
 const BLANK = { first_name:'', last_name:'', email:'', phone:'', loyalty_tier:'' }
 
 export function CustomersPage() {
-  const [customers, setCustomers] = useState<Customer[]>(INIT_CUSTOMERS)
+  const [customers, setCustomers] = useState<Customer[]>([])
+  const [listLoading, setListLoading] = useState(true)
+  const [listError, setListError] = useState<string | null>(null)
   const [search,   setSearch]     = useState('')
   const [selected, setSelected]   = useState<Customer | null>(null)
 
@@ -112,6 +182,12 @@ export function CustomersPage() {
   const [paymentsLoading, setPaymentsLoading] = useState(false)
   const [paymentsError,   setPaymentsError]   = useState<string | null>(null)
   const [customerPayments, setCustomerPayments] = useState<Payment[]>([])
+
+  // Real rental history for the selected customer. The panel previously showed
+  // a three-row RECENT constant — the same BMW and Toyota for every customer —
+  // and derived Total Rentals and Lifetime Value from invented figures.
+  const [rentals, setRentals] = useState<CustomerRental[]>([])
+  const [rentalsLoading, setRentalsLoading] = useState(false)
 
   // Add modal
   const [showAdd, setShowAdd]   = useState(false)
@@ -185,33 +261,74 @@ export function CustomersPage() {
     return `${c.first_name} ${c.last_name} ${c.email} ${c.phone ?? ''}`.toLowerCase().includes(search.toLowerCase())
   })
 
+  const loadCustomers = useCallback(async (q: string) => {
+    setListLoading(true); setListError(null)
+    try {
+      const qs = q.trim() ? `?q=${encodeURIComponent(q.trim())}&limit=50` : '?limit=50'
+      const res = await fetch(`/api/v1/customers${qs}`, { credentials: 'include' })
+      if (!res.ok) throw new Error(await apiError(res))
+      setCustomers(((await res.json()) as ApiCustomer[]).map(fromApi))
+    } catch (e) {
+      setListError(e instanceof Error ? e.message : 'Could not load customers.')
+      setCustomers([])
+    } finally { setListLoading(false) }
+  }, [])
+
+  useEffect(() => {
+    // Debounced, and searched server-side: the endpoint does fulltext across
+    // name, email, phone and licence, which beats filtering one page locally.
+    const t = setTimeout(() => { void loadCustomers(search) }, search ? 300 : 0)
+    return () => clearTimeout(t)
+  }, [search, loadCustomers])
+
+  useEffect(() => {
+    if (!selected?.email) { setRentals([]); return }
+    let cancelled = false
+    setRentalsLoading(true)
+    fetch(`/api/v1/reservations/crm-list?search=${encodeURIComponent(selected.email)}&limit=50`,
+          { credentials: 'include' })
+      .then(r => (r.ok ? r.json() : []))
+      .then((rows: CustomerRental[]) => { if (!cancelled) setRentals(Array.isArray(rows) ? rows : []) })
+      .catch(() => { if (!cancelled) setRentals([]) })
+      .finally(() => { if (!cancelled) setRentalsLoading(false) })
+    return () => { cancelled = true }
+  }, [selected?.email])
+
+  const rentalCount = rentals.length
+  const lifetimeValue = rentals.reduce((sum, r) => sum + Number(r.total ?? 0), 0)
+
   // Keeps selected in sync after edits
   const syncSelected = (updated: Customer) => {
     setCustomers(prev => prev.map(c => c.customer_id === updated.customer_id ? updated : c))
     setSelected(updated)
   }
 
-  function handleAdd(e: FormEvent) {
+  async function handleAdd(e: FormEvent) {
     e.preventDefault()
-    const id   = String(nextCid++)
-    const newC: Customer = {
-      customer_id:    id,
-      first_name:     addForm.first_name,
-      last_name:      addForm.last_name,
-      email:          addForm.email,
-      phone:          addForm.phone || null,
-      is_dnr:         false,
-      dnr_reason:     null,
-      loyalty_tier:   (addForm.loyalty_tier || null) as Customer['loyalty_tier'],
-      loyalty_points: 0,
-      total_rentals:  0,
-      lifetime_value: 0,
-      since:          new Date().toISOString().slice(0, 10),
+    setListError(null)
+    try {
+      const res = await fetch('/api/v1/customers', {
+        method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          first_name: addForm.first_name,
+          last_name: addForm.last_name,
+          email: addForm.email || null,
+          phone: addForm.phone || null,
+          loyalty_tier: addForm.loyalty_tier || null,
+        }),
+      })
+      if (!res.ok) throw new Error(await apiError(res))
+      const created = fromApi((await res.json()) as ApiCustomer)
+      setCustomers(prev => [created, ...prev])
+      setSelected(created)
+      setShowAdd(false)
+      setAddForm(BLANK)
+    } catch (err) {
+      // This could not previously fail: it only mutated local state, so a
+      // customer added here disappeared on the next refresh.
+      setListError(err instanceof Error ? err.message : 'Could not add that customer.')
     }
-    setCustomers(prev => [newC, ...prev])
-    setSelected(newC)
-    setShowAdd(false)
-    setAddForm(BLANK)
   }
 
   function openEdit() {
@@ -226,35 +343,66 @@ export function CustomersPage() {
     setShowEdit(true)
   }
 
-  function handleEdit(e: FormEvent) {
+  async function handleEdit(e: FormEvent) {
     e.preventDefault()
     if (!selected) return
-    const updated: Customer = {
-      ...selected,
-      first_name:   editForm.first_name,
-      last_name:    editForm.last_name,
-      email:        editForm.email,
-      phone:        editForm.phone || null,
-      loyalty_tier: (editForm.loyalty_tier || null) as Customer['loyalty_tier'],
+    setListError(null)
+    try {
+      const res = await fetch(`/api/v1/customers/${selected.customer_id}`, {
+        method: 'PATCH', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          first_name: editForm.first_name,
+          last_name: editForm.last_name,
+          email: editForm.email || null,
+          phone: editForm.phone || null,
+          loyalty_tier: editForm.loyalty_tier || null,
+        }),
+      })
+      if (!res.ok) throw new Error(await apiError(res))
+      syncSelected(fromApi((await res.json()) as ApiCustomer))
+      setShowEdit(false)
+    } catch (err) {
+      setListError(err instanceof Error ? err.message : 'Could not save those changes.')
     }
-    syncSelected(updated)
-    setShowEdit(false)
   }
 
-  function handleFlagDnr(e: FormEvent) {
+  async function handleFlagDnr(e: FormEvent) {
     e.preventDefault()
     if (!selected) return
-    const updated = { ...selected, is_dnr: true, dnr_reason: dnrReason }
-    syncSelected(updated)
-    setShowDnrModal(false)
-    setDnrReason('')
+    setListError(null)
+    try {
+      const res = await fetch(`/api/v1/customers/${selected.customer_id}/dnr`, {
+        method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: dnrReason, scope: 'TENANT' }),
+      })
+      if (!res.ok) throw new Error(await apiError(res))
+      // Keep the reason locally: the customer response does not echo it and the
+      // panel shows it immediately after flagging.
+      syncSelected({ ...fromApi((await res.json()) as ApiCustomer), dnr_reason: dnrReason })
+      setShowDnrModal(false)
+      setDnrReason('')
+    } catch (err) {
+      // Do-not-rent is what stops a car going to someone who already damaged
+      // one. Failing silently here is worse than not offering the button.
+      setListError(err instanceof Error ? err.message : 'Could not flag that customer.')
+    }
   }
 
-  function handleRemoveDnr() {
+  async function handleRemoveDnr() {
     if (!selected) return
-    const updated = { ...selected, is_dnr: false, dnr_reason: null }
-    syncSelected(updated)
-    setConfirmUnDnr(false)
+    setListError(null)
+    try {
+      const res = await fetch(`/api/v1/customers/${selected.customer_id}/dnr`, {
+        method: 'DELETE', credentials: 'include',
+      })
+      if (!res.ok) throw new Error(await apiError(res))
+      syncSelected({ ...fromApi((await res.json()) as ApiCustomer), dnr_reason: null })
+      setConfirmUnDnr(false)
+    } catch (err) {
+      setListError(err instanceof Error ? err.message : 'Could not clear that flag.')
+    }
   }
 
   return (
@@ -287,7 +435,18 @@ export function CustomersPage() {
 
         {/* List */}
         <div className="flex-1 space-y-2 overflow-auto">
-          {filtered.length === 0 ? (
+            {listError && (
+              <div className="panel px-4 py-3" style={{ borderColor: 'var(--danger)' }}>
+                <p className="text-[13px]" style={{ color: 'var(--danger)' }}>{listError}</p>
+                <button onClick={() => void loadCustomers(search)} className="mt-1 text-[12px] font-medium"
+                        style={{ color: 'var(--accent)' }}>Try again</button>
+              </div>
+            )}
+            {listLoading ? (
+              <div className="panel flex flex-col items-center justify-center py-12 text-center" style={{ borderStyle: 'dashed' }}>
+                <p className="text-[13px]" style={{ color: 'var(--text-3)' }}>Loading customers…</p>
+              </div>
+            ) : filtered.length === 0 ? (
             <div className="panel flex flex-col items-center justify-center py-12 text-center" style={{ borderStyle: 'dashed' }}>
               <p className="text-[13px]" style={{ color: 'var(--text-3)' }}>No customers found</p>
               {search && <button onClick={() => setSearch('')} className="mt-2 text-[12px] font-medium" style={{ color: 'var(--accent)' }}>Clear search</button>}
@@ -316,8 +475,8 @@ export function CustomersPage() {
                 </div>
                 {c.loyalty_tier && (
                   <span className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold"
-                        style={{ background: TIER[c.loyalty_tier].bg, color: TIER[c.loyalty_tier].color }}>
-                    {TIER[c.loyalty_tier].label}
+                        style={{ background: tierStyle(c.loyalty_tier)!.bg, color: tierStyle(c.loyalty_tier)!.color }}>
+                    {tierStyle(c.loyalty_tier)!.label}
                   </span>
                 )}
               </div>
@@ -364,8 +523,8 @@ export function CustomersPage() {
                     {selected.is_dnr && <span className="rounded-full px-2.5 py-0.5 text-[11px] font-bold" style={{ background: 'var(--danger-bg)', color: 'var(--danger)' }}>DO NOT RENT</span>}
                     {selected.loyalty_tier && (
                       <span className="rounded-full px-2.5 py-0.5 text-[11px] font-bold"
-                            style={{ background: TIER[selected.loyalty_tier].bg, color: TIER[selected.loyalty_tier].color }}>
-                        {TIER[selected.loyalty_tier].label}
+                            style={{ background: tierStyle(selected.loyalty_tier)!.bg, color: tierStyle(selected.loyalty_tier)!.color }}>
+                        {tierStyle(selected.loyalty_tier)!.label}
                       </span>
                     )}
                   </div>
@@ -394,9 +553,9 @@ export function CustomersPage() {
               {/* Stats */}
               <div className="grid grid-cols-3 gap-3">
                 {[
-                  { label:'Total Rentals',  value: selected.total_rentals.toString() },
+                  { label:'Total Rentals',  value: rentalsLoading ? '—' : String(rentalCount) },
                   { label:'Loyalty Points', value: selected.loyalty_points.toLocaleString() },
-                  { label:'Lifetime Value', value: `$${selected.lifetime_value.toLocaleString('en-US', { minimumFractionDigits:2 })}` },
+                  { label:'Lifetime Value', value: rentalsLoading ? '—' : `$${lifetimeValue.toLocaleString('en-US', { minimumFractionDigits:2 })}` },
                 ].map(s => (
                   <div key={s.label} className="rounded-lg px-3 py-3 text-center" style={{ background: 'var(--elevated)', border: '1px solid var(--border)' }}>
                     <p className="text-[18px] font-bold num" style={{ color: 'var(--text-1)' }}>{s.value}</p>
@@ -409,27 +568,33 @@ export function CustomersPage() {
               <div>
                 <p className="text-[11px] font-medium uppercase tracking-wider mb-3" style={{ color: 'var(--text-3)' }}>Recent Rentals</p>
                 <div className="space-y-2">
-                  {selected.total_rentals === 0 ? (
+                  {rentalsLoading ? (
+                    <p className="text-[13px] py-4 text-center" style={{ color: 'var(--text-3)' }}>Loading…</p>
+                  ) : rentalCount === 0 ? (
                     <p className="text-[13px] py-4 text-center" style={{ color: 'var(--text-3)' }}>No rental history</p>
-                  ) : RECENT.slice(0, Math.min(selected.total_rentals, 3)).map(r => (
-                    <div key={r.conf} className="flex items-center justify-between rounded-lg px-4 py-3"
+                  ) : rentals.slice(0, 3).map(r => (
+                    <div key={r.reservation_id} className="flex items-center justify-between rounded-lg px-4 py-3"
                          style={{ background: 'var(--elevated)', border: '1px solid var(--border)' }}>
                       <div>
-                        <p className="font-mono text-[11.5px] font-semibold" style={{ color: 'var(--accent)' }}>{r.conf}</p>
-                        <p className="text-[11.5px] mt-0.5" style={{ color: 'var(--text-3)' }}>{r.dates} · {r.vehicle}</p>
+                        <p className="font-mono text-[11.5px] font-semibold" style={{ color: 'var(--accent)' }}>{r.confirmation_number}</p>
+                        <p className="text-[11.5px] mt-0.5" style={{ color: 'var(--text-3)' }}>
+                          {[r.pickup_date, r.return_date].filter(Boolean).join(' – ') || '—'}{r.class_name ? ` · ${r.class_name}` : ''}
+                        </p>
                       </div>
                       <div className="text-right">
-                        <p className="text-[13px] font-semibold num" style={{ color: 'var(--text-1)' }}>{r.amount}</p>
-                        <p className="text-[11px] mt-0.5 font-medium" style={{ color: 'var(--success)' }}>Returned</p>
+                        <p className="text-[13px] font-semibold num" style={{ color: 'var(--text-1)' }}>
+                          ${Number(r.total ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                        </p>
+                        <p className="text-[11px] mt-0.5 font-medium" style={{ color: 'var(--text-3)' }}>{r.status}</p>
                       </div>
                     </div>
                   ))}
-                  {selected.total_rentals > 3 && (
+                  {rentalCount > 3 && (
                     <button className="w-full rounded-lg py-2 text-[12px] font-medium transition-colors"
                             style={{ border: '1px solid var(--border)', color: 'var(--text-3)' }}
                             onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'var(--hover-bg)' }}
                             onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent' }}>
-                      View all {selected.total_rentals} rentals
+                      View all {rentalCount} rentals
                     </button>
                   )}
                 </div>

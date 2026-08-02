@@ -745,8 +745,9 @@ class ApiKeyIn(BaseModel):
             summary="API keys for this workspace")
 async def list_api_keys(
     session: AsyncSession = Depends(get_session),
-    claims: UserClaims = Depends(_require_team_admin),
+    claims: UserClaims = Depends(get_current_user),
 ) -> list[ApiKeyOut]:
+    _require_team_admin(claims)
     rows = (
         await session.execute(
             text(
@@ -766,9 +767,10 @@ async def list_api_keys(
 async def create_api_key(
     body: ApiKeyIn,
     session: AsyncSession = Depends(get_session),
-    claims: UserClaims = Depends(_require_team_admin),
+    claims: UserClaims = Depends(get_current_user),
 ) -> ApiKeyCreated:
     """Mint a key. The secret is in this response and nowhere else, ever."""
+    _require_team_admin(claims)
     from datetime import timedelta
 
     from app.core.api_key_auth import generate_key
@@ -818,7 +820,7 @@ async def create_api_key(
 async def revoke_api_key(
     key_id: uuid.UUID,
     session: AsyncSession = Depends(get_session),
-    claims: UserClaims = Depends(_require_team_admin),
+    claims: UserClaims = Depends(get_current_user),
 ) -> SimpleResult:
     """Revoke, do not delete.
 

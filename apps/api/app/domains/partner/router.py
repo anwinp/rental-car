@@ -11,10 +11,12 @@ Read-only to start. That covers the integrations people actually ask for —
 finance system" — and keeps the damage from a leaked key to disclosure rather
 than to somebody's fleet.
 
-Every query here relies on the tenant bound by api_session. There is no
-tenant_id predicate in this file on purpose: RLS is the boundary, exactly as it
-is for a signed-in human, and a second mechanism would be a second thing to get
-wrong.
+Every query carries an explicit tenant predicate AND runs with the tenant
+bound by api_session, so RLS applies too. That is deliberate belt and braces:
+this codebase has found real cross-tenant leaks in code that relied on one of
+the two, and tenant_sql_lint.py fails the build on any query here that drops
+the predicate. Being the newest surface is not a reason to hold it to a lower
+standard than the rest.
 """
 from __future__ import annotations
 
@@ -93,14 +95,17 @@ async def whoami(caller: ApiCaller = Depends(get_api_caller)) -> KeyInfo:
 
 @router.get("/locations", response_model=list[Location])
 async def list_locations(
+    caller: ApiCaller = Depends(get_api_caller),
     session: AsyncSession = Depends(api_session),
 ) -> list[Location]:
     rows = (
         await session.execute(
             text(
                 "SELECT location_id, name, short_code, city, country_code "
-                "  FROM locations WHERE deleted_at IS NULL ORDER BY name"
-            )
+                "  FROM locations WHERE tenant_id = :t AND deleted_at IS NULL "
+                "ORDER BY name"
+            ),
+            {"t": str(caller.tenant_id)},
         )
     ).mappings().all()
     return [Location(**r) for r in rows]
@@ -111,6 +116,7 @@ async def list_vehicles(
     status: str | None = Query(default=None, max_length=40),
     limit: int = Query(default=50, ge=1, le=_MAX_LIMIT),
     offset: int = Query(default=0, ge=0),
+    caller: ApiCaller = Depends(get_api_caller),
     session: AsyncSession = Depends(api_session),
 ) -> list[Vehicle]:
     rows = (
@@ -122,11 +128,11 @@ async def list_vehicles(
                 "  FROM vehicles v "
                 "  LEFT JOIN vehicle_classes vc ON vc.class_id = v.vehicle_class_id "
                 "  LEFT JOIN locations l ON l.location_id = v.home_location_id "
-                " WHERE v.deleted_at IS NULL "
+                " WHERE v.tenant_id = :t AND v.deleted_at IS NULL "
                 "   AND (:st IS NULL OR v.status::text = :st) "
                 " ORDER BY v.created_at DESC LIMIT :lim OFFSET :off"
             ),
-            {"st": status, "lim": limit, "off": offset},
+            {"t": str(caller.tenant_id), "st": status, "lim": limit, "off": offset},
         )
     ).mappings().all()
     return [Vehicle(**r) for r in rows]
@@ -134,6 +140,7 @@ async def list_vehicles(
 
 @router.get("/availability", response_model=list[ClassAvailability])
 async def availability(
+    caller: ApiCaller = Depends(get_api_caller),
     session: AsyncSession = Depends(api_session),
 ) -> list[ClassAvailability]:
     """How many vehicles of each class are free right now.
@@ -150,11 +157,12 @@ async def availability(
                 "         (WHERE v.status::text = 'AVAILABLE') AS available "
                 "  FROM vehicle_classes vc "
                 "  LEFT JOIN vehicles v ON v.vehicle_class_id = vc.class_id "
-                "       AND v.deleted_at IS NULL "
-                " WHERE vc.is_active "
+                "       AND v.deleted_at IS NULL AND v.tenant_id = :t "
+                " WHERE vc.is_active AND vc.tenant_id = :t "
                 " GROUP BY vc.name, vc.sipp_prefix, vc.sort_order "
                 " ORDER BY vc.sort_order, vc.name"
-            )
+            ),
+            {"t": str(caller.tenant_id)},
         )
     ).mappings().all()
     return [ClassAvailability(**r) for r in rows]
@@ -166,6 +174,7 @@ async def list_reservations(
     status: str | None = Query(default=None, max_length=40),
     limit: int = Query(default=50, ge=1, le=_MAX_LIMIT),
     offset: int = Query(default=0, ge=0),
+    caller: ApiCaller = Depends(get_api_caller),
     session: AsyncSession = Depends(api_session),
 ) -> list[Reservation]:
     rows = (
@@ -177,12 +186,12 @@ async def list_reservations(
                 "       r.total_amount, r.currency "
                 "  FROM reservations r "
                 "  LEFT JOIN vehicle_classes vc ON vc.class_id = r.vehicle_class_id "
-                " WHERE r.deleted_at IS NULL "
+                " WHERE r.tenant_id = :t AND r.deleted_at IS NULL "
                 "   AND (:since IS NULL OR r.created_at >= :since) "
                 "   AND (:st IS NULL OR r.status::text = :st) "
                 " ORDER BY r.created_at DESC LIMIT :lim OFFSET :off"
             ),
-            {"since": since, "st": status, "lim": limit, "off": offset},
+            {"t": str(caller.tenant_id), "since": since, "st": status, "lim": limit, "off": offset},
         )
     ).mappings().all()
     return [Reservation(**r) for r in rows]

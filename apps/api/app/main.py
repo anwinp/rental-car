@@ -5,7 +5,7 @@ import logging
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
@@ -109,6 +109,7 @@ def create_app() -> FastAPI:
     from app.domains.platform.tls_router import router as tls_router
     from app.domains.tenants.public_router import router as public_router
     from app.domains.platform.router       import router as platform_router
+    from app.domains.tenants.features      import require_feature
     from app.domains.platform.auth_router  import router as platform_auth_router
     from app.domains.tenants.team_router   import router as team_router
     from app.domains.tenants.team_router   import public_router as invite_public_router
@@ -163,15 +164,23 @@ def create_app() -> FastAPI:
     app.include_router(payments_router,       prefix=f"{PREFIX}/payments",      tags=["payments"])
     app.include_router(damage_router,         prefix=f"{PREFIX}/damage",        tags=["damage"])
     app.include_router(maintenance_router,    prefix=f"{PREFIX}/maintenance",   tags=["maintenance"])
-    app.include_router(corporate_router,      prefix=f"{PREFIX}/corporate",     tags=["corporate"])
-    app.include_router(reporting_router,      prefix=f"{PREFIX}/reporting",     tags=["reporting"])
+    # Plan-gated surfaces. The gate sits on the mount rather than in each
+    # handler so it is visible in the route table during review, and so an
+    # endpoint added to one of these routers is covered the day it is
+    # written rather than the day somebody notices.
+    app.include_router(corporate_router,      prefix=f"{PREFIX}/corporate",     tags=["corporate"],
+                       dependencies=[Depends(require_feature("corporate_accounts"))])
+    app.include_router(reporting_router,      prefix=f"{PREFIX}/reporting",     tags=["reporting"],
+                       dependencies=[Depends(require_feature("advanced_reporting"))])
     app.include_router(notifications_router,  prefix=f"{PREFIX}/notifications", tags=["notifications"])
-    app.include_router(channels_router,       prefix=f"{PREFIX}/channels",      tags=["channels"])
+    app.include_router(channels_router,       prefix=f"{PREFIX}/channels",      tags=["channels"],
+                       dependencies=[Depends(require_feature("ota_channels"))])
     app.include_router(admin_router,          prefix=f"{PREFIX}/admin",         tags=["admin"])
     app.include_router(billing_router,        prefix=f"{PREFIX}/billing",       tags=["billing"])
     app.include_router(dashboard_router,      prefix=f"{PREFIX}/dashboard",     tags=["dashboard"])
     app.include_router(tasks_router,          prefix=f"{PREFIX}/tasks",          tags=["tasks"])
-    app.include_router(agents_router,         prefix=f"{PREFIX}/agents",         tags=["agents"])
+    app.include_router(agents_router,         prefix=f"{PREFIX}/agents",         tags=["agents"],
+                       dependencies=[Depends(require_feature("agent_assistant"))])
 
     # Health check — no auth, no prefix (ALB health check target)
     from app.core.dependencies import health_router

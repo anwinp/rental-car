@@ -330,3 +330,86 @@ async def change_slug(
             "address will stop working — update any bookmarks and shared links."
         ),
     }
+
+
+# ── What this workspace is on, and how much of it is used ────────────────────
+
+@router.get("/my/plan", summary="This workspace's plan, usage and remaining term")
+async def my_plan(
+    session: AsyncSession = Depends(get_session),
+    claims: UserClaims = Depends(get_current_user),
+) -> dict:
+    """Everything a customer needs to understand a refusal before they hit one.
+
+    Enforcement a customer cannot see is indistinguishable from a bug. Until
+    now the caps existed, were enforced, and appeared nowhere: a workspace
+    discovered its 25-vehicle limit by being refused mid-task, with no page
+    showing the number and no warning on the way up. The platform console knew
+    all of it; the person paying did not.
+
+    Deliberately readable by any signed-in member of the workspace, not just an
+    administrator. The counter agent who cannot add a vehicle is the one who
+    needs to know why, and telling them "ask your manager" when the answer is a
+    number on their own account is not a security boundary, it is a shrug.
+    """
+    from sqlalchemy import text
+
+    from app.domains.tenants.features import FEATURES, features_for_tenant
+    from app.domains.tenants.limits import get_usage
+
+    usage = await get_usage(session, claims.tenant_id)
+    granted = await features_for_tenant(session, claims.tenant_id)
+
+    term = (
+        await session.execute(
+            text(
+                "SELECT status, "
+                "       COALESCE(subscription_ends_at, trial_ends_at) AS term_end, "
+                "       p.display_name, p.price_cents, p.currency, p.billing_period "
+                "  FROM tenants t "
+                "  LEFT JOIN plans p ON p.code = t.subscription_tier "
+                " WHERE t.tenant_id = :t"
+            ),
+            {"t": str(claims.tenant_id)},
+        )
+    ).mappings().first() or {}
+
+    def cap(used_key: str, cap_key: str) -> dict:
+        used = usage.get(used_key) or 0
+        limit = usage.get(cap_key)
+        return {
+            "used": used,
+            "limit": limit,
+            # Surfaced rather than left to the browser so every client agrees
+            # on where the warning line sits.
+            "at_warning": limit is not None and used >= int(limit * 0.8),
+            "at_limit": limit is not None and used >= limit,
+        }
+
+    days_left = None
+    if term.get("term_end"):
+        from datetime import datetime, timezone
+        days_left = (term["term_end"] - datetime.now(timezone.utc)).days
+
+    return {
+        "plan": term.get("display_name") or usage.get("subscription_tier"),
+        "plan_code": usage.get("subscription_tier"),
+        "price_cents": term.get("price_cents"),
+        "currency": term.get("currency"),
+        "billing_period": term.get("billing_period"),
+        "status": term.get("status"),
+        "term_ends_at": term.get("term_end"),
+        "days_left": days_left,
+        "usage": {
+            "staff": cap("staff", "max_staff"),
+            "vehicles": cap("vehicles", "max_vehicles"),
+            "locations": cap("locations", "max_locations"),
+        },
+        # Both halves, so the UI can show what an upgrade would add rather than
+        # only hiding what is missing.
+        "features": [
+            {"key": f.key, "label": f.label, "blurb": f.blurb,
+             "included": f.key in granted}
+            for f in FEATURES
+        ],
+    }

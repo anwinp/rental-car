@@ -1897,3 +1897,117 @@ async def delete_plan(
     log.warning("platform_plan_deleted", by=str(claims.admin_id),
                 by_email=claims.email, code=code)
     return ActionResult(ok=True, message=f"Plan {code} deleted.")
+
+
+# ── Which capabilities a plan includes ───────────────────────────────────────
+
+class FeatureCatalogue(BaseModel):
+    key: str
+    label: str
+    blurb: str
+
+
+class PlanFeatures(BaseModel):
+    plan_code: str
+    features: list[str]
+
+
+@router.get("/features", response_model=list[FeatureCatalogue])
+async def list_features(
+    claims: PlatformClaims = Depends(require_platform_admin),
+) -> list[FeatureCatalogue]:
+    """The vocabulary of gateable capabilities.
+
+    Served from the code registry, not from the database, so the console can
+    only ever offer keys that a gate would actually recognise. A free-text
+    field here would let an operator tick a box that grants nothing.
+    """
+    from app.domains.tenants.features import FEATURES
+
+    return [FeatureCatalogue(key=f.key, label=f.label, blurb=f.blurb) for f in FEATURES]
+
+
+@router.get("/plans/{code}/features", response_model=PlanFeatures)
+async def get_plan_features(
+    code: str,
+    session: AsyncSession = Depends(get_session_untenanted),
+    claims: PlatformClaims = Depends(require_platform_admin),
+) -> PlanFeatures:
+    code = code.strip().upper()
+    await session.execute(text("SELECT set_config('app.current_tenant_id', '', true)"))
+    if not (
+        await session.execute(text("SELECT 1 FROM plans WHERE code = :c"), {"c": code})
+    ).first():
+        raise HTTPException(status_code=404, detail="No such plan.")
+
+    rows = (
+        await session.execute(
+            text("SELECT feature_key FROM plan_features WHERE plan_code = :c"),
+            {"c": code},
+        )
+    ).all()
+    return PlanFeatures(plan_code=code, features=sorted(r[0] for r in rows))
+
+
+@router.put("/plans/{code}/features", response_model=PlanFeatures)
+async def set_plan_features(
+    code: str,
+    payload: PlanFeatures,
+    request: Request,
+    session: AsyncSession = Depends(get_session_untenanted),
+    claims: PlatformClaims = Depends(require_platform_admin),
+) -> PlanFeatures:
+    """Replace the feature set for a plan.
+
+    A PUT rather than add/remove endpoints: the console edits a set of
+    checkboxes and submits the result, and two endpoints would let a dropped
+    request leave the plan in a state matching neither what was there before nor
+    what the operator saw on screen.
+
+    Takes effect immediately for every workspace on the plan. There is no cache
+    to invalidate — the gate reads the join on each request — and no grace
+    period, which matters: removing a feature from a plan somebody is using
+    revokes it mid-session. That is the right default for a control an operator
+    reaches for deliberately, but it is worth knowing before clicking.
+    """
+    from app.domains.tenants.features import FEATURE_KEYS
+
+    await enforce_limit(
+        request, bucket="platform-plans", limit=60, window_seconds=3600,
+        subject=str(claims.admin_id), message="Too many changes. Try again shortly.",
+    )
+    code = code.strip().upper()
+    wanted = {k.strip() for k in payload.features if k.strip()}
+
+    unknown = sorted(wanted - FEATURE_KEYS)
+    if unknown:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Not a known capability: {', '.join(unknown)}. "
+                "A key with no gate behind it would grant nothing."
+            ),
+        )
+
+    await session.execute(text("SELECT set_config('app.current_tenant_id', '', true)"))
+    if not (
+        await session.execute(text("SELECT 1 FROM plans WHERE code = :c"), {"c": code})
+    ).first():
+        raise HTTPException(status_code=404, detail="No such plan.")
+
+    await session.execute(
+        text("DELETE FROM plan_features WHERE plan_code = :c"), {"c": code}
+    )
+    for key in sorted(wanted):
+        await session.execute(
+            text(
+                "INSERT INTO plan_features (plan_code, feature_key) "
+                "VALUES (:c, :k) ON CONFLICT DO NOTHING"
+            ),
+            {"c": code, "k": key},
+        )
+    await session.commit()
+
+    log.warning("platform_plan_features_set", by=str(claims.admin_id),
+                by_email=claims.email, code=code, features=sorted(wanted))
+    return PlanFeatures(plan_code=code, features=sorted(wanted))

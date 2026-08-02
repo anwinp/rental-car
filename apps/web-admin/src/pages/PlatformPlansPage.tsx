@@ -33,6 +33,12 @@ interface Plan {
   tenants: number
 }
 
+interface FeatureDef {
+  key: string
+  label: string
+  blurb: string
+}
+
 const PERIODS = ['MONTHLY', 'YEARLY', 'CUSTOM']
 const CAPS = [
   { key: 'max_staff', label: 'Team members' },
@@ -70,6 +76,10 @@ export default function PlatformPlansPage() {
   const [draft, setDraft] = useState({ ...BLANK })
   const [editing, setEditing] = useState<string | null>(null)
   const [edit, setEdit] = useState({ ...BLANK })
+  // The vocabulary comes from the server's code registry, never free text: a
+  // key with no gate behind it would tick a box and grant nothing.
+  const [catalogue, setCatalogue] = useState<FeatureDef[]>([])
+  const [granted, setGranted] = useState<Record<string, string[]>>({})
 
   async function load() {
     try {
@@ -80,7 +90,24 @@ export default function PlatformPlansPage() {
       setError('Could not reach the server.')
     }
   }
+  async function loadFeatures(list: Plan[]) {
+    const cat = await fetch('/api/v1/platform/features', { credentials: 'include' })
+      .then((r) => (r.ok ? r.json() : []))
+      .catch(() => [])
+    setCatalogue(cat)
+    const pairs = await Promise.all(
+      list.map(async (p) => {
+        const r = await fetch(`/api/v1/platform/plans/${p.code}/features`, { credentials: 'include' })
+          .then((r) => (r.ok ? r.json() : { features: [] }))
+          .catch(() => ({ features: [] }))
+        return [p.code, r.features as string[]] as const
+      }),
+    )
+    setGranted(Object.fromEntries(pairs))
+  }
+
   useEffect(() => { void load() }, [])
+  useEffect(() => { if (plans) void loadFeatures(plans) }, [plans?.length])
 
   async function call(url: string, init: RequestInit, ok: string): Promise<boolean> {
     setBusy(true); setError(''); setNotice('')
@@ -179,6 +206,35 @@ export default function PlatformPlansPage() {
     await call(`/api/v1/platform/plans/${code}`,
       { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) },
       ok)
+  }
+
+  async function toggleFeature(code: string, key: string) {
+    const current = granted[code] ?? []
+    const next = current.includes(key)
+      ? current.filter((k) => k !== key)
+      : [...current, key]
+    // Optimistic, then reconciled from the response. A checkbox that waits for
+    // a round trip before moving feels broken on a list this long.
+    setGranted({ ...granted, [code]: next })
+    setBusy(true); setError(''); setNotice('')
+    try {
+      const res = await fetch(`/api/v1/platform/plans/${code}/features`, {
+        method: 'PUT', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ plan_code: code, features: next }),
+      })
+      const body = await res.json().catch(() => ({}))
+      if (res.ok) {
+        setGranted((g) => ({ ...g, [code]: body.features ?? next }))
+        setNotice('Capabilities updated. This applies to everyone on the plan now.')
+      } else {
+        setGranted({ ...granted, [code]: current })
+        setError(String(body.detail ?? 'Could not change capabilities.'))
+      }
+    } catch {
+      setGranted({ ...granted, [code]: current })
+      setError('Could not reach the server.')
+    } finally { setBusy(false) }
   }
 
   async function remove(p: Plan) {
@@ -369,6 +425,38 @@ export default function PlatformPlansPage() {
                 </div>
               ))}
             </dl>
+
+            {catalogue.length > 0 && (
+              <div className="mt-4 border-t border-slate-800/70 pt-3">
+                <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                  Included capabilities
+                </p>
+                <div className="mt-2 grid gap-1.5 sm:grid-cols-2">
+                  {catalogue.map((f) => {
+                    const on = (granted[p.code] ?? []).includes(f.key)
+                    return (
+                      <label key={f.key} title={f.blurb}
+                             className="flex cursor-pointer items-start gap-2 text-xs">
+                        <input
+                          type="checkbox" checked={on} disabled={busy}
+                          onChange={() => void toggleFeature(p.code, f.key)}
+                          className="mt-0.5 h-3.5 w-3.5 shrink-0 accent-indigo-500"
+                        />
+                        <span className={on ? 'text-slate-200' : 'text-slate-500'}>
+                          {f.label}
+                        </span>
+                      </label>
+                    )
+                  })}
+                </div>
+                {p.tenants > 0 && (
+                  <p className="mt-2 text-[11px] text-slate-600">
+                    Applies immediately to {p.tenants} workspace{p.tenants === 1 ? '' : 's'} —
+                    removing one revokes it mid-session.
+                  </p>
+                )}
+              </div>
+            )}
 
             {editing === p.code ? (
               <div className="mt-4">{editor(edit, setEdit, save, 'Save changes', false)}</div>

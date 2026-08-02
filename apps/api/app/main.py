@@ -109,6 +109,7 @@ def create_app() -> FastAPI:
     from app.domains.platform.tls_router import router as tls_router
     from app.domains.tenants.public_router import router as public_router
     from app.domains.platform.router       import router as platform_router
+    from app.domains.platform.auth_router  import router as platform_auth_router
     from app.domains.tenants.team_router   import router as team_router
     from app.domains.tenants.team_router   import public_router as invite_public_router
     from app.domains.locations.router    import router as locations_router
@@ -138,8 +139,15 @@ def create_app() -> FastAPI:
     app.include_router(catalogue_router,      prefix=f"{PREFIX}/catalogue",     tags=["catalogue"])
     app.include_router(tls_router,            prefix=f"{PREFIX}/internal",      tags=["internal"])
     app.include_router(public_router,         prefix=f"{PREFIX}/public",        tags=["public"])
-    # Cross-tenant administration. Gated on staff_users.is_platform_admin,
-    # which no tenant-facing endpoint can set — see the router docstring.
+    # Cross-tenant administration. Gated on membership of platform_admins, a
+    # table with no tenant_id that no tenant-facing endpoint can write — see the
+    # router docstring.
+    #
+    # The auth router carries its own /platform/auth prefix and mounts at the
+    # API root, because the session cookie is scoped to path=/api/v1/platform
+    # and a login endpoint the browser will not send the cookie back to is a
+    # login endpoint that cannot refresh a session.
+    app.include_router(platform_auth_router,  prefix=PREFIX,                    tags=["platform-auth"])
     app.include_router(platform_router,       prefix=f"{PREFIX}/platform",      tags=["platform"])
     # Team management for a workspace, and the public half of the invite flow
     # (accepting a link, before the invitee has any session).

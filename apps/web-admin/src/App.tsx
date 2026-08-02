@@ -4,7 +4,7 @@ import { QueryProvider } from '@rcm/ui/query'
 
 import {
   cachedTenant, currentSlug, fetchTenantConfig, rememberSlug, setCachedTenant,
-  slugFromHostname, tenantHeaders, resolveTenant,
+  slugFromHostname, tenantHeaders, resolveTenant, onPlatformHost,
 } from './tenant'
 
 // The tenant is resolved at runtime (hostname, ?workspace=, or the last one
@@ -14,11 +14,10 @@ const _TENANT_HEADERS = () => tenantHeaders()
 import { AuthProvider, RouteGuard, useAuth } from '@rcm/ui/auth'
 import { ForgotPasswordPage } from './pages/ForgotPasswordPage'
 import { ResetPasswordPage } from './pages/ResetPasswordPage'
-import { PlatformTenantDetailPage } from './pages/PlatformTenantDetailPage'
+import { PlatformApp } from './platform/PlatformApp'
 import SignupPage from './pages/SignupPage'
 import OnboardingPage from './pages/OnboardingPage'
 import VerifyPage from './pages/VerifyPage'
-import PlatformTenantsPage from './pages/PlatformTenantsPage'
 import TeamPage from './pages/TeamPage'
 import AcceptInvitePage from './pages/AcceptInvitePage'
 import { Toaster } from '@rcm/ui'
@@ -656,14 +655,22 @@ function UnauthorizedPage() {
  */
 function TenantBoot({ children }: { children: React.ReactNode }) {
   const [ready, setReady] = useState(false)
+  const [platform, setPlatform] = useState(false)
 
   useEffect(() => {
     let cancelled = false
     resolveTenant().finally(() => {
-      if (!cancelled) setReady(true)
+      if (cancelled) return
+      setPlatform(onPlatformHost())
+      setReady(true)
     })
     return () => { cancelled = true }
   }, [])
+
+  // rcm-admin.ceez.ai is the console, not a back office with a missing tenant.
+  // It gets its own application: separate identity, separate session cookie,
+  // and none of the providers below, all of which assume a workspace.
+  if (ready && platform) return <PlatformApp />
 
   if (!ready) {
     return (
@@ -737,10 +744,6 @@ export default function App() {
                     <Routes>
                       <Route path="/" element={<Navigate to="/dashboard" replace />} />
                       <Route path="/onboarding" element={<OnboardingPage />} />
-                      {/* Access is enforced server-side by the platform-admin
-                          flag; the page renders "not found" for everyone else. */}
-                      <Route path="/platform" element={<PlatformTenantsPage />} />
-                      <Route path="/platform/:tenantId" element={<PlatformTenantDetailPage />} />
                       <Route path="/team" element={<TeamPage />} />
                       <Route path="/dashboard" element={
                         <RouteGuard roles={MANAGE_ROLES} redirectTo="/unauthorized">

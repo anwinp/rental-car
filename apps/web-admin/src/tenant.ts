@@ -96,11 +96,28 @@ export async function fetchTenantConfig(slug?: string | null): Promise<TenantCon
         ? `/api/v1/public/tenant-config?slug=${encodeURIComponent(slug)}`
         : '/api/v1/public/tenant-config',
     )
+    if (res.status === 400) {
+      // The platform host itself. Not a workspace, and not a failure either —
+      // remembered so the app can render the console instead of hunting for a
+      // tenant that will never resolve.
+      hostIsPlatform = true
+      return null
+    }
     if (!res.ok) return null
     return (await res.json()) as TenantConfig
   } catch {
     return null
   }
+}
+
+// Set by the probe above. The server decides this, not the browser: the rules
+// for what counts as a platform host live in one place and slugFromHostname()
+// has already been wrong about the "-rcm-admin" suffix once.
+let hostIsPlatform = false
+
+/** True when this browser is on rcm-admin.ceez.ai rather than a workspace. */
+export function onPlatformHost(): boolean {
+  return hostIsPlatform
 }
 
 let cached: TenantConfig | null = null
@@ -127,7 +144,10 @@ export async function resolveTenant(): Promise<TenantConfig | null> {
   const onTenantHost = !NON_TENANT_HOSTS.has(window.location.hostname)
   let config = onTenantHost ? await fetchTenantConfig() : null
 
-  if (!config) {
+  // The stored slug is a development convenience and must not apply here: on
+  // the platform host it would resurrect whichever workspace this browser last
+  // signed into and render a customer's back office at rcm-admin.ceez.ai.
+  if (!config && !hostIsPlatform) {
     const fallback =
       new URLSearchParams(window.location.search).get('workspace') ?? storedSlug()
     if (fallback) config = await fetchTenantConfig(fallback)

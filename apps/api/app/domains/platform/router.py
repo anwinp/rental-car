@@ -3,14 +3,18 @@
 This is the only surface that legitimately crosses the tenant boundary, so it is
 also the most dangerous one in the codebase. Three rules shape it:
 
-1. **Access is gated on `staff_users.is_platform_admin`, never on a role.**
-   Every workspace's first user is SYSTEM_ADMIN and a workspace can mint its own
-   SUPER_ADMIN, so gating on a role would let any customer administer every
-   other customer. The flag is not settable through any tenant-facing endpoint.
+1. **Access is gated on membership of `platform_admins`, never on a role and
+   never on a column of a tenant table.** Every workspace's first user is
+   SYSTEM_ADMIN and a workspace can mint its own SUPER_ADMIN, so gating on a
+   role would let any customer administer every other customer. Platform
+   identity lives in its own table with no tenant_id and no foreign key into
+   tenant space, so it is not reachable — or grantable — from tenant data at
+   all. It replaced a boolean on staff_users, which meant the operator had to
+   be an employee of one of its own customers.
 
-2. **The flag is re-read from the database on every request**, not trusted from
-   the token. Revoking platform access takes effect immediately rather than
-   whenever the holder's session happens to expire.
+2. **Membership is re-read from the database on every request**, not trusted
+   from the token. Revoking platform access takes effect immediately rather
+   than whenever the holder's session happens to expire.
 
 3. **Cross-tenant work adopts each tenant in turn** rather than switching to a
    BYPASSRLS role. RLS stays in force throughout: the console can only ever see
@@ -29,7 +33,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_session_untenanted
-from app.core.security import UserClaims, get_current_user
+from app.core.platform_security import PlatformClaims, get_current_platform_admin
 from app.core.config import settings
 from app.core.tenancy import (
     RESERVED_SLUGS,
@@ -99,35 +103,40 @@ _PURGE_GRACE_DAYS = 30
 
 async def require_platform_admin(
     session: AsyncSession = Depends(get_session_untenanted),
-    claims: UserClaims = Depends(get_current_user),
-) -> UserClaims:
-    """Allow only holders of the platform-admin flag.
+    claims: PlatformClaims = Depends(get_current_platform_admin),
+) -> PlatformClaims:
+    """Allow only a live platform operator.
 
     Re-read from the database deliberately — see rule 2 in the module docstring.
+    A token proves who signed in; only the row proves they may still act.
+
+    No tenant is bound and none is adopted. platform_admins is not tenant data
+    and carries no RLS, which is why this lookup needs no GUC at all — the
+    previous version had to adopt the caller's own tenant to read their
+    staff_users row, and that was the shape of the bug, not an implementation
+    detail.
     """
-    # staff_users is RLS-protected, and this session starts with no tenant
-    # bound — so the lookup must first adopt the caller's OWN tenant. That is
-    # reading your own row, which is always permitted; the platform powers
-    # themselves still hang off the flag found there.
-    await session.execute(
-        text("SELECT set_config('app.current_tenant_id', :t, true)"),
-        {"t": str(claims.tenant_id)},
-    )
     row = (
         await session.execute(
             text(
-                "SELECT is_platform_admin FROM staff_users "
-                "WHERE user_id = :u AND is_active"
+                "SELECT token_epoch FROM platform_admins "
+                " WHERE admin_id = :a AND is_active AND deleted_at IS NULL"
             ),
-            {"u": str(claims.user_id)},
+            {"a": str(claims.admin_id)},
         )
     ).first()
 
-    if not row or not row[0]:
+    if not row:
         # Deliberately a 404, not a 403: the console's existence is not
-        # advertised to accounts that cannot use it.
+        # advertised to callers that cannot use it.
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Not found."
+        )
+
+    # A token minted before a password change is dead regardless of its jti.
+    if claims.epoch < int(row[0]):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated."
         )
     return claims
 
@@ -239,7 +248,7 @@ class ActionResult(BaseModel):
 @router.get("/tenants", response_model=list[TenantSummary], summary="List all workspaces")
 async def list_tenants(
     session: AsyncSession = Depends(get_session_untenanted),
-    claims: UserClaims = Depends(require_platform_admin),
+    claims: PlatformClaims = Depends(require_platform_admin),
 ) -> list[TenantSummary]:
     # require_platform_admin adopts the caller's own tenant to read its
     # staff_users row. Clear it before listing: `tenants` is under RLS from
@@ -298,7 +307,7 @@ async def list_tenants(
                 locations=counts.get("locations", 0),
                 vehicles=counts.get("vehicles", 0),
                 reservations=counts.get("reservations", 0),
-                is_self=str(r["tenant_id"]) == str(claims.tenant_id),
+                is_self=False,
                 deleted_at=r["deleted_at"],
                 restore_days_left=(
                     r["restore_days_left"] if r["deleted_at"] else None
@@ -325,7 +334,7 @@ async def create_tenant(
     body: CreateTenantRequest,
     request: Request,
     session: AsyncSession = Depends(get_session_untenanted),
-    claims: UserClaims = Depends(require_platform_admin),
+    claims: PlatformClaims = Depends(require_platform_admin),
 ) -> TenantSummary:
     """Create an ACTIVE workspace without the email round-trip.
 
@@ -390,7 +399,7 @@ async def create_tenant(
     await invalidate_slug_cache(body.slug)
 
     log.info("platform_tenant_created", slug=body.slug, tenant_id=str(tenant_id),
-             by=str(claims.user_id), ip=request.client.host if request.client else None)
+             by=str(claims.admin_id), ip=request.client.host if request.client else None)
 
     return TenantSummary(
         tenant_id=tenant_id, slug=body.slug, name=body.company_name,
@@ -451,22 +460,19 @@ async def _revoke_tenant_sessions(session: AsyncSession, tenant_id: str) -> int:
 async def suspend_tenant(
     tenant_id: uuid.UUID,
     session: AsyncSession = Depends(get_session_untenanted),
-    claims: UserClaims = Depends(require_platform_admin),
+    claims: PlatformClaims = Depends(require_platform_admin),
 ) -> ActionResult:
     """Block sign-in while keeping all data.
 
     The reversible option, and the right one in almost every case where deletion
     is tempting: the login path already refuses any non-ACTIVE workspace.
     """
-    if str(tenant_id) == str(claims.tenant_id):
-        raise HTTPException(400, "You cannot suspend the workspace you are signed in to.")
-
-    # Clear the tenant binding first. This session is "untenanted" by
-    # dependency, but the ContextVar hook stamps the caller's own tenant onto
-    # every transaction, so the UPDATE below was scoped to the platform admin's
-    # OWN workspace — the one workspace this endpoint explicitly refuses to act
-    # on. Suspend and reactivate therefore returned "No such workspace." for
-    # every tenant, always. list_tenants already clears it for exactly this
+    # Clear the tenant binding first. The caller has no tenant of their own
+    # any more, so nothing should be stamped onto this transaction — but the
+    # ContextVar hook stamps whatever it finds, and an empty GUC is the only
+    # state in which `tenants` yields more than one row. This clear is what the
+    # estate-wide UPDATE below depends on, not a leftover. list_tenants clears
+    # it for exactly this
     # reason; these two never did.
     await session.execute(text("SELECT set_config('app.current_tenant_id', '', true)"))
 
@@ -490,7 +496,7 @@ async def suspend_tenant(
 
     log.info(
         "platform_tenant_suspended",
-        slug=row[0], by=str(claims.user_id), sessions_ended=signed_out,
+        slug=row[0], by=str(claims.admin_id), sessions_ended=signed_out,
     )
     return ActionResult(
         ok=True,
@@ -504,14 +510,14 @@ async def suspend_tenant(
 async def reactivate_tenant(
     tenant_id: uuid.UUID,
     session: AsyncSession = Depends(get_session_untenanted),
-    claims: UserClaims = Depends(require_platform_admin),
+    claims: PlatformClaims = Depends(require_platform_admin),
 ) -> ActionResult:
-    # Clear the tenant binding first. This session is "untenanted" by
-    # dependency, but the ContextVar hook stamps the caller's own tenant onto
-    # every transaction, so the UPDATE below was scoped to the platform admin's
-    # OWN workspace — the one workspace this endpoint explicitly refuses to act
-    # on. Suspend and reactivate therefore returned "No such workspace." for
-    # every tenant, always. list_tenants already clears it for exactly this
+    # Clear the tenant binding first. The caller has no tenant of their own
+    # any more, so nothing should be stamped onto this transaction — but the
+    # ContextVar hook stamps whatever it finds, and an empty GUC is the only
+    # state in which `tenants` yields more than one row. This clear is what the
+    # estate-wide UPDATE below depends on, not a leftover. list_tenants clears
+    # it for exactly this
     # reason; these two never did.
     await session.execute(text("SELECT set_config('app.current_tenant_id', '', true)"))
 
@@ -525,7 +531,7 @@ async def reactivate_tenant(
         raise HTTPException(404, "No such workspace.")
 
     await invalidate_slug_cache(row[0])
-    log.info("platform_tenant_reactivated", slug=row[0], by=str(claims.user_id))
+    log.info("platform_tenant_reactivated", slug=row[0], by=str(claims.admin_id))
     return ActionResult(ok=True, message=f"{row[0]} is active again.")
 
 
@@ -538,7 +544,7 @@ async def delete_tenant(
     body: DeleteTenantRequest,
     request: Request,
     session: AsyncSession = Depends(get_session_untenanted),
-    claims: UserClaims = Depends(require_platform_admin),
+    claims: PlatformClaims = Depends(require_platform_admin),
 ) -> ActionResult:
     """Take a workspace out of service, recoverably.
 
@@ -556,13 +562,9 @@ async def delete_tenant(
     in eight places while being written by nothing at all — soft delete was
     scaffolding nobody had connected.
     """
-    if str(tenant_id) == str(claims.tenant_id):
-        raise HTTPException(400, "You cannot delete the workspace you are signed in to.")
-
-    # The caller's own tenant is bound onto every transaction by the ContextVar
-    # hook, even on an untenanted session, so clear it or this only ever sees
-    # the platform admin's own row — the bug that made suspend and reactivate
-    # silently useless.
+    # Bind nothing. `tenants` is under RLS and its policy admits every row
+    # only while app.current_tenant_id is empty; any value here would narrow
+    # this to a single workspace and silently miss the target.
     await session.execute(text("SELECT set_config('app.current_tenant_id', '', true)"))
 
     row = (
@@ -595,7 +597,7 @@ async def delete_tenant(
 
     log.warning(
         "platform_tenant_soft_deleted",
-        slug=row["slug"], tenant_id=str(tenant_id), by=str(claims.user_id),
+        slug=row["slug"], tenant_id=str(tenant_id), by=str(claims.admin_id),
         ip=request.client.host if request.client else None,
         sessions_ended=signed_out,
     )
@@ -614,7 +616,7 @@ async def delete_tenant(
 async def restore_tenant(
     tenant_id: uuid.UUID,
     session: AsyncSession = Depends(get_session_untenanted),
-    claims: UserClaims = Depends(require_platform_admin),
+    claims: PlatformClaims = Depends(require_platform_admin),
 ) -> ActionResult:
     """Bring back a soft-deleted workspace.
 
@@ -638,7 +640,7 @@ async def restore_tenant(
         raise HTTPException(404, "No deleted workspace with that id.")
 
     await invalidate_slug_cache(row[0])
-    log.warning("platform_tenant_restored", slug=row[0], by=str(claims.user_id))
+    log.warning("platform_tenant_restored", slug=row[0], by=str(claims.admin_id))
     return ActionResult(
         ok=True,
         message=f"{row[0]} is restored, and suspended. Reactivate it to resume trading.",
@@ -652,7 +654,7 @@ async def purge_tenant(
     body: DeleteTenantRequest,
     request: Request,
     session: AsyncSession = Depends(get_session_untenanted),
-    claims: UserClaims = Depends(require_platform_admin),
+    claims: PlatformClaims = Depends(require_platform_admin),
 ) -> ActionResult:
     """Destroy every row a deleted workspace owns. There is no undo.
 
@@ -666,9 +668,6 @@ async def purge_tenant(
     and still returned ok=True with the table simply absent from the counts —
     indistinguishable from "it had no rows".
     """
-    if str(tenant_id) == str(claims.tenant_id):
-        raise HTTPException(400, "You cannot purge the workspace you are signed in to.")
-
     await session.execute(text("SELECT set_config('app.current_tenant_id', '', true)"))
 
     row = (
@@ -753,7 +752,7 @@ async def purge_tenant(
 
     log.warning(
         "platform_tenant_purged",
-        slug=row["slug"], tenant_id=str(tenant_id), by=str(claims.user_id),
+        slug=row["slug"], tenant_id=str(tenant_id), by=str(claims.admin_id),
         ip=request.client.host if request.client else None, rows=deleted,
     )
     total = sum(deleted.values())
@@ -777,7 +776,7 @@ async def change_tenant_plan(
     tenant_id: uuid.UUID,
     body: PlanChange,
     session: AsyncSession = Depends(get_session_untenanted),
-    claims: UserClaims = Depends(require_platform_admin),
+    claims: PlatformClaims = Depends(require_platform_admin),
 ) -> ActionResult:
     """Move a workspace between plans, or extend its trial.
 
@@ -839,7 +838,7 @@ async def change_tenant_plan(
 
     log.warning(
         "platform_plan_changed",
-        slug=row[0], tenant_id=str(tenant_id), by=str(claims.user_id),
+        slug=row[0], tenant_id=str(tenant_id), by=str(claims.admin_id),
         tier=row[1], trial_ends_at=str(body.trial_ends_at or ""),
     )
     return ActionResult(ok=True, message=f"{row[0]} is now on {row[1]}.")
@@ -850,7 +849,7 @@ async def change_tenant_plan(
 async def get_tenant_detail(
     tenant_id: uuid.UUID,
     session: AsyncSession = Depends(get_session_untenanted),
-    claims: UserClaims = Depends(require_platform_admin),
+    claims: PlatformClaims = Depends(require_platform_admin),
 ) -> TenantDetail:
     """The page a support ticket is answered from.
 
@@ -915,7 +914,7 @@ async def get_tenant_detail(
                 text(
                     "SELECT user_id::text, email, role, is_active, "
                     "       last_login_at, email_verified_at, is_mfa_enabled, "
-                    "       locked_until, is_platform_admin "
+                    "       locked_until "
                     "  FROM staff_users WHERE deleted_at IS NULL "
                     " ORDER BY is_active DESC, role, email"
                 )
@@ -957,5 +956,5 @@ async def get_tenant_detail(
         priced_extras=counts.get("priced_extras", 0),
         locations_with_tax=counts.get("locations_with_tax", 0),
         staff=staff,
-        is_self=str(tenant_id) == str(claims.tenant_id),
+        is_self=False,
     )

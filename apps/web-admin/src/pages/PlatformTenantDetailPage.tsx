@@ -22,7 +22,6 @@ interface StaffRow {
   email_verified_at: string | null
   is_mfa_enabled: boolean
   locked_until: string | null
-  is_platform_admin: boolean
 }
 
 interface Detail {
@@ -287,7 +286,6 @@ export function PlatformTenantDetailPage() {
                       {u.locked_until && <span className="text-red-400">locked</span>}
                       {!u.email_verified_at && <span className="text-amber-400">unverified</span>}
                       {u.is_mfa_enabled && <span className="text-emerald-400">MFA</span>}
-                      {u.is_platform_admin && <span className="text-indigo-300">platform</span>}
                     </div>
                   </td>
                 </tr>

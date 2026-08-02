@@ -144,6 +144,16 @@ def decode_token(token: str) -> UserClaims:
             detail="Not authenticated",
         )
 
+    # A platform token is signed with the same key but means something else
+    # entirely: it has no tenant and answers to no tenant's row policies. It
+    # would already fail below on the missing tenant_id claim; rejecting it by
+    # name keeps that from becoming an accident if the claim set ever changes.
+    if payload.get("typ") == "platform":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+        )
+
     try:
         return UserClaims(
             sub=payload["sub"],

@@ -35,10 +35,13 @@ TENANT_TABLES = {
 # Functions that legitimately span tenants. Each needs a reason, and the
 # platform ones bind a tenant explicitly per operation.
 ALLOWLIST = {
-    ("platform/router.py", "require_platform_admin"),   # reads caller's own row
+    ("platform/router.py", "require_platform_admin"),   # platform_admins: no tenant column
     ("platform/router.py", "list_tenants"),             # adopts each tenant in turn
     ("platform/router.py", "create_tenant"),            # adopts the new tenant
     ("platform/router.py", "delete_tenant"),            # adopts the target tenant
+    ("platform/auth_router.py", "platform_login"),      # platform_admins has no tenant
+    ("platform/auth_router.py", "platform_me"),         # platform_admins has no tenant
+    ("platform/auth_router.py", "platform_change_password"),  # same
 }
 
 

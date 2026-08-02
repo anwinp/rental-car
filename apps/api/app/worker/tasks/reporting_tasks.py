@@ -176,8 +176,13 @@ async def _generate_daily_revenue_report_async(tenant_id: str, date: str) -> dic
     from app.core.config import settings
 
     started_at = datetime.now(timezone.utc)
-    engine = create_async_engine(settings.database_url.get_secret_value(), echo=False)
-    session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    # The shared engine, not a private one. core/database.py disables
+    # asyncpg's statement cache, disables SQLAlchemy's own prepared-statement
+    # cache and gives every statement a unique name — all three are required
+    # behind a transaction-pooling pgbouncer. A locally built engine has none
+    # of them and fails with "prepared statement already exists" on the second
+    # query of the connection.
+    from app.core.database import AsyncSessionLocal as session_factory
 
     # Parse target date
     try:
@@ -239,7 +244,6 @@ async def _generate_daily_revenue_report_async(tenant_id: str, date: str) -> dic
         )
         ra_stats = ra_result.first()
 
-    await engine.dispose()
 
     # Build CSV in memory
     output = io.StringIO()
@@ -408,8 +412,13 @@ async def _calculate_fleet_utilization_async(
     from app.core.config import settings
 
     started_at = datetime.now(timezone.utc)
-    engine = create_async_engine(settings.database_url.get_secret_value(), echo=False)
-    session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    # The shared engine, not a private one. core/database.py disables
+    # asyncpg's statement cache, disables SQLAlchemy's own prepared-statement
+    # cache and gives every statement a unique name — all three are required
+    # behind a transaction-pooling pgbouncer. A locally built engine has none
+    # of them and fails with "prepared statement already exists" on the second
+    # query of the connection.
+    from app.core.database import AsyncSessionLocal as session_factory
 
     # Validate date formats
     try:
@@ -559,7 +568,6 @@ async def _calculate_fleet_utilization_async(
                 "utilization_pct": round(util_pct, 2),
             })
 
-    await engine.dispose()
 
     # Write the CSV. This task computed a utilisation figure and uploaded
     # nothing at all, so "fleet utilisation" was a number in a log line and a

@@ -22,10 +22,17 @@
  *
  * ON THE COPY —
  * Every claim is restricted to behaviour verified against the running system.
- * There is no pricing: PRODUCT_PLAN.md records that no price columns exist
- * anywhere in the product and that the tier points are unvalidated assumptions,
- * so a number here would be an invented commercial promise. Nothing claims
- * online payment capture or booking import either — neither is built.
+ *
+ * Pricing is now real and is READ, never written here. Plans, prices, caps and
+ * included capabilities come from /api/v1/public/plans, which serves the same
+ * catalogue the product enforces — so a price on this page cannot disagree with
+ * what a customer is actually charged, and a plan added in the console appears
+ * here without a deploy. Until migration 074 there were no price columns at
+ * all, which is why this section did not exist; hardcoding numbers now would
+ * reintroduce exactly the drift that made GROWTH unassignable.
+ *
+ * The section renders nothing when the catalogue is empty or unreachable. An
+ * empty pricing table is worse than no pricing table.
  */
 
 import { useEffect, useState } from 'react'
@@ -58,6 +65,8 @@ const ORIGINS = (() => {
 const NAV = [
   { label: 'The platform', href: '#platform' },
   { label: 'What it does', href: '#capability' },
+  // Sits before "Your data" because it is the question people arrive with.
+  { label: 'Pricing', href: '#pricing' },
   { label: 'Your data', href: '#data' },
 ]
 
@@ -223,7 +232,42 @@ function ButtonOutline({ href, children }: { href: string; children: React.React
 
 // ── Page ────────────────────────────────────────────────────────────────────
 
+interface PublicPlan {
+  code: string
+  name: string
+  description: string | null
+  price_cents: number | null
+  currency: string | null
+  billing_period: string
+  is_default: boolean
+  limits: { staff: number | null; vehicles: number | null; locations: number | null }
+  features: string[]
+}
+
+function formatPrice(plan: PublicPlan): string {
+  return ((plan.price_cents ?? 0) / 100).toLocaleString(undefined, {
+    style: 'currency',
+    currency: plan.currency || 'USD',
+    maximumFractionDigits: 0,
+  })
+}
+
+function defaultPlanName(plans: PublicPlan[]): string {
+  return plans.find((p) => p.is_default)?.name ?? 'the starter plan'
+}
+
 export default function PlatformLanding() {
+  // Read from the same catalogue the product enforces. A failure leaves the
+  // list empty and the section unrendered, rather than showing a price that
+  // might be stale or wrong.
+  const [plans, setPlans] = useState<PublicPlan[]>([])
+  useEffect(() => {
+    fetch('/api/v1/public/plans')
+      .then((r) => (r.ok ? r.json() : []))
+      .then((rows: PublicPlan[]) => setPlans(Array.isArray(rows) ? rows : []))
+      .catch(() => setPlans([]))
+  }, [])
+
   const [year, setYear] = useState('')
   useEffect(() => setYear(String(new Date().getFullYear())), [])
 
@@ -256,6 +300,10 @@ export default function PlatformLanding() {
         .rcm-grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; }
         .rcm-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: ${space.lg}px ${space.xl}px; }
         .rcm-specs { display: grid; grid-template-columns: repeat(3, 1fr); gap: ${space.lg}px; }
+        /* auto-fit, so the row reflows as plans are added or archived in
+           the console rather than needing a column count changed here. */
+        .rcm-plans { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+                     gap: ${space.xs}px; align-items: stretch; }
         .rcm-hero-h1 { font-size: ${t.displayMega.fontSize}px; }
         .rcm-foot-cols { display: grid; grid-template-columns: 2fr 1fr 1fr 1fr; gap: ${space.lg}px; }
 
@@ -270,7 +318,7 @@ export default function PlatformLanding() {
              letting a portrait viewport fill with sky and road. */
           .rcm-hero-img { object-position: 58% 58% !important; }
           .rcm-hero-h1 { font-size: 32px; letter-spacing: -0.6px; }
-          .rcm-grid-3, .rcm-grid-2, .rcm-specs { grid-template-columns: 1fr; }
+          .rcm-grid-3, .rcm-grid-2, .rcm-specs, .rcm-plans { grid-template-columns: 1fr; }
           .rcm-grid-2 { gap: ${space.md}px; }
         }
       `}</style>
@@ -553,6 +601,100 @@ export default function PlatformLanding() {
           </div>
         </Shell>
       </section>
+
+      {/* ── Pricing ─────────────────────────────────────────────────────── */}
+      {plans.length > 0 && (
+        <section id="pricing" style={{ borderTop: `1px solid ${color.hairline}`, padding: `${space.xxl}px 0` }}>
+          <Shell>
+            <SectionLabel>Pricing</SectionLabel>
+            <h2 style={{ ...t.displayLg, color: color.ink, margin: `0 0 ${space.sm}px`, maxWidth: '20ch', textWrap: 'balance' }}>
+              Priced by the size of your fleet, not by the seat.
+            </h2>
+            <p style={{ ...t.bodyMd, color: color.body, maxWidth: '62ch', margin: `0 0 ${space.lg}px` }}>
+              Every plan includes the whole rental system — reservations, the counter,
+              agreements, damage, pricing and your own booking site. What changes is how
+              much of it you can hold, and which integrations are switched on.
+            </p>
+
+            {/* Monthly and annual are separate rows in the catalogue rather than
+                a toggle, because that is how they are actually sold and billed.
+                A toggle would imply a relationship the pricing does not have. */}
+            <div className="rcm-plans">
+              {plans.map((plan) => {
+                const custom = plan.price_cents === null
+                const free = plan.price_cents === 0
+                return (
+                  <div
+                    key={plan.code}
+                    style={{
+                      border: `1px solid ${plan.is_default ? color.primary : color.hairline}`,
+                      borderRadius: rounded.none,
+                      padding: space.sm,
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: space.xs,
+                    }}
+                  >
+                    <div>
+                      <p style={{ ...t.captionUpper, color: plan.is_default ? color.primary : color.muted, margin: 0 }}>
+                        {plan.name}
+                      </p>
+                      <p style={{ ...t.numberDisplay, fontSize: 40, color: color.ink, margin: `${space.xxs}px 0 0` }}>
+                        {custom ? 'Talk to us' : free ? 'Free' : formatPrice(plan)}
+                      </p>
+                      {!custom && !free && (
+                        <p style={{ ...t.bodyMd, fontSize: 13, color: color.muted, margin: `${space.xxxs}px 0 0` }}>
+                          per {plan.billing_period === 'YEARLY' ? 'year' : 'month'}
+                        </p>
+                      )}
+                    </div>
+
+                    {plan.description && (
+                      <p style={{ ...t.bodyMd, fontSize: 14, color: color.body, margin: 0 }}>
+                        {plan.description}
+                      </p>
+                    )}
+
+                    <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'grid', gap: space.xxxs }}>
+                      {[
+                        ['staff', 'team members'],
+                        ['vehicles', 'vehicles'],
+                        ['locations', 'branches'],
+                      ].map(([key, noun]) => {
+                        const v = plan.limits[key as keyof PublicPlan['limits']]
+                        return (
+                          <li key={key} style={{ ...t.bodyMd, fontSize: 14, color: color.body }}>
+                            {v === null ? 'Unlimited' : v} {noun}
+                          </li>
+                        )
+                      })}
+                      {plan.features.map((f) => (
+                        <li key={f} style={{ ...t.bodyMd, fontSize: 14, color: color.ink }}>
+                          {f}
+                        </li>
+                      ))}
+                    </ul>
+
+                    <div style={{ marginTop: 'auto', paddingTop: space.xs }}>
+                      {custom ? (
+                        <ButtonOutline href="mailto:hello@ceez.ai">Contact us</ButtonOutline>
+                      ) : (
+                        <ButtonOutline href="/signup">Start free</ButtonOutline>
+                      )}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+
+            <p style={{ ...t.bodyMd, fontSize: 13, color: color.muted, margin: `${space.md}px 0 0`, maxWidth: '62ch' }}>
+              Every workspace starts on {defaultPlanName(plans)}. Change plan whenever you
+              like from inside your own back office — going over a limit never disables
+              anything you already have, it only stops you adding more.
+            </p>
+          </Shell>
+        </section>
+      )}
 
       {/* ── Light editorial band: data rights ───────────────────────────── */}
       <section

@@ -196,7 +196,55 @@ def _looks_like_placeholder(value: str) -> bool:
     return (not value) or "placeholder" in value.lower() or value.endswith(".placeholder")
 
 
-async def send_verification_email(to_email: str, company: str, link: str) -> str:
+
+def _addresses_block(
+    booking_url: str | None, admin_url: str | None, counter_url: str | None
+) -> str:
+    """The three addresses a workspace gets, listed in the confirmation mail.
+
+    A workspace has three separate surfaces and they are not guessable from one
+    another. This email is the durable record an operator searches their inbox
+    for weeks later, so the addresses belong here rather than only on a success
+    screen they will close and never see again.
+    """
+    rows = [
+        ("Customer booking site", booking_url),
+        ("Back office", admin_url),
+        ("Counter (pick-up & return)", counter_url),
+    ]
+    rows = [(label, url) for label, url in rows if url]
+    if not rows:
+        return ""
+
+    items = "".join(
+        f'''<tr>
+             <td style="padding:6px 12px 6px 0;color:#777;font-size:13px;
+                        white-space:nowrap">{label}</td>
+             <td style="padding:6px 0"><a href="{url}"
+                 style="color:#4f46e5;font-size:13px;word-break:break-all"
+                 >{url.replace("https://", "").replace("http://", "")}</a></td>
+           </tr>'''
+        for label, url in rows
+    )
+    return f'''
+      <div style="border-top:1px solid #eee;margin-top:28px;padding-top:20px">
+        <p style="color:#444;font-size:13px;margin:0 0 10px">
+          Once confirmed, your workspace lives at:
+        </p>
+        <table style="border-collapse:collapse">{items}</table>
+      </div>
+    '''
+
+
+async def send_verification_email(
+    to_email: str,
+    company: str,
+    link: str,
+    *,
+    booking_url: str | None = None,
+    admin_url: str | None = None,
+    counter_url: str | None = None,
+) -> str:
     """Send the confirmation mail. Returns the transport actually used.
 
     Falls back through SMTP -> SendGrid -> log. The log transport exists so a
@@ -223,6 +271,7 @@ async def send_verification_email(to_email: str, company: str, link: str) -> str
           ignore this email — nothing will be activated.
         </p>
         <p style="color:#aaa;font-size:12px;word-break:break-all">{link}</p>
+        {_addresses_block(booking_url, admin_url, counter_url)}
       </div>
     """
 

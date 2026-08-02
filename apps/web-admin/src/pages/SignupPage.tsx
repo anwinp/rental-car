@@ -46,6 +46,7 @@ export default function SignupPage() {
     workspace_url: string
     booking_url?: string
     admin_url?: string
+    counter_url?: string
     provisioned: string[]
     verification_required?: boolean
     email_sent?: boolean
@@ -214,36 +215,32 @@ export default function SignupPage() {
             </div>
           )}
 
-          {(created.booking_url || created.admin_url) && (
+          {(created.booking_url || created.admin_url || created.counter_url) && (
             <div className="mt-5 rounded-lg border border-slate-800 bg-slate-950/60 p-4">
               <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-                Your two addresses
+                Your three addresses
               </p>
               <p className="mt-1.5 text-xs leading-relaxed text-slate-500">
-                Customers book on one; your team administers on the other.
+                Customers book on the first, your managers work in the second, and
+                the counter runs pick-ups and returns on the third.
               </p>
               <dl className="mt-3 space-y-3">
-                {created.booking_url && (
-                  <div>
-                    <dt className="text-xs font-medium text-slate-400">Booking site — for your customers</dt>
-                    <dd>
-                      <a href={created.booking_url}
-                         className="break-all font-mono text-xs text-indigo-300 underline underline-offset-2">
-                        {created.booking_url}
-                      </a>
-                    </dd>
-                  </div>
-                )}
-                {created.admin_url && (
-                  <div>
-                    <dt className="text-xs font-medium text-slate-400">Admin — for your team</dt>
-                    <dd>
-                      <a href={created.admin_url}
-                         className="break-all font-mono text-xs text-indigo-300 underline underline-offset-2">
-                        {created.admin_url}
-                      </a>
-                    </dd>
-                  </div>
+                {([
+                  ['Booking site — for your customers', created.booking_url],
+                  ['Back office — for your managers', created.admin_url],
+                  ['Counter — pick-up and return', created.counter_url],
+                ] as const).map(([label, url]) =>
+                  url ? (
+                    <div key={label}>
+                      <dt className="text-xs font-medium text-slate-400">{label}</dt>
+                      <dd>
+                        <a href={url}
+                           className="break-all font-mono text-xs text-indigo-300 underline underline-offset-2">
+                          {url}
+                        </a>
+                      </dd>
+                    </div>
+                  ) : null,
                 )}
               </dl>
             </div>

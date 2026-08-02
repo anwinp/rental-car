@@ -151,6 +151,7 @@ services:
       # because they are not secrets and must not drift again.
       PUBLIC_BOOKING_HOST: rcm.ceez.ai
       PUBLIC_ADMIN_HOST: rcm-admin.ceez.ai
+      PUBLIC_COUNTER_HOST: rcm-counter.ceez.ai
       PUBLIC_URL_SCHEME: https
       PORT: "8000"
       WORKER_COUNT: "4"

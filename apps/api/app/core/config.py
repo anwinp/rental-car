@@ -127,6 +127,7 @@ class Settings(BaseSettings):
     # must set PUBLIC_BOOKING_HOST/PUBLIC_ADMIN_HOST; see the validator below.
     public_booking_host: str = "localtest.me:3400"
     public_admin_host: str = "localtest.me:3002"
+    public_counter_host: str = "localtest.me:3001"
     public_url_scheme: str = "http"
 
     # ── Application ────────────────────────────────────────────────────────────
@@ -165,6 +166,7 @@ class Settings(BaseSettings):
                 for name, value in (
                     ("PUBLIC_BOOKING_HOST", self.public_booking_host),
                     ("PUBLIC_ADMIN_HOST", self.public_admin_host),
+                    ("PUBLIC_COUNTER_HOST", self.public_counter_host),
                 )
                 if "localtest.me" in (value or "")
             ]

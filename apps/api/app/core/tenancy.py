@@ -53,7 +53,15 @@ def platform_labels() -> tuple[str, ...]:
     against ``rcm-admin`` before ``rcm``, or it would strip to ``acme-rcm``.
     """
     labels = set()
-    for host in (settings.public_booking_host, settings.public_admin_host):
+    # The counter host must be here too. It was omitted, so acme-rcm-counter
+    # stripped nothing and resolved as a slug literally named
+    # "acme-rcm-counter" — no workspace matched, and the counter app was the one
+    # tenant surface that could not be reached on its own hostname.
+    for host in (
+        settings.public_booking_host,
+        settings.public_admin_host,
+        settings.public_counter_host,
+    ):
         first = (host or "").split(":")[0].split(".")[0].strip().lower()
         if first:
             labels.add(first)

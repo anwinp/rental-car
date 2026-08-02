@@ -97,6 +97,10 @@ class RegisterResponse(BaseModel):
     # different audiences: customers book, staff administer.
     booking_url: str
     admin_url: str
+    # The counter PWA is the third tenant surface and was never returned, so a
+    # new workspace was told about its storefront and back office and left to
+    # discover that the counter app existed at all.
+    counter_url: str
     workspace_url: str          # kept as an alias of admin_url for compatibility
     provisioned: list[str]
     verification_required: bool = True
@@ -132,6 +136,7 @@ class SlugCheckResponse(BaseModel):
     # hardcoded ".rcm.app", a domain this deployment does not serve.
     booking_url: str | None = None
     admin_url: str | None = None
+    counter_url: str | None = None
 
 
 class TenantConfigResponse(BaseModel):
@@ -224,6 +229,7 @@ async def slug_available(
         available=True,
         booking_url=f"{scheme}://{tenant_host(candidate, settings.public_booking_host)}",
         admin_url=f"{scheme}://{tenant_host(candidate, settings.public_admin_host)}",
+        counter_url=f"{scheme}://{tenant_host(candidate, settings.public_counter_host)}",
     )
 
 
@@ -341,6 +347,7 @@ async def register(
     # that did not resolve.
     booking_url = f"{scheme}://{tenant_host(body.slug, settings.public_booking_host)}"
     admin_url = f"{scheme}://{tenant_host(body.slug, settings.public_admin_host)}"
+    counter_url = f"{scheme}://{tenant_host(body.slug, settings.public_counter_host)}"
 
     # Mint the confirmation token inside the same transaction as the tenant, so
     # a workspace can never exist with no way to activate it.
@@ -354,7 +361,12 @@ async def register(
     link = verification_link(token, origin)
 
     transport = await send_verification_email(
-        to_email=str(body.admin_email), company=body.company_name, link=link
+        to_email=str(body.admin_email),
+        company=body.company_name,
+        link=link,
+        booking_url=booking_url,
+        admin_url=admin_url,
+        counter_url=counter_url,
     )
     log.info(
         "tenant_registered",
@@ -375,6 +387,7 @@ async def register(
         admin_email=str(body.admin_email),
         booking_url=booking_url,
         admin_url=admin_url,
+        counter_url=counter_url,
         workspace_url=admin_url,
         provisioned=provisioned.steps,
         verification_required=True,

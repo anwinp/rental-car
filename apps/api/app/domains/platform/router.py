@@ -23,6 +23,7 @@ also the most dangerous one in the codebase. Three rules shape it:
 """
 from __future__ import annotations
 
+import secrets
 import uuid
 from datetime import datetime, timezone
 
@@ -41,7 +42,8 @@ from app.core.tenancy import (
     invalidate_slug_cache,
     tenant_host,
 )
-from app.core.security import hash_password
+from app.core.security import bump_epoch, hash_password
+from app.core.mailer import send_email, wrap_html
 from app.domains.tenants.provisioning import provision_tenant_defaults
 
 router = APIRouter()
@@ -410,6 +412,29 @@ async def create_tenant(
 
 
 # ── Suspend / reactivate ─────────────────────────────────────────────────────
+
+async def _revoke_sessions_for_user(session: AsyncSession, user_id: str) -> None:
+    """End every live session belonging to one person.
+
+    The epoch in Postgres is the durable half — it invalidates tokens this
+    process cannot enumerate, refresh tokens included — and the JTI sweep makes
+    it take effect now instead of when the epoch cache expires. Redis being
+    down must not make a deactivation silently fail, so the sweep is
+    best-effort; the epoch is already written by then and is what holds.
+    """
+    from app.core.redis import REVOKED_TOKENS_SET, get_session_redis
+    from app.domains.auth.service import USER_SESSIONS_KEY
+
+    await bump_epoch(session, user_id)
+    try:
+        redis = get_session_redis()
+        jtis = await redis.smembers(USER_SESSIONS_KEY.format(user_id=user_id))
+        if jtis:
+            await redis.sadd(REVOKED_TOKENS_SET, *jtis)
+        await redis.delete(USER_SESSIONS_KEY.format(user_id=user_id))
+    except Exception:  # noqa: BLE001 — the epoch is the durable half
+        log.warning("session_sweep_failed", user_id=user_id, exc_info=True)
+
 
 async def _revoke_tenant_sessions(session: AsyncSession, tenant_id: str) -> int:
     """End every live session belonging to a workspace. Returns the user count.
@@ -1059,7 +1084,6 @@ async def send_staff_password_reset(
             detail="This account is deactivated. Reactivate it before resetting the password.",
         )
 
-    from app.core.mailer import send_email, wrap_html
     from app.domains.auth.service import AuthService
 
     link = await AuthService(session).mint_reset_link(
@@ -1100,4 +1124,394 @@ async def send_staff_password_reset(
     return ResetInitiated(
         sent_to=user["email"],
         message=f"Recovery link sent to {user['email']}. It expires in one hour.",
+    )
+
+
+# ── Managing the people inside a workspace ───────────────────────────────────
+
+# The roles a workspace's staff may hold. Deliberately narrower than the
+# user_role enum, which also carries CUSTOMER, CORPORATE_BOOKER, API_PARTNER and
+# AGENT_SERVICE — those are not employees and must not be creatable here, or the
+# console becomes a way to mint an API principal inside a customer's account.
+_ASSIGNABLE_ROLES = (
+    "SUPER_ADMIN", "SYSTEM_ADMIN", "EXECUTIVE", "REGIONAL_MANAGER",
+    "BRANCH_MANAGER", "FLEET_MANAGER", "FINANCE", "FINANCE_ANALYST",
+    "CLAIMS_COORDINATOR", "SENIOR_AGENT", "MAINTENANCE_TECH", "COUNTER_AGENT",
+    "READONLY_AUDITOR",
+)
+_ADMIN_ROLES = ("SYSTEM_ADMIN", "SUPER_ADMIN")
+
+
+class StaffCreate(BaseModel):
+    email: EmailStr
+    first_name: str = Field(min_length=1, max_length=80)
+    last_name: str = Field(default="", max_length=80)
+    role: str
+
+    @field_validator("role")
+    @classmethod
+    def _known_role(cls, v: str) -> str:
+        if v not in _ASSIGNABLE_ROLES:
+            raise ValueError(f"Role must be one of: {', '.join(_ASSIGNABLE_ROLES)}")
+        return v
+
+
+class StaffPatch(BaseModel):
+    """Everything about a person that support may correct.
+
+    Note what is absent: `email`. It is not an oversight and it is not a
+    to-do.
+
+    The console can start a password reset, and that reset goes to the address
+    on the account. If it could also change that address, the two together
+    would be a complete account takeover in two clicks — point the account at
+    a mailbox you control, then reset into it. Excluding the field is what
+    keeps "an operator can never sign in as a customer" true rather than
+    merely intended.
+
+    A genuine address correction is a request the workspace's own
+    administrator makes, from their own back office, where it is their action
+    on their own team.
+    """
+    first_name: str | None = Field(default=None, min_length=1, max_length=80)
+    last_name: str | None = Field(default=None, max_length=80)
+    role: str | None = None
+    is_active: bool | None = None
+
+    @field_validator("role")
+    @classmethod
+    def _known_role(cls, v: str | None) -> str | None:
+        if v is not None and v not in _ASSIGNABLE_ROLES:
+            raise ValueError(f"Role must be one of: {', '.join(_ASSIGNABLE_ROLES)}")
+        return v
+
+
+async def _bind_tenant(session: AsyncSession, tenant_id: uuid.UUID) -> dict:
+    """Adopt one workspace and return it. 404 if it is not there to adopt."""
+    await session.execute(text("SELECT set_config('app.current_tenant_id', '', true)"))
+    row = (
+        await session.execute(
+            text(
+                "SELECT slug, COALESCE(trading_name, legal_name, slug) AS name, "
+                "       deleted_at FROM tenants WHERE tenant_id = :t"
+            ),
+            {"t": str(tenant_id)},
+        )
+    ).mappings().first()
+    if not row:
+        raise HTTPException(status_code=404, detail="No such workspace.")
+    if row["deleted_at"]:
+        raise HTTPException(
+            status_code=409,
+            detail="This workspace is deleted. Restore it before changing its people.",
+        )
+    await session.execute(
+        text("SELECT set_config('app.current_tenant_id', :t, true)"),
+        {"t": str(tenant_id)},
+    )
+    return dict(row)
+
+
+async def _live_admin_count(session: AsyncSession, tenant_id: uuid.UUID) -> int:
+    return (
+        await session.execute(
+            text(
+                "SELECT count(*) FROM staff_users "
+                " WHERE tenant_id = :t AND is_active AND deleted_at IS NULL "
+                "   AND role IN ('SYSTEM_ADMIN','SUPER_ADMIN')"
+            ),
+            {"t": str(tenant_id)},
+        )
+    ).scalar() or 0
+
+
+async def _assert_not_last_admin(
+    session: AsyncSession, tenant_id: uuid.UUID, current_role: str, verb: str
+) -> None:
+    """A workspace with no administrator cannot be administered by anyone.
+
+    Not even by this console: nothing here can grant a role to somebody who no
+    longer has an account, and the customer has no way back in. Refuse while
+    the situation is still recoverable.
+    """
+    if current_role in _ADMIN_ROLES and await _live_admin_count(session, tenant_id) <= 1:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"This is the workspace's last administrator, so they cannot be "
+                f"{verb}. Give someone else the administrator role first."
+            ),
+        )
+
+
+@router.post("/tenants/{tenant_id}/staff", response_model=ResetInitiated,
+             status_code=status.HTTP_201_CREATED)
+async def create_staff_member(
+    tenant_id: uuid.UUID,
+    payload: StaffCreate,
+    request: Request,
+    session: AsyncSession = Depends(get_session_untenanted),
+    claims: PlatformClaims = Depends(require_platform_admin),
+) -> ResetInitiated:
+    """Add a person to a workspace and email them a link to set their password.
+
+    No password is accepted and none is generated for anyone to read. The row
+    is created with a random hash nobody holds, so the emailed link is the only
+    path into the account and the person who ends up knowing the password is
+    the account holder — same guarantee as the reset endpoint above.
+    """
+    await enforce_limit(
+        request, bucket="platform-staff-write", limit=60, window_seconds=3600,
+        subject=str(claims.admin_id),
+        message="Too many changes. Try again shortly.",
+    )
+    tenant = await _bind_tenant(session, tenant_id)
+    email = payload.email.strip().lower()
+
+    # uq_staff_email_tenant covers soft-deleted rows too, so a plain INSERT
+    # after a removal fails on a person who is, as far as anyone can see, gone.
+    # Reinstating the existing row is both what the operator meant and the only
+    # thing the constraint permits.
+    existing = (
+        await session.execute(
+            text(
+                "SELECT user_id::text, deleted_at IS NOT NULL AS removed, is_active "
+                "  FROM staff_users WHERE tenant_id = :t AND lower(email) = :e"
+            ),
+            {"t": str(tenant_id), "e": email},
+        )
+    ).mappings().first()
+
+    if existing and not existing["removed"]:
+        raise HTTPException(
+            status_code=409,
+            detail="Someone in this workspace already uses that address.",
+        )
+
+    now = datetime.now(timezone.utc)
+    if existing:
+        user_id = existing["user_id"]
+        await session.execute(
+            text(
+                "UPDATE staff_users "
+                "   SET deleted_at = NULL, is_active = true, "
+                "       first_name = :f, last_name = :l, "
+                "       role = CAST(:r AS user_role), "
+                "       password_hash = :pw, email_verified_at = NULL, "
+                "       failed_login_count = 0, locked_until = NULL, "
+                "       updated_at = :now "
+                " WHERE user_id = :u AND tenant_id = :t"
+            ),
+            {
+                "u": user_id, "t": str(tenant_id),
+                "f": payload.first_name, "l": payload.last_name, "r": payload.role,
+                # Unguessable and never revealed, here or anywhere. The emailed
+                # link is the only way in.
+                "pw": hash_password(secrets.token_urlsafe(32)), "now": now,
+            },
+        )
+        # A reinstated account keeps its user_id, and so would keep any tokens
+        # minted before removal. Kill them.
+        await bump_epoch(session, user_id)
+    else:
+        user_id = str(uuid.uuid4())
+        await session.execute(
+            text(
+                "INSERT INTO staff_users ("
+                "  user_id, tenant_id, email, password_hash, first_name, last_name,"
+                "  role, is_active, location_ids, created_at, updated_at,"
+                "  is_mfa_enabled, failed_login_count, phone_verified"
+                ") VALUES ("
+                "  :u, :t, :e, :pw, :f, :l, CAST(:r AS user_role), true, '{}',"
+                "  :now, :now, false, 0, false)"
+            ),
+            {
+                "u": user_id, "t": str(tenant_id), "e": email,
+                "pw": hash_password(secrets.token_urlsafe(32)),
+                "f": payload.first_name, "l": payload.last_name,
+                "r": payload.role, "now": now,
+            },
+        )
+
+    from app.domains.auth.service import AuthService
+
+    link = await AuthService(session).mint_reset_link(
+        user_id=user_id, tenant_id=str(tenant_id), slug=tenant["slug"],
+    )
+    html = wrap_html(
+        f"Your {tenant['name']} account",
+        f"<p>An account has been created for you on <strong>{tenant['name']}</strong>. "
+        "Choose a password to finish setting it up — this link expires in one "
+        "hour and can be used once.</p>"
+        "<p>If you were not expecting this, ignore this email and tell your "
+        "workspace administrator.</p>",
+        cta_text="Set your password", cta_url=link,
+    )
+    transport = await send_email(
+        to_email=email, subject=f"Set up your {tenant['name']} account",
+        html=html, kind="password_reset",
+    )
+
+    await session.commit()
+    await session.execute(text("SELECT set_config('app.current_tenant_id', '', true)"))
+
+    log.warning(
+        "platform_staff_created", by=str(claims.admin_id), by_email=claims.email,
+        tenant_id=str(tenant_id), slug=tenant["slug"], target_user=user_id,
+        role=payload.role, reinstated=bool(existing), transport=transport,
+    )
+    return ResetInitiated(
+        sent_to=email,
+        message=f"Account created. A link to set a password was sent to {email}.",
+    )
+
+
+@router.patch("/tenants/{tenant_id}/staff/{user_id}", response_model=ActionResult)
+async def update_staff_member(
+    tenant_id: uuid.UUID,
+    user_id: uuid.UUID,
+    payload: StaffPatch,
+    request: Request,
+    session: AsyncSession = Depends(get_session_untenanted),
+    claims: PlatformClaims = Depends(require_platform_admin),
+) -> ActionResult:
+    """Correct a person's name, role, or whether they may sign in.
+
+    Their email address is not editable here — see StaffPatch for why.
+    """
+    await enforce_limit(
+        request, bucket="platform-staff-write", limit=60, window_seconds=3600,
+        subject=str(claims.admin_id),
+        message="Too many changes. Try again shortly.",
+    )
+    tenant = await _bind_tenant(session, tenant_id)
+
+    target = (
+        await session.execute(
+            text(
+                "SELECT email, role::text AS role, is_active FROM staff_users "
+                " WHERE user_id = :u AND tenant_id = :t AND deleted_at IS NULL"
+            ),
+            {"u": str(user_id), "t": str(tenant_id)},
+        )
+    ).mappings().first()
+    if not target:
+        raise HTTPException(status_code=404, detail="No such person in this workspace.")
+
+    losing_admin = (
+        payload.is_active is False
+        or (payload.role is not None and payload.role not in _ADMIN_ROLES)
+    )
+    if losing_admin:
+        await _assert_not_last_admin(
+            session, tenant_id, target["role"],
+            "deactivated" if payload.is_active is False else "moved off the administrator role",
+        )
+
+    sets, params = [], {"u": str(user_id), "t": str(tenant_id)}
+    if payload.first_name is not None:
+        sets.append("first_name = :f"); params["f"] = payload.first_name
+    if payload.last_name is not None:
+        sets.append("last_name = :l"); params["l"] = payload.last_name
+    if payload.role is not None:
+        sets.append("role = CAST(:r AS user_role)"); params["r"] = payload.role
+    if payload.is_active is not None:
+        sets.append("is_active = :a"); params["a"] = payload.is_active
+    if not sets:
+        raise HTTPException(status_code=400, detail="Nothing to change.")
+
+    sets.append("updated_at = now()")
+    await session.execute(
+        text(
+            f"UPDATE staff_users SET {', '.join(sets)} "
+            " WHERE user_id = :u AND tenant_id = :t AND deleted_at IS NULL"
+        ),
+        params,
+    )
+
+    # A role carried in a live token would otherwise outlast the change by up
+    # to a counter shift. Deactivation without this is not deactivation at all.
+    reauth = payload.role is not None or payload.is_active is not None
+    if reauth:
+        await _revoke_sessions_for_user(session, str(user_id))
+
+    await session.commit()
+    await session.execute(text("SELECT set_config('app.current_tenant_id', '', true)"))
+
+    log.warning(
+        "platform_staff_updated", by=str(claims.admin_id), by_email=claims.email,
+        tenant_id=str(tenant_id), slug=tenant["slug"], target_user=str(user_id),
+        changed=sorted(k for k in payload.model_dump(exclude_none=True)),
+        signed_out=reauth,
+    )
+    return ActionResult(
+        ok=True,
+        message=(
+            f"Updated {target['email']}."
+            + (" They have been signed out everywhere." if reauth else "")
+        ),
+    )
+
+
+@router.delete("/tenants/{tenant_id}/staff/{user_id}", response_model=ActionResult)
+async def remove_staff_member(
+    tenant_id: uuid.UUID,
+    user_id: uuid.UUID,
+    request: Request,
+    session: AsyncSession = Depends(get_session_untenanted),
+    claims: PlatformClaims = Depends(require_platform_admin),
+) -> ActionResult:
+    """Remove a person from a workspace.
+
+    The row is retained with deleted_at set, and this is not squeamishness: it
+    is referenced by the rentals they checked out, the damage they recorded and
+    the customers they flagged. Erasing it would either break those references
+    or rewrite history to say nobody did the work.
+
+    What removal means in practice is the part that matters: the account cannot
+    sign in, every existing session is dead, and the person disappears from the
+    workspace's team list. Purging a whole workspace still deletes these rows
+    outright, which is where erasure belongs.
+    """
+    await enforce_limit(
+        request, bucket="platform-staff-write", limit=60, window_seconds=3600,
+        subject=str(claims.admin_id),
+        message="Too many changes. Try again shortly.",
+    )
+    tenant = await _bind_tenant(session, tenant_id)
+
+    target = (
+        await session.execute(
+            text(
+                "SELECT email, role::text AS role FROM staff_users "
+                " WHERE user_id = :u AND tenant_id = :t AND deleted_at IS NULL"
+            ),
+            {"u": str(user_id), "t": str(tenant_id)},
+        )
+    ).mappings().first()
+    if not target:
+        raise HTTPException(status_code=404, detail="No such person in this workspace.")
+
+    await _assert_not_last_admin(session, tenant_id, target["role"], "removed")
+
+    await session.execute(
+        text(
+            "UPDATE staff_users "
+            "   SET deleted_at = now(), is_active = false, updated_at = now() "
+            " WHERE user_id = :u AND tenant_id = :t"
+        ),
+        {"u": str(user_id), "t": str(tenant_id)},
+    )
+    await _revoke_sessions_for_user(session, str(user_id))
+    await session.commit()
+    await session.execute(text("SELECT set_config('app.current_tenant_id', '', true)"))
+
+    log.warning(
+        "platform_staff_removed", by=str(claims.admin_id), by_email=claims.email,
+        tenant_id=str(tenant_id), slug=tenant["slug"], target_user=str(user_id),
+        role=target["role"],
+    )
+    return ActionResult(
+        ok=True,
+        message=f"{target['email']} removed and signed out everywhere.",
     )

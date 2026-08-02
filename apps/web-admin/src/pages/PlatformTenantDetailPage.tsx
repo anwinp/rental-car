@@ -58,6 +58,20 @@ interface Detail {
 
 const PLANS = ['STARTER', 'TRIAL', 'GROWTH', 'ENTERPRISE']
 
+// Narrower than the database enum on purpose: CUSTOMER, CORPORATE_BOOKER,
+// API_PARTNER and AGENT_SERVICE are not employees, and minting one of those
+// inside a customer's workspace is not a support action.
+const ROLES = [
+  'SUPER_ADMIN', 'SYSTEM_ADMIN', 'EXECUTIVE', 'REGIONAL_MANAGER',
+  'BRANCH_MANAGER', 'FLEET_MANAGER', 'FINANCE', 'FINANCE_ANALYST',
+  'CLAIMS_COORDINATOR', 'SENIOR_AGENT', 'MAINTENANCE_TECH', 'COUNTER_AGENT',
+  'READONLY_AUDITOR',
+]
+
+function roleLabel(r: string): string {
+  return r.replace(/_/g, ' ').toLowerCase()
+}
+
 function when(v: string | null | undefined): string {
   if (!v) return 'never'
   const d = new Date(v)
@@ -77,6 +91,9 @@ export function PlatformTenantDetailPage() {
   // Which row has just been sent one, so the button can report what happened
   // rather than snapping back and leaving the operator wondering.
   const [sent, setSent] = useState<string | null>(null)
+  const [adding, setAdding] = useState(false)
+  const [draft, setDraft] = useState({ email: '', first_name: '', last_name: '', role: 'COUNTER_AGENT' })
+  const [editing, setEditing] = useState<string | null>(null)
 
   async function load() {
     try {
@@ -130,6 +147,57 @@ export function PlatformTenantDetailPage() {
     } catch {
       setError('Could not reach the server.')
     } finally { setBusy(false) }
+  }
+
+  async function call(url: string, init: RequestInit, ok: string): Promise<boolean> {
+    setBusy(true); setError(''); setNotice('')
+    try {
+      const res = await fetch(url, { credentials: 'include', ...init })
+      const body = await res.json().catch(() => ({}))
+      if (res.ok) { setNotice(String(body.message ?? ok)); await load(); return true }
+      setError(String(body.detail ?? 'That did not work.'))
+      return false
+    } catch {
+      setError('Could not reach the server.')
+      return false
+    } finally { setBusy(false) }
+  }
+
+  async function addMember(e: React.FormEvent) {
+    e.preventDefault()
+    const okd = await call(
+      `/api/v1/platform/tenants/${tenantId}/staff`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(draft) },
+      'Account created.',
+    )
+    if (okd) {
+      setAdding(false)
+      setDraft({ email: '', first_name: '', last_name: '', role: 'COUNTER_AGENT' })
+    }
+  }
+
+  async function patchMember(userId: string, patch: Record<string, unknown>) {
+    await call(
+      `/api/v1/platform/tenants/${tenantId}/staff/${userId}`,
+      { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) },
+      'Updated.',
+    )
+  }
+
+  async function removeMember(userId: string, email: string) {
+    // Named for what it does rather than what the button says. "Delete" would
+    // promise erasure this does not perform.
+    if (!window.confirm(
+      `Remove ${email} from this workspace?\n\n` +
+      'They are signed out immediately and can never sign in again. Their ' +
+      'record stays attached to the rentals and claims they handled, so that ' +
+      'history is not rewritten.'
+    )) return
+    await call(
+      `/api/v1/platform/tenants/${tenantId}/staff/${userId}`,
+      { method: 'DELETE' },
+      'Removed.',
+    )
   }
 
   if (error && !d) {
@@ -285,16 +353,79 @@ export function PlatformTenantDetailPage() {
 
       {/* Who can actually get in — the churn and lockout signal. */}
       <section className="mt-4 rounded-xl border border-slate-800 bg-slate-900/40 p-5">
-        <h2 className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-          People ({d.staff.length})
-        </h2>
-        {/* Said once, here, rather than in a tooltip on the button. An operator
-            should know the shape of the power before they reach for it. */}
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h2 className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+            People ({d.staff.length})
+          </h2>
+          <button
+            disabled={busy}
+            onClick={() => setAdding((v) => !v)}
+            className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-500 disabled:opacity-50"
+          >
+            {adding ? 'Cancel' : 'Add person'}
+          </button>
+        </div>
+        {/* Said once, here, rather than in a tooltip on every button. An
+            operator should know the shape of the power before reaching for it. */}
         <p className="mt-2 text-xs text-slate-500">
-          You can start a password reset. The link goes to the address on the
-          account and nowhere else — you will not see it, and you cannot set a
-          password yourself.
+          You can add people, change a role, and start a password reset. The
+          reset link goes to the address on the account and nowhere else — you
+          will not see it, and you cannot set a password yourself. Email
+          addresses are not editable here, so a reset can never be pointed
+          somewhere new.
         </p>
+
+        {adding && (
+          <form onSubmit={addMember}
+                className="mt-4 grid gap-3 rounded-lg border border-slate-800 bg-slate-950/60 p-4 sm:grid-cols-2">
+            <label className="text-xs text-slate-400">
+              Email
+              <input
+                type="email" required value={draft.email}
+                onChange={(e) => setDraft({ ...draft, email: e.target.value })}
+                className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none"
+              />
+            </label>
+            <label className="text-xs text-slate-400">
+              Role
+              <select
+                value={draft.role}
+                onChange={(e) => setDraft({ ...draft, role: e.target.value })}
+                className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none"
+              >
+                {ROLES.map((r) => <option key={r} value={r}>{roleLabel(r)}</option>)}
+              </select>
+            </label>
+            <label className="text-xs text-slate-400">
+              First name
+              <input
+                required value={draft.first_name}
+                onChange={(e) => setDraft({ ...draft, first_name: e.target.value })}
+                className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none"
+              />
+            </label>
+            <label className="text-xs text-slate-400">
+              Last name
+              <input
+                value={draft.last_name}
+                onChange={(e) => setDraft({ ...draft, last_name: e.target.value })}
+                className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none"
+              />
+            </label>
+            <p className="text-xs text-slate-500 sm:col-span-2">
+              No password is set here. They get an email with a one-hour link to
+              choose their own — which is the only way into the account.
+            </p>
+            <div className="sm:col-span-2">
+              <button
+                type="submit" disabled={busy}
+                className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500 disabled:opacity-50"
+              >
+                Create account and send link
+              </button>
+            </div>
+          </form>
+        )}
         <div className="mt-3 overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
@@ -303,7 +434,7 @@ export function PlatformTenantDetailPage() {
                 <th className="px-2 py-2 text-left font-semibold">Role</th>
                 <th className="px-2 py-2 text-left font-semibold">Last sign-in</th>
                 <th className="px-2 py-2 text-left font-semibold">State</th>
-                <th className="px-2 py-2 text-right font-semibold">Recovery</th>
+                <th className="px-2 py-2 text-right font-semibold">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -311,7 +442,31 @@ export function PlatformTenantDetailPage() {
                 <tr key={u.user_id} className="border-t border-slate-800/70">
                   <td className="px-2 py-2 text-slate-200">{u.email}</td>
                   <td className="px-2 py-2 text-xs text-slate-400">
-                    {u.role.replace(/_/g, ' ').toLowerCase()}
+                    {editing === u.user_id ? (
+                      <select
+                        autoFocus
+                        defaultValue={u.role}
+                        disabled={busy}
+                        onBlur={() => setEditing(null)}
+                        onChange={(e) => {
+                          setEditing(null)
+                          if (e.target.value !== u.role) {
+                            void patchMember(u.user_id, { role: e.target.value })
+                          }
+                        }}
+                        className="rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-white focus:border-indigo-500 focus:outline-none"
+                      >
+                        {ROLES.map((r) => <option key={r} value={r}>{roleLabel(r)}</option>)}
+                      </select>
+                    ) : (
+                      <button
+                        onClick={() => setEditing(u.user_id)}
+                        className="rounded px-1 text-left hover:text-white hover:underline"
+                        title="Change role"
+                      >
+                        {roleLabel(u.role)}
+                      </button>
+                    )}
                   </td>
                   <td className="px-2 py-2 text-xs text-slate-400">{when(u.last_login_at)}</td>
                   <td className="px-2 py-2">
@@ -322,19 +477,39 @@ export function PlatformTenantDetailPage() {
                       {u.is_mfa_enabled && <span className="text-emerald-400">MFA</span>}
                     </div>
                   </td>
-                  <td className="px-2 py-2 text-right">
-                    <button
-                      disabled={busy || sent === u.user_id || !u.is_active}
-                      onClick={() => void sendReset(u.user_id, u.email)}
-                      title={
-                        u.is_active
-                          ? `Email a single-use recovery link to ${u.email}`
-                          : 'Reactivate this account first — the link would work and the sign-in would not.'
-                      }
-                      className="whitespace-nowrap rounded-lg border border-slate-700 px-2.5 py-1 text-xs text-slate-300 hover:border-slate-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
-                    >
-                      {sent === u.user_id ? 'Link sent' : 'Send reset link'}
-                    </button>
+                  <td className="px-2 py-2">
+                    <div className="flex flex-wrap items-center justify-end gap-1.5">
+                      <button
+                        disabled={busy || sent === u.user_id || !u.is_active}
+                        onClick={() => void sendReset(u.user_id, u.email)}
+                        title={
+                          u.is_active
+                            ? `Email a single-use recovery link to ${u.email}`
+                            : 'Reactivate this account first — the link would work and the sign-in would not.'
+                        }
+                        className="whitespace-nowrap rounded-lg border border-slate-700 px-2.5 py-1 text-xs text-slate-300 hover:border-slate-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        {sent === u.user_id ? 'Link sent' : 'Send reset'}
+                      </button>
+                      <button
+                        disabled={busy}
+                        onClick={() => void patchMember(u.user_id, { is_active: !u.is_active })}
+                        title={u.is_active
+                          ? 'Block sign-in and end their sessions. Reversible.'
+                          : 'Let them sign in again.'}
+                        className="whitespace-nowrap rounded-lg border border-slate-700 px-2.5 py-1 text-xs text-slate-300 hover:border-slate-500 hover:text-white disabled:opacity-40"
+                      >
+                        {u.is_active ? 'Deactivate' : 'Reactivate'}
+                      </button>
+                      <button
+                        disabled={busy}
+                        onClick={() => void removeMember(u.user_id, u.email)}
+                        title="Remove from this workspace"
+                        className="whitespace-nowrap rounded-lg border border-red-900/60 px-2.5 py-1 text-xs text-red-300 hover:border-red-700 hover:text-red-200 disabled:opacity-40"
+                      >
+                        Remove
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}

@@ -195,6 +195,17 @@ export function PlatformTenantDetailPage() {
     )
   }
 
+  async function verifyWorkspace() {
+    if (!window.confirm(
+      `Confirm ${d!.name} without the email link?\n\n` +
+      'Use this when the owner cannot receive or click the link and you are ' +
+      'satisfied they are who they say. It activates the workspace and marks ' +
+      'the address confirmed. It does not pay for any plan they chose.'
+    )) return
+    await call(`/api/v1/platform/tenants/${tenantId}/verify`, { method: 'POST' },
+      'Workspace confirmed.')
+  }
+
   async function removeMember(userId: string, email: string) {
     // Named for what it does rather than what the button says. "Delete" would
     // promise erasure this does not perform.
@@ -254,6 +265,35 @@ export function PlatformTenantDetailPage() {
 
       {notice && <p className="mt-4 text-sm text-emerald-400">{notice}</p>}
       {error && <p className="mt-4 text-sm text-red-300">{error}</p>}
+
+      {/* The commonest support call for a new workspace: the confirmation
+          email went to spam, or to a shared inbox nobody reads, or the address
+          has a typo. Resending it to the address that is not working does not
+          help, so this is the way out. */}
+      {d.status === 'PENDING_VERIFICATION' && (
+        <section className="mt-6 rounded-xl border border-amber-700/50 bg-amber-500/10 p-5">
+          <h2 className="text-sm font-semibold text-amber-200">
+            Waiting on email confirmation
+          </h2>
+          <p className="mt-1 text-sm text-amber-100/80">
+            Nobody can sign in and the booking site is off until the owner
+            confirms {d.primary_email ?? 'their address'}. If they cannot
+            receive the link and you are satisfied who they are, confirm it for
+            them.
+          </p>
+          <button
+            onClick={() => void verifyWorkspace()} disabled={busy}
+            className="mt-3 rounded-lg bg-amber-600 px-3 py-2 text-sm font-semibold text-white hover:bg-amber-500 disabled:opacity-50"
+          >
+            Confirm and activate
+          </button>
+          {d.subscription_tier && (
+            <p className="mt-2 text-xs text-amber-100/60">
+              This does not pay for a plan — they will still be asked for that.
+            </p>
+          )}
+        </section>
+      )}
 
       {/* Can they sell? The first question worth answering. */}
       <section className="mt-6 rounded-xl border border-slate-800 bg-slate-900/40 p-5">

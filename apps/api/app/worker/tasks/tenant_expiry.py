@@ -280,6 +280,12 @@ async def _sweep_unpaid() -> dict:
                     SELECT t.tenant_id::text AS tid, t.slug, t.primary_email
                       FROM tenants t
                      WHERE t.deleted_at IS NULL
+                       -- Only ever an abandoned signup. Once a workspace is
+                       -- confirmed — by the customer clicking the link or by
+                       -- an operator confirming on their behalf — somebody has
+                       -- shown they want it, and an unpaid invoice is a
+                       -- conversation rather than grounds for deletion.
+                       AND t.status = 'PENDING_VERIFICATION'
                        AND t.signup_plan_code IS NOT NULL
                        AND t.created_at < now() - make_interval(hours => :grace)
                        AND NOT EXISTS (

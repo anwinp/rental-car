@@ -2011,3 +2011,99 @@ async def set_plan_features(
     log.warning("platform_plan_features_set", by=str(claims.admin_id),
                 by_email=claims.email, code=code, features=sorted(wanted))
     return PlanFeatures(plan_code=code, features=sorted(wanted))
+
+
+# ── Confirming a workspace on the customer's behalf ──────────────────────────
+
+@router.post("/tenants/{tenant_id}/verify", response_model=ActionResult)
+async def verify_tenant_manually(
+    tenant_id: uuid.UUID,
+    request: Request,
+    session: AsyncSession = Depends(get_session_untenanted),
+    claims: PlatformClaims = Depends(require_platform_admin),
+) -> ActionResult:
+    """Confirm a workspace whose owner never managed to click the link.
+
+    The support call is always the same: the email went to spam, or to a
+    distribution list nobody reads, or the address was mistyped by one
+    character and the person is on the phone able to prove who they are. Until
+    now the only remedies were to resend a link to the address that is not
+    working, or to edit the database.
+
+    This does exactly what clicking the link does — status to ACTIVE, the
+    founding admin's address marked verified — and nothing more. In particular
+    it does NOT grant a plan: a workspace that chose a paid plan still owes for
+    it and is still prompted, because confirming who somebody is and taking
+    their money are different acts.
+
+    Deliberately loud in the log. It is the one place where the proof that an
+    address belongs to the person using it is replaced by an operator's
+    judgement, and six months later somebody will want to know who decided
+    that and when.
+    """
+    await enforce_limit(
+        request, bucket="platform-verify", limit=30, window_seconds=3600,
+        subject=str(claims.admin_id), message="Too many. Try again shortly.",
+    )
+    await session.execute(text("SELECT set_config('app.current_tenant_id', '', true)"))
+
+    row = (
+        await session.execute(
+            text(
+                "SELECT slug, status, primary_email FROM tenants "
+                " WHERE tenant_id = :t AND deleted_at IS NULL"
+            ),
+            {"t": str(tenant_id)},
+        )
+    ).mappings().first()
+    if not row:
+        raise HTTPException(status_code=404, detail="No such workspace.")
+    if row["status"] != "PENDING_VERIFICATION":
+        raise HTTPException(
+            status_code=409,
+            detail=f"This workspace is already {row['status'].replace('_', ' ').lower()}.",
+        )
+
+    await session.execute(
+        text(
+            "UPDATE tenants SET status = 'ACTIVE', updated_at = now() "
+            " WHERE tenant_id = :t AND status = 'PENDING_VERIFICATION'"
+        ),
+        {"t": str(tenant_id)},
+    )
+
+    # Mark the founding administrator confirmed, and burn any outstanding
+    # links so one arriving later cannot un-do or re-do this.
+    await session.execute(
+        text("SELECT set_config('app.current_tenant_id', :t, true)"),
+        {"t": str(tenant_id)},
+    )
+    await session.execute(
+        text(
+            "UPDATE staff_users SET email_verified_at = COALESCE(email_verified_at, now()) "
+            " WHERE tenant_id = :t AND role IN ('SYSTEM_ADMIN','SUPER_ADMIN') "
+            "   AND deleted_at IS NULL"
+        ),
+        {"t": str(tenant_id)},
+    )
+    await session.execute(
+        text(
+            "UPDATE email_verifications SET consumed_at = now() "
+            " WHERE tenant_id = :t AND consumed_at IS NULL"
+        ),
+        {"t": str(tenant_id)},
+    )
+    await session.commit()
+    await session.execute(text("SELECT set_config('app.current_tenant_id', '', true)"))
+
+    await invalidate_slug_cache(row["slug"])
+    log.warning(
+        "platform_tenant_verified_manually",
+        by=str(claims.admin_id), by_email=claims.email,
+        slug=row["slug"], tenant_id=str(tenant_id),
+        tenant_email=row["primary_email"],
+    )
+    return ActionResult(
+        ok=True,
+        message=f"{row['slug']} is confirmed and can sign in.",
+    )

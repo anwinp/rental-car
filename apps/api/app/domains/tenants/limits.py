@@ -65,12 +65,20 @@ async def get_usage(session: AsyncSession, tenant_id: uuid.UUID | str) -> dict:
 
 
 async def assert_within_limit(
-    session: AsyncSession, tenant_id: uuid.UUID | str, resource: str
+    session: AsyncSession,
+    tenant_id: uuid.UUID | str,
+    resource: str,
+    adding: int = 1,
 ) -> None:
-    """Raise 402 if adding one more of `resource` would exceed the plan.
+    """Raise 402 if adding `adding` more of `resource` would exceed the plan.
 
     402 Payment Required rather than 403: this is not a permissions problem, it
     is a commercial one, and the distinction matters to whoever reads the log.
+
+    `adding` exists because bulk import checked nothing. A cap tested one row at
+    a time is not a cap when the endpoint takes a thousand rows at once: a
+    Starter workspace capped at 25 vehicles could upload a CSV of ten thousand
+    and the per-row path was never even reached.
     """
     if resource not in _RESOURCES:
         return
@@ -112,11 +120,18 @@ async def assert_within_limit(
         ).scalar() or 0
         used += pending
 
-    if used >= row["cap"]:
+    if used + adding > row["cap"]:
+        remaining = max(0, row["cap"] - used)
+        detail = f"Your {row['plan']} plan includes {row['cap']} {human}. "
+        if adding > 1:
+            # Say how many would fit. "Upgrade to add more" is useless advice
+            # when the answer is to split the file.
+            detail += (
+                f"You asked to add {adding} and have room for {remaining}. "
+                "Upgrade, or import fewer."
+            )
+        else:
+            detail += "Upgrade to add more."
         raise HTTPException(
-            status_code=status.HTTP_402_PAYMENT_REQUIRED,
-            detail=(
-                f"Your {row['plan']} plan includes {row['cap']} {human}. "
-                f"Upgrade to add more."
-            ),
+            status_code=status.HTTP_402_PAYMENT_REQUIRED, detail=detail
         )

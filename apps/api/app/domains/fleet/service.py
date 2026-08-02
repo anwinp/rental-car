@@ -424,6 +424,12 @@ class FleetService:
         Validate ALL rows first; if any have errors, return without importing any.
         On full validation pass, import all atomically.
         """
+        # Checked for the whole batch before validating a single row. The
+        # per-vehicle path added in 074 does not help here: this endpoint never
+        # calls it, so a workspace capped at 25 could upload ten thousand.
+        # Raised before the validation pass so a rejected import costs nothing.
+        await assert_within_limit(session, tenant_id, "vehicles", adding=len(rows))
+
         REQUIRED_FIELDS = {"vin", "make", "model", "model_year", "vehicle_class_id", "home_location_id"}
         errors: list[dict] = []
         seen_vins: set[str] = set()

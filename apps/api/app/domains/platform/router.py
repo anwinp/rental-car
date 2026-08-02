@@ -44,6 +44,7 @@ from app.core.tenancy import (
     tenant_host,
 )
 from app.core.security import bump_epoch, hash_password
+from app.domains.tenants.limits import assert_within_limit
 from app.core.mailer import send_email, wrap_html
 from app.domains.tenants.provisioning import provision_tenant_defaults
 
@@ -822,10 +823,22 @@ async def change_tenant_plan(
 
     tier = (body.subscription_tier or "").strip().upper() or None
     if tier:
+        # Archived plans are excluded. Archiving is the operation offered
+        # wherever deletion is refused, and it is meant to stop NEW
+        # assignments — if this list ignored is_active, "archive" would mean
+        # nothing but a badge in the console, and the plans page would be
+        # describing a control that does not exist. Workspaces already on an
+        # archived plan stay on it; that is the whole point of archiving
+        # instead of deleting.
         allowed = [
             r[0]
             for r in (
-                await session.execute(text("SELECT code FROM plans ORDER BY sort_order, code"))
+                await session.execute(
+                    text(
+                        "SELECT code FROM plans WHERE is_active "
+                        " ORDER BY sort_order, code"
+                    )
+                )
             ).all()
         ]
         # Checked against the plans catalogue rather than a constant, because a plan
@@ -835,7 +848,8 @@ async def change_tenant_plan(
         if tier not in allowed:
             raise HTTPException(
                 400,
-                f"Unknown plan '{tier}'. Configured plans: {', '.join(allowed)}.",
+                f"Cannot assign '{tier}'. Available plans: {', '.join(allowed)}. "
+                f"An archived plan can be kept but not newly assigned.",
             )
 
     sets, params = [], {"t": str(tenant_id)}
@@ -1267,6 +1281,12 @@ async def create_staff_member(
         message="Too many changes. Try again shortly.",
     )
     tenant = await _bind_tenant(session, tenant_id)
+
+    # The console is a support tool, not an exemption. Adding people here
+    # bypassed the seat cap entirely while the workspace's own invite flow
+    # enforced it — so the way around a plan limit was to ask support.
+    await assert_within_limit(session, tenant_id, "staff")
+
     email = payload.email.strip().lower()
 
     # uq_staff_email_tenant covers soft-deleted rows too, so a plain INSERT
@@ -1398,6 +1418,12 @@ async def update_staff_member(
     ).mappings().first()
     if not target:
         raise HTTPException(status_code=404, detail="No such person in this workspace.")
+
+    # Reactivating consumes a seat. team_router's reactivate has always checked
+    # this; the console's did not, so a workspace at its cap could be pushed
+    # over it by turning someone back on.
+    if payload.is_active is True and not target["is_active"]:
+        await assert_within_limit(session, tenant_id, "staff")
 
     losing_admin = (
         payload.is_active is False

@@ -21,6 +21,7 @@ export const metadata: Metadata = {
 }
 
 import TenantBoot from './components/TenantBoot'
+import { StorefrontOnly } from './components/StorefrontOnly'
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
@@ -33,17 +34,17 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           >
             Skip to main content
           </a>
-          <div style={{ display: 'flex', height: '100vh', overflow: 'hidden' }}>
-            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflowY: 'auto' }}>
-              <Navbar />
+          <div style={{ display: 'flex', minHeight: '100vh' }}>
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+              <StorefrontOnly><Navbar /></StorefrontOnly>
               <main id="main-content" style={{ flex: 1 }}>
                 {children}
               </main>
-              <Footer />
+              <StorefrontOnly><Footer /></StorefrontOnly>
             </div>
           </div>
           {/* Chat panel renders as fixed overlay — does not affect flex layout */}
-          <AgentChatPanel />
+          <StorefrontOnly><AgentChatPanel /></StorefrontOnly>
         </Providers>
       </TenantBoot>
       </body>

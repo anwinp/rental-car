@@ -42,6 +42,10 @@ python-multipart==0.0.12
 
 # PDF generation
 weasyprint==62.3
+# weasyprint 62.x requires pydyf <0.11. Unpinned, pip resolved 0.12.1 and every
+# render failed with "'super' object has no attribute 'transform'" — invisible
+# until now because weasyprint was installed and never imported.
+pydyf==0.10.0
 
 # AWS
 boto3==1.35.36

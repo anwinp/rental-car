@@ -4,7 +4,7 @@ from __future__ import annotations
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -166,6 +166,39 @@ async def get_agreement(
     svc = CheckoutService(session, claims.tenant_id)
     ra = await svc.get_rental_agreement(ra_id, claims.tenant_id)
     return RentalAgreementResponse.model_validate(ra, from_attributes=True)
+
+
+@router.get(
+    "/agreements/{ra_id}/document",
+    summary="The signed rental agreement as a PDF",
+    response_class=Response,
+)
+async def get_agreement_document(
+    ra_id: uuid.UUID,
+    claims: UserClaims = Depends(require_permission("reservations", "read")),
+    session: AsyncSession = Depends(get_session),
+) -> Response:
+    """Stream the agreement PDF, rendering it on first request.
+
+    Returned inline so it opens in a browser tab at the counter rather than
+    landing in a downloads folder while a customer waits.
+    """
+    from app.domains.checkout.agreement_document import (
+        AgreementRenderError,
+        get_or_create_pdf,
+    )
+
+    try:
+        pdf, _key = await get_or_create_pdf(session, ra_id)
+    except AgreementRenderError as exc:
+        # Deliberately not a placeholder document — see the module docstring.
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="agreement-{ra_id}.pdf"'},
+    )
 
 
 # ── Active rentals (enriched, for return processing) ─────────────────────────

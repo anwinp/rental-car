@@ -27,6 +27,7 @@ from app.core.redis import get_session_redis
 from app.core.security import hash_password
 from app.core.tenancy import (
     RESERVED_SLUGS,
+    assert_tenant_trading,
     extract_slug,
     invalidate_slug_cache,
     tenant_host,
@@ -492,6 +493,12 @@ async def tenant_config(
             detail=f"No workspace found at '{candidate}'.",
         )
 
+    # Every storefront boots from this call, so refusing here is what actually
+    # stops a suspended workspace from trading. Status previously gated staff
+    # login and nothing else: the back office and counter went dark while the
+    # booking site kept taking reservations and charging cards.
+    await assert_tenant_trading(session, tenant_id)
+
     row = (
         await session.execute(
             text(
@@ -538,6 +545,23 @@ async def workspace_open(
     tenant_id = await tenant_id_for_slug(session, candidate)
     if not tenant_id:
         raise HTTPException(status_code=404, detail=f"No workspace found at '{candidate}'.")
+
+    # "Ready to take bookings" has to mean the workspace is allowed to as well
+    # as equipped to. This answered on fleet, branches and rates alone, so a
+    # suspended company reported itself open for business.
+    status_row = (
+        await session.execute(
+            text("SELECT status FROM tenants WHERE tenant_id = :t"), {"t": tenant_id}
+        )
+    ).first()
+    if status_row and status_row[0] not in ("ACTIVE", "TRIAL"):
+        return {
+            "slug": candidate,
+            "open": False,
+            "vehicles": 0,
+            "locations": 0,
+            "reason": "This rental company is not currently taking bookings.",
+        }
 
     await session.execute(
         text("SELECT set_config('app.current_tenant_id', :t, true)"), {"t": tenant_id}

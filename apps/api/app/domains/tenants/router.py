@@ -20,25 +20,22 @@ router = APIRouter()
 _svc = TenantService()
 
 
-# ── POST /tenants ────────────────────────────────────────────────────────────
-
-
-@router.post(
-    "",
-    response_model=TenantResponse,
-    status_code=status.HTTP_201_CREATED,
-    summary="Provision a new tenant",
-)
-async def create_tenant(
-    body: TenantProvisionRequest,
-    session: AsyncSession = Depends(get_session),
-) -> TenantResponse:
-    """
-    Create a new tenant and its first SUPER_ADMIN user atomically.
-    This endpoint does not require authentication (it is the bootstrap step).
-    """
-    tenant = await _svc.create_tenant(session, body.tenant, body.first_admin)
-    return TenantResponse.model_validate(tenant)
+# ── POST /tenants — REMOVED ──────────────────────────────────────────────────
+#
+# This was an UNAUTHENTICATED endpoint that created a workspace with
+# status=ACTIVE — bypassing the email verification every real signup requires —
+# and minted its first user as SUPER_ADMIN, a role no other code path ever
+# grants. No rate limit, no reserved-slug check, no verification. Its docstring
+# called it "the bootstrap step".
+#
+# It was not exploitable only by accident: _create_first_admin never bound the
+# tenant GUC, so the staff_users insert violated the RLS WITH CHECK from
+# migration 051 and the transaction rolled back. The only thing between the
+# open internet and a SUPER_ADMIN account was an RLS clause — and SUPER_ADMIN
+# is the role that can mint agent tokens for any tenant it names.
+#
+# POST /api/v1/public/register supersedes it entirely: rate-limited,
+# slug-validated, email-verified, and it creates SYSTEM_ADMIN not SUPER_ADMIN.
 
 
 # ── GET /tenants/{tenant_id} ─────────────────────────────────────────────────

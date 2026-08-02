@@ -540,6 +540,21 @@ async def issue_agent_token(
     if "SUPER_ADMIN" not in claims.roles:
         raise HTTPException(status_code=403, detail="SUPER_ADMIN required")
 
+    # The tenant came from the request BODY and was used verbatim, with no
+    # comparison to the caller's own. resolve_tenant trusts the JWT claim above
+    # everything else, so the resulting token binds RLS to whatever workspace
+    # was named — and AGENT_SERVICE can read reservations, customers, payments
+    # and pricing, i.e. every renter's PII and payment history. The token comes
+    # back as a raw string that replays fine in a cookie.
+    #
+    # SUPER_ADMIN is not granted by any self-service path today, which is the
+    # only reason this was not already critical. That is not a control.
+    if str(payload.tenant_id) != str(claims.tenant_id):
+        raise HTTPException(
+            status_code=403,
+            detail="An agent token can only be issued for your own workspace.",
+        )
+
     import uuid as _uuid
     from app.core.security import create_access_token
 

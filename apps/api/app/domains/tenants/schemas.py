@@ -85,7 +85,16 @@ class TenantUpdate(BaseModel):
         default=None, min_length=3, max_length=3, pattern=r"^[A-Z]{3}$"
     )
     timezone: Optional[str] = None
-    subscription_tier: Optional[str] = None
+    # subscription_tier is NOT here, deliberately. PATCH /tenants/{id} is gated
+    # on admin:config, which a workspace's own SYSTEM_ADMIN holds — and RLS
+    # permits a bound tenant to update its own row. So exposing the field let
+    # any operator send {"subscription_tier": "ENTERPRISE"}, get 200, and lift
+    # their own seat and vehicle caps permanently. Migration 062's docstring
+    # names that exact request as the attack it prevents; the policy it ships
+    # prevents only the cross-tenant half of it.
+    #
+    # Plan changes belong to the platform console, which is gated on
+    # is_platform_admin — a flag no tenant-facing endpoint can set.
     logo_url: Optional[str] = None
     trading_name: Optional[str] = None
     company_reg_no: Optional[str] = None

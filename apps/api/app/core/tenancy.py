@@ -271,6 +271,51 @@ async def resolve_tenant(request: Request, session=None) -> Optional[str]:
     return from_header
 
 
+# Statuses in which a workspace may serve CUSTOMERS. Deliberately narrower than
+# the set in which staff may sign in, and checked separately from it.
+#
+# Tenant status gated staff login and nothing else. The public booking path
+# never read it: tenant_id_for_slug filters deleted_at only, and neither
+# tenant-config nor workspace-open looked at status at all. So suspending a
+# workspace for non-payment locked the operator out of their own back office
+# and counter while the storefront carried on taking reservations and charging
+# cards — bookings no employee could see, for cars nobody could check out.
+#
+# PENDING_VERIFICATION is excluded too: a workspace whose email was never
+# confirmed should not be selling to the public.
+_TRADING_STATUSES: frozenset[str] = frozenset({"ACTIVE", "TRIAL"})
+
+
+async def assert_tenant_trading(session, tenant_id) -> None:
+    """Refuse a public, customer-facing request for a workspace not trading.
+
+    Raises 403 rather than 404: the workspace exists, and saying so is not a
+    disclosure — the storefront hostname already reveals it. A 404 would send
+    an operator hunting for a broken link instead of an unpaid invoice.
+    """
+    from fastapi import HTTPException
+    from sqlalchemy import text
+
+    row = (
+        await session.execute(
+            text(
+                "SELECT status FROM tenants "
+                " WHERE tenant_id = :t AND deleted_at IS NULL"
+            ),
+            {"t": str(tenant_id)},
+        )
+    ).first()
+
+    if row is None:
+        raise HTTPException(status_code=404, detail="No such workspace.")
+
+    if row[0] not in _TRADING_STATUSES:
+        raise HTTPException(
+            status_code=403,
+            detail="This rental company is not currently taking bookings.",
+        )
+
+
 async def require_tenant() -> uuid.UUID:
     """FastAPI dependency: the resolved tenant, or a 400.
 

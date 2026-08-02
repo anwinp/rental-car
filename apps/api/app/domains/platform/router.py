@@ -288,6 +288,51 @@ async def create_tenant(
 
 # ── Suspend / reactivate ─────────────────────────────────────────────────────
 
+async def _revoke_tenant_sessions(session: AsyncSession, tenant_id: str) -> int:
+    """End every live session belonging to a workspace. Returns the user count.
+
+    Raising each user's credential epoch is the durable half — it invalidates
+    tokens this process cannot enumerate, including refresh tokens — and the
+    JTI sweep makes it immediate rather than waiting out the epoch cache.
+    """
+    from app.core.redis import REVOKED_TOKENS_SET, get_session_redis
+    from app.core.security import bump_epoch
+    from app.domains.auth.service import USER_SESSIONS_KEY
+
+    await session.execute(
+        text("SELECT set_config('app.current_tenant_id', :t, true)"),
+        {"t": tenant_id},
+    )
+    users = [
+        str(r[0])
+        for r in (
+            await session.execute(
+                text(
+                    "SELECT user_id FROM staff_users "
+                    " WHERE tenant_id = :t AND deleted_at IS NULL"
+                ),
+                {"t": tenant_id},
+            )
+        ).all()
+    ]
+
+    for uid in users:
+        await bump_epoch(session, uid)
+
+    try:
+        redis = get_session_redis()
+        for uid in users:
+            jtis = await redis.smembers(USER_SESSIONS_KEY.format(user_id=uid))
+            if jtis:
+                await redis.sadd(REVOKED_TOKENS_SET, *jtis)
+            await redis.delete(USER_SESSIONS_KEY.format(user_id=uid))
+    except Exception:  # noqa: BLE001 — the epoch is already written and holds
+        log.warning("tenant_session_sweep_failed", tenant_id=tenant_id, exc_info=True)
+
+    await session.execute(text("SELECT set_config('app.current_tenant_id', '', true)"))
+    return len(users)
+
+
 @router.post("/tenants/{tenant_id}/suspend", response_model=ActionResult,
              summary="Suspend a workspace")
 async def suspend_tenant(
@@ -303,6 +348,15 @@ async def suspend_tenant(
     if str(tenant_id) == str(claims.tenant_id):
         raise HTTPException(400, "You cannot suspend the workspace you are signed in to.")
 
+    # Clear the tenant binding first. This session is "untenanted" by
+    # dependency, but the ContextVar hook stamps the caller's own tenant onto
+    # every transaction, so the UPDATE below was scoped to the platform admin's
+    # OWN workspace — the one workspace this endpoint explicitly refuses to act
+    # on. Suspend and reactivate therefore returned "No such workspace." for
+    # every tenant, always. list_tenants already clears it for exactly this
+    # reason; these two never did.
+    await session.execute(text("SELECT set_config('app.current_tenant_id', '', true)"))
+
     res = await session.execute(
         text("UPDATE tenants SET status = 'SUSPENDED', updated_at = now() "
              "WHERE tenant_id = :t AND deleted_at IS NULL RETURNING slug"),
@@ -313,8 +367,23 @@ async def suspend_tenant(
         raise HTTPException(404, "No such workspace.")
 
     await invalidate_slug_cache(row[0])
-    log.info("platform_tenant_suspended", slug=row[0], by=str(claims.user_id))
-    return ActionResult(ok=True, message=f"{row[0]} is suspended. Data is retained.")
+
+    # Sign everyone out now. Login already refuses a suspended workspace, but
+    # nothing touched sessions that already existed — so suspension took up to
+    # one access-token lifetime to bite, and on the counter PWA that is EIGHT
+    # HOURS. A workspace suspended at the start of a shift kept checking cars
+    # out for the rest of it.
+    signed_out = await _revoke_tenant_sessions(session, str(tenant_id))
+
+    log.info(
+        "platform_tenant_suspended",
+        slug=row[0], by=str(claims.user_id), sessions_ended=signed_out,
+    )
+    return ActionResult(
+        ok=True,
+        message=f"{row[0]} is suspended and {signed_out} staff signed out. "
+                "Data is retained.",
+    )
 
 
 @router.post("/tenants/{tenant_id}/reactivate", response_model=ActionResult,
@@ -324,6 +393,15 @@ async def reactivate_tenant(
     session: AsyncSession = Depends(get_session_untenanted),
     claims: UserClaims = Depends(require_platform_admin),
 ) -> ActionResult:
+    # Clear the tenant binding first. This session is "untenanted" by
+    # dependency, but the ContextVar hook stamps the caller's own tenant onto
+    # every transaction, so the UPDATE below was scoped to the platform admin's
+    # OWN workspace — the one workspace this endpoint explicitly refuses to act
+    # on. Suspend and reactivate therefore returned "No such workspace." for
+    # every tenant, always. list_tenants already clears it for exactly this
+    # reason; these two never did.
+    await session.execute(text("SELECT set_config('app.current_tenant_id', '', true)"))
+
     res = await session.execute(
         text("UPDATE tenants SET status = 'ACTIVE', updated_at = now() "
              "WHERE tenant_id = :t AND deleted_at IS NULL RETURNING slug"),

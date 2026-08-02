@@ -1,0 +1,24 @@
+# The API image is built with `context: ../apps/api` (deploy/docker-compose.prod.yml),
+# and Docker reads .dockerignore from the CONTEXT root — not the repository root.
+# The root .dockerignore therefore never applied to this build, which is how 565
+# macOS AppleDouble files reached a production image.
+#
+# `._foo.py` sidecars are binary, they match *.py, and alembic's migration loader
+# tries to parse every .py in versions/ — failing with "source code string cannot
+# contain null bytes" and naming no file. Python's glob skips dot-files, so they
+# are also invisible to the obvious "scan for null bytes" check.
+._*
+.DS_Store
+
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+
+.env
+.env.*
+!.env.example

@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate, Link, useLocation } from 'react
 
 import PlatformTenantsPage from '../pages/PlatformTenantsPage'
 import { PlatformTenantDetailPage } from '../pages/PlatformTenantDetailPage'
+import { CeezLogo } from './CeezLogo'
 
 /**
  * The console at rcm-admin.ceez.ai.
@@ -70,11 +71,8 @@ function PlatformLogin({ onSignedIn }: { onSignedIn: (p: Profile) => void }) {
          style={{ background: 'var(--page-bg)' }}>
       <div className="w-full max-w-sm">
         <div className="mb-8">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.18em]"
-             style={{ color: 'var(--text-3)' }}>
-            Ceez
-          </p>
-          <h1 className="mt-1 text-2xl font-semibold" style={{ color: 'var(--text-1)' }}>
+          <CeezLogo size={30} />
+          <h1 className="mt-5 text-2xl font-semibold" style={{ color: 'var(--text-1)' }}>
             Platform console
           </h1>
           <p className="mt-2 text-sm" style={{ color: 'var(--text-3)' }}>
@@ -140,8 +138,8 @@ function PlatformChrome({ me, onSignedOut, children }: {
     <div className="min-h-screen" style={{ background: 'var(--page-bg)' }}>
       <header className="border-b" style={{ borderColor: 'var(--border)' }}>
         <div className="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-3 px-8 py-4">
-          <Link to="/" className="text-sm font-semibold" style={{ color: 'var(--text-1)' }}>
-            Ceez <span style={{ color: 'var(--text-3)' }}>platform console</span>
+          <Link to="/" aria-label="CEEZ AI platform console">
+            <CeezLogo size={24} />
           </Link>
           <div className="flex items-center gap-4 text-xs">
             {/* Named plainly: an operator should be able to tell at a glance

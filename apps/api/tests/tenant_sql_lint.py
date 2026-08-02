@@ -56,6 +56,14 @@ ALLOWLIST = {
     ("platform/billing_router.py", "verify_billing_config"),
     ("platform/billing_router.py", "set_billing_enabled"),
     ("platform/billing_router.py", "clear_billing_config"),
+    # The platform Stripe account and its subscriptions: the webhook has no
+    # tenant context until it works one out from the event.
+    ("platform/stripe_client.py", "_credentials"),
+    ("platform/stripe_client.py", "webhook_secret"),
+    ("platform/subscriptions_router.py", "_tenant_for_event"),
+    ("platform/subscriptions_router.py", "stripe_webhook"),
+    ("platform/subscriptions_router.py", "_upsert"),
+    ("tenants/public_router.py", "public_plans"),   # the published price list
 }
 
 

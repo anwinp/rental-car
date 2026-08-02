@@ -646,3 +646,61 @@ async def reactivation_details(
         "currency": row["currency"],
         "billing_period": row["billing_period"],
     }
+
+
+# ── The published price list ─────────────────────────────────────────────────
+
+@router.get("/plans", summary="Plans a prospective customer may buy")
+async def public_plans(
+    session: AsyncSession = Depends(get_session_untenanted),
+) -> list[dict]:
+    """The catalogue, for the marketing site and the upgrade page.
+
+    Anonymous by design: a price list nobody can read before signing up is not
+    a price list. Only what belongs on a pricing page is returned — the caps
+    and the capability names, never the internal flags. Archived plans are
+    excluded, because a plan that cannot be assigned should not be advertised.
+    """
+    from app.domains.tenants.features import FEATURES, FEATURE_KEYS
+
+    rows = (
+        await session.execute(
+            text(
+                "SELECT p.code, p.display_name, p.description, p.price_cents, "
+                "       p.currency, p.billing_period, p.is_default, "
+                "       p.max_staff, p.max_vehicles, p.max_locations, "
+                "       COALESCE(array_agg(f.feature_key) "
+                "                FILTER (WHERE f.feature_key IS NOT NULL), '{}') AS features "
+                "  FROM plans p "
+                "  LEFT JOIN plan_features f ON f.plan_code = p.code "
+                " WHERE p.is_active "
+                " GROUP BY p.code, p.display_name, p.description, p.price_cents, "
+                "          p.currency, p.billing_period, p.is_default, p.sort_order, "
+                "          p.max_staff, p.max_vehicles, p.max_locations "
+                " ORDER BY p.sort_order, p.code"
+            )
+        )
+    ).mappings().all()
+
+    labels = {f.key: f.label for f in FEATURES}
+    return [
+        {
+            "code": r["code"],
+            "name": r["display_name"],
+            "description": r["description"],
+            "price_cents": r["price_cents"],
+            "currency": r["currency"],
+            "billing_period": r["billing_period"],
+            "is_default": r["is_default"],
+            "limits": {
+                "staff": r["max_staff"],
+                "vehicles": r["max_vehicles"],
+                "locations": r["max_locations"],
+            },
+            # Names, not keys: a marketing page should not be quoting internal
+            # identifiers, and a key with no registry entry is dropped rather
+            # than shown as a mystery bullet.
+            "features": [labels[k] for k in r["features"] if k in FEATURE_KEYS],
+        }
+        for r in rows
+    ]

@@ -64,7 +64,7 @@ class Location(BaseModel):
 
 class Reservation(BaseModel):
     reservation_id: uuid.UUID
-    confirmation_code: str | None = None
+    confirmation_number: str | None = None
     status: str
     pickup_at: datetime | None = None
     dropoff_at: datetime | None = None
@@ -180,10 +180,10 @@ async def list_reservations(
     rows = (
         await session.execute(
             text(
-                "SELECT r.reservation_id, r.confirmation_code, r.status::text AS status, "
-                "       r.pickup_datetime AS pickup_at, r.dropoff_datetime AS dropoff_at, "
+                "SELECT r.reservation_id, r.confirmation_number, r.status::text AS status, "
+                "       r.pickup_datetime AS pickup_at, r.return_datetime AS dropoff_at, "
                 "       COALESCE(vc.name, r.vehicle_class_name) AS vehicle_class, "
-                "       r.total_amount, r.currency "
+                "       r.grand_total AS total_amount, r.currency "
                 "  FROM reservations r "
                 "  LEFT JOIN vehicle_classes vc ON vc.class_id = r.vehicle_class_id "
                 " WHERE r.tenant_id = :t AND r.deleted_at IS NULL "

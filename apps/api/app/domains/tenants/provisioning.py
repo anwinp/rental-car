@@ -277,7 +277,7 @@ async def readiness_checklist(
                   (SELECT count(*) FROM staff_users WHERE tenant_id = :t
                      AND is_active)                                                     AS staff,
                   (SELECT count(*) FROM vehicle_classes
-                     WHERE tenant_id IS NULL OR tenant_id = :t)                         AS classes
+                     WHERE tenant_id = :t)                                              AS classes
                 """
             ),
             {"t": str(tenant_id)},

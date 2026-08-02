@@ -131,10 +131,10 @@
 
   <dl class="meta">
     <div><dt>API operations</dt><dd>162</dd></div>
-    <div><dt>Blockers remaining</dt><dd>7</dd></div>
-    <div><dt>Shipped since this card</dt><dd>3</dd></div>
+    <div><dt>Blockers remaining</dt><dd>3 code · 2 ops</dd></div>
+    <div><dt>Shipped since this card</dt><dd>5</dd></div>
     <div><dt>Tables, zero cross-tenant leak</dt><dd>31</dd></div>
-    <div><dt>Migrations ahead of prod</dt><dd>19</dd></div>
+    <div><dt>Migrations ahead of prod</dt><dd>20</dd></div>
   </dl>
 
   <div class="callout">
@@ -145,9 +145,10 @@
     </p>
     <p>
       What is missing is what turns that into something a rental company can buy
-      and run on: they cannot be charged for the product, cannot bring their
-      existing bookings in, cannot get their data out, cannot make the storefront
-      look like theirs, and every quote under-collects tax.
+      and run on: they cannot be charged for the product, cannot take payment for
+      an online booking, cannot bring their existing bookings in, and cannot make
+      the storefront look like theirs. Getting their data <em>out</em> now works,
+      which makes the missing <em>in</em> the more conspicuous half.
     </p>
   </div>
 
@@ -157,19 +158,21 @@
     legal obligation, or stops a customer becoming a customer.
   </p>
 
-  <div class="item blocker">
+  <div class="item shipped">
     <div class="row">
       <span class="title">Tax is zero on every quote</span>
-      <span class="tag">pricing</span><span class="tag effort">S</span>
+      <span class="tag">pricing</span><span class="tag ship">shipped</span>
     </div>
     <p class="why">
-      <code>AvalaraClient</code> is written and never instantiated, and the pricing
-      service calls <code>calculate_tax()</code> — a method the class does not
-      define, so even wiring it would fail. Under-collecting tax is an
+      <code>AvalaraClient</code> was written and never instantiated, and the pricing
+      service called <code>calculate_tax()</code> — a method the class does not
+      define, so even wiring it would have failed. Under-collecting tax is an
       unrecoverable liability, not a workaround. For a one-to-three location
       operator the answer is a tax rate on the location, not a tax engine.
     </p>
-    <div class="ev">POST /pricing/quote  →  "taxes": "0.00",  "total": "79.98"</div>
+    <div class="ev">Tax now summed from tax_templates.jurisdictions via the booking location
+Rate-based and FLAT_PER_DAY entries both handled
+Migration 067 linked all 22 locations to a template</div>
   </div>
 
   <div class="item blocker">
@@ -186,18 +189,19 @@
     <div class="ev">apps/web-booking/app/booking/[id]/page.tsx:697 → “Demo mode”</div>
   </div>
 
-  <div class="item blocker">
+  <div class="item shipped">
     <div class="row">
       <span class="title">Counter check-out silently 404s</span>
-      <span class="tag">operations</span><span class="tag effort">S</span>
+      <span class="tag">operations</span><span class="tag ship">shipped</span>
     </div>
     <p class="why">
-      Three call sites POST to <code>/api/v1/counter/*</code>. No counter router
-      is mounted, and the failure is deliberately swallowed with a comment saying
+      Three call sites POSTed to <code>/api/v1/counter/*</code>. No counter router
+      was mounted, and the failure was deliberately swallowed with a comment saying
       the endpoints may not exist yet. The reservation, the vehicle and the money
-      go out of sync with no error shown — unrecoverable on paper.
+      went out of sync with no error shown — unrecoverable on paper.
     </p>
-    <div class="ev">3 call sites → /api/v1/counter/…   ·   routers mounted: 0</div>
+    <div class="ev">3 call sites repointed /counter/* → /checkout/*; failures now raise
+The swallow-and-continue comments are gone</div>
   </div>
 
   <div class="item shipped">
@@ -433,21 +437,26 @@ browser caught a crash the typechecker could not</div>
   <div class="item blocker">
     <div class="row"><span class="title">DNS records</span><span class="tag">ops</span></div>
     <p class="why">
-      Per-tenant hostnames do not resolve in production yet. One wildcard A record
-      covers every tenant; no wildcard <em>certificate</em> and no DNS-01 challenge
-      is needed, because certificates are issued per hostname on demand.
+      Per-tenant hostnames still do not resolve to the right host. The wildcard
+      record exists but points one digit off — <code>65.</code> where the server
+      is <code>63.</code> — so every tenant hostname reaches a machine that is not
+      ours. No wildcard <em>certificate</em> and no DNS-01 challenge is needed,
+      because certificates are issued per hostname on demand; but on-demand TLS
+      cannot succeed until this resolves correctly, so the Caddy block stays
+      commented until then.
     </p>
-    <div class="ev">*.ceez.ai    A    63.250.55.137</div>
+    <div class="ev">want   *.ceez.ai  A  63.250.55.137
+have   *.ceez.ai  A  65.250.55.137   ← checked today, still wrong</div>
   </div>
 
   <div class="item blocker">
-    <div class="row"><span class="title">Production is 17 migrations behind</span><span class="tag">ops</span></div>
+    <div class="row"><span class="title">Production is 20 migrations behind</span><span class="tag">ops</span></div>
     <p class="why">
       Live runs a build predating all of this work. None of the isolation,
-      pricing, MFA or catalogue changes are deployed, and nothing has been pushed
-      to a remote.
+      pricing, MFA, catalogue, agreement-document or export changes are deployed,
+      and nothing has been pushed to a remote.
     </p>
-    <div class="ev">local 066_catalogue_delete   ·   production 049_user_role_enum_values</div>
+    <div class="ev">local 069_snapshot_extras   ·   production 049_user_role_enum_values</div>
   </div>
 
   <footer>

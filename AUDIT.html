@@ -1,0 +1,293 @@
+<title>Application audit — Ceez Rentals</title>
+<style>
+  :root {
+    --ink: #16181c; --ink-2: #4c525b; --ink-3: #7b828c;
+    --paper: #fbfaf8; --panel: #fff; --rule: #e4e2dd; --rule-soft: #efedea;
+    --accent: #7c5cff; --accent-soft: rgba(124,92,255,.10);
+    --bad: #b3311c; --bad-soft: rgba(179,49,28,.10);
+    --warn: #94610f; --warn-soft: rgba(148,97,15,.12);
+    --ok: #1a7a50;
+    --mono: ui-monospace, "SF Mono", Menlo, monospace;
+    --sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --ink:#e9e7e4; --ink-2:#a9a7a3; --ink-3:#76746f;
+      --paper:#131316; --panel:#1b1b1f; --rule:#2d2d33; --rule-soft:#242429;
+      --accent:#9d84ff; --accent-soft:rgba(157,132,255,.14);
+      --bad:#ea7159; --bad-soft:rgba(234,113,89,.13);
+      --warn:#d9a441; --warn-soft:rgba(217,164,65,.13); --ok:#4fbe8b; }
+  }
+  :root[data-theme="light"] { --ink:#16181c; --ink-2:#4c525b; --ink-3:#7b828c;
+    --paper:#fbfaf8; --panel:#fff; --rule:#e4e2dd; --rule-soft:#efedea;
+    --accent:#7c5cff; --accent-soft:rgba(124,92,255,.10);
+    --bad:#b3311c; --bad-soft:rgba(179,49,28,.10);
+    --warn:#94610f; --warn-soft:rgba(148,97,15,.12); --ok:#1a7a50; }
+  :root[data-theme="dark"] { --ink:#e9e7e4; --ink-2:#a9a7a3; --ink-3:#76746f;
+    --paper:#131316; --panel:#1b1b1f; --rule:#2d2d33; --rule-soft:#242429;
+    --accent:#9d84ff; --accent-soft:rgba(157,132,255,.14);
+    --bad:#ea7159; --bad-soft:rgba(234,113,89,.13);
+    --warn:#d9a441; --warn-soft:rgba(217,164,65,.13); --ok:#4fbe8b; }
+
+  body { background:var(--paper); color:var(--ink); font-family:var(--sans);
+         font-size:16px; line-height:1.62; margin:0; padding:0 24px 96px;
+         -webkit-font-smoothing:antialiased; }
+  .wrap { max-width:880px; margin:0 auto; }
+  header.mast { padding:72px 0 32px; border-bottom:1px solid var(--rule); margin-bottom:40px; }
+  .eyebrow { font-size:11px; font-weight:600; text-transform:uppercase;
+             letter-spacing:.16em; color:var(--ink-3); margin:0 0 14px; }
+  h1 { font-size:clamp(30px,5vw,42px); font-weight:600; line-height:1.12;
+       letter-spacing:-.022em; margin:0 0 18px; text-wrap:balance; }
+  .standfirst { font-size:18px; color:var(--ink-2); margin:0; max-width:62ch; text-wrap:pretty; }
+  h2 { font-size:23px; font-weight:600; letter-spacing:-.015em; margin:56px 0 4px;
+       padding-top:26px; border-top:1px solid var(--rule-soft); text-wrap:balance; }
+  h2:first-of-type { border-top:0; padding-top:0; }
+  h3 { font-size:16px; font-weight:600; margin:28px 0 4px; }
+  p { margin:0 0 14px; max-width:70ch; text-wrap:pretty; }
+  ul,ol { margin:0 0 14px; padding-left:22px; max-width:68ch; }
+  li { margin-bottom:6px; }
+  code { font-family:var(--mono); font-size:.87em; background:var(--accent-soft);
+         padding:1px 5px; border-radius:3px; }
+  .lede { color:var(--ink-2); font-size:15px; margin:0 0 20px; }
+
+  .scroller { overflow-x:auto; margin:20px 0 24px; }
+  table { border-collapse:collapse; width:100%; font-size:14.5px; min-width:560px; }
+  th { text-align:left; font-size:11px; font-weight:600; text-transform:uppercase;
+       letter-spacing:.09em; color:var(--ink-3); padding:0 14px 9px 0;
+       border-bottom:1px solid var(--rule); white-space:nowrap; }
+  td { padding:11px 14px 11px 0; border-bottom:1px solid var(--rule-soft); vertical-align:top; }
+  td.mono { font-family:var(--mono); font-size:13px; white-space:nowrap; }
+  .num { font-variant-numeric:tabular-nums; }
+
+  .tag { display:inline-block; font-size:10.5px; font-weight:700; text-transform:uppercase;
+         letter-spacing:.07em; padding:2px 7px; border-radius:3px; white-space:nowrap; }
+  .tag.bad { color:var(--bad); background:var(--bad-soft); }
+  .tag.warn { color:var(--warn); background:var(--warn-soft); }
+  .tag.ok { color:var(--ok); background:rgba(26,122,80,.12); }
+
+  .finding { border-left:3px solid var(--rule); padding:2px 0 2px 18px; margin:0 0 26px; }
+  .finding.sev1 { border-left-color:var(--bad); }
+  .finding.sev2 { border-left-color:var(--warn); }
+  .finding h3 { margin-top:0; }
+  .finding .meta { font-size:12.5px; color:var(--ink-3); margin:0 0 8px; }
+  .finding .meta b { color:var(--ink-2); font-weight:600; }
+
+  .panel { background:var(--panel); border:1px solid var(--rule); border-radius:6px;
+           padding:18px 20px; margin:22px 0; }
+  .panel h3 { margin-top:0; }
+  .panel p:last-child, .panel ul:last-child { margin-bottom:0; }
+  .mea { border-left:3px solid var(--bad); background:var(--bad-soft);
+         border-radius:0 4px 4px 0; padding:14px 18px; margin:20px 0; }
+  .mea p:last-child { margin-bottom:0; }
+  footer { margin-top:64px; padding-top:22px; border-top:1px solid var(--rule);
+           font-size:13px; color:var(--ink-3); }
+</style>
+
+<div class="wrap">
+
+<header class="mast">
+  <p class="eyebrow">Ceez Rentals · 2 August 2026</p>
+  <h1>Application audit</h1>
+  <p class="standfirst">
+    Everything below was checked against the running production system or the
+    source, not recalled. Where I could not verify something, it says so.
+    The most serious finding is mine, from today.
+  </p>
+</header>
+
+<h2>The short version</h2>
+<div class="scroller">
+<table>
+  <thead><tr><th>Area</th><th>State</th><th></th></tr></thead>
+  <tbody>
+    <tr><td>Tenant isolation (RLS)</td><td><span class="tag ok">sound</span></td><td>Every tenant table carries RLS. One exception is deliberate and documented.</td></tr>
+    <tr><td>Authentication coverage</td><td><span class="tag ok">sound</span></td><td>Zero route handlers without an auth dependency.</td></tr>
+    <tr><td>Plan enforcement</td><td><span class="tag ok">sound</span></td><td>Caps and features enforced and lint-guarded.</td></tr>
+    <tr><td><strong>Premium features sold</strong></td><td><span class="tag bad">3 of 6 hollow</span></td><td>Enterprise advertises capabilities that do not exist.</td></tr>
+    <tr><td>Payment gateways (renters)</td><td><span class="tag bad">partly unimplemented</span></td><td>Tyro raises on every call; Stripe status unimplemented.</td></tr>
+    <tr><td>OTA channel intake</td><td><span class="tag warn">webhook raises</span></td><td>Lead polling works; inbound webhooks do not.</td></tr>
+    <tr><td>Sellable catalogue</td><td><span class="tag bad">no priced extras</span></td><td>0 of 9 extras priced in every workspace.</td></tr>
+    <tr><td>Operator tooling</td><td><span class="tag warn">gaps</span></td><td>No durable action log, no MFA reset, sessions unreadable.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2>Bugs</h2>
+<p class="lede">Ordered by what they cost if left alone.</p>
+
+<div class="finding sev1">
+  <h3>1. Three of the six premium features do not exist</h3>
+  <p class="meta"><b>Severity</b> highest &middot; <b>Introduced</b> today, by me &middot; <b>Verified</b> source and database</p>
+  <p>
+    I built the plan-feature mechanism and populated it with a plausible list
+    without checking each capability was real. The gating works perfectly; three
+    of the things it gates do not exist.
+  </p>
+  <div class="scroller">
+  <table>
+    <thead><tr><th>Feature</th><th>Sold on</th><th>Reality</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">ota_channels</td><td>Growth, Enterprise</td><td><span class="tag ok">real</span> lead list, confirm, polling</td></tr>
+      <tr><td class="mono">advanced_reporting</td><td>Growth, Enterprise</td><td><span class="tag warn">partial</span> two async generators; the admin page is flagged unbuilt and hidden</td></tr>
+      <tr><td class="mono">agent_assistant</td><td>Enterprise</td><td><span class="tag ok">real</span></td></tr>
+      <tr><td class="mono">corporate_accounts</td><td>Growth, Enterprise</td><td><span class="tag bad">hollow</span> the router has a health check and nothing else; the page is flagged unbuilt</td></tr>
+      <tr><td class="mono">telematics</td><td>Enterprise</td><td><span class="tag bad">hollow</span> no domain, no endpoint, table has 0 rows</td></tr>
+      <tr><td class="mono">api_access</td><td>Enterprise</td><td><span class="tag bad">hollow</span> the key gates no route at all</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>
+    An Enterprise customer today would be paying for six capabilities and
+    receiving two and a half. <strong>Untick corporate accounts, telematics and
+    API access on every plan until they are built</strong> — one minute on the
+    plans page, and it is the difference between a roadmap and a
+    misrepresentation.
+  </p>
+</div>
+
+<div class="finding sev1">
+  <h3>2. A tenant configured for Tyro cannot take a payment at all</h3>
+  <p class="meta"><b>Severity</b> high &middot; <b>Pre-existing</b> &middot; <b>Verified</b> source</p>
+  <p>
+    <code>gateway_factory</code> returns <code>TyroGateway</code> whenever a
+    workspace has <code>payment_gateway = 'TYRO'</code>, and every method on it
+    raises <code>NotImplementedError</code> — pre-auth, completion, incremental
+    auth, void. Nothing stops that value being set, so the failure surfaces at
+    the counter, mid-rental, as a 500.
+  </p>
+  <p>
+    <code>StripeGateway.get_status</code> is unimplemented too, so any
+    reconciliation path that asks a gateway what happened to a payment raises.
+  </p>
+</div>
+
+<div class="finding sev1">
+  <h3>3. Nothing can be upsold: no extra has a price, anywhere</h3>
+  <p class="meta"><b>Severity</b> high, commercial &middot; <b>Verified</b> production database</p>
+  <p>
+    All five live workspaces hold nine extras each and <strong>zero</strong> are
+    priced. An unpriced extra cannot be added to a booking, so child seats,
+    insurance, GPS and the rest are invisible to customers and to the counter.
+    The catalogue page I built today has the editor for this; the numbers are a
+    business decision.
+  </p>
+</div>
+
+<div class="finding sev2">
+  <h3>4. OTA channel webhooks raise on arrival</h3>
+  <p class="meta"><b>Severity</b> medium &middot; <b>Pre-existing</b> &middot; <b>Verified</b> source</p>
+  <p>
+    <code>Channel.handle_webhook</code> raises <code>NotImplementedError</code>
+    with the note “implement when OTA format confirmed”. The route is mounted,
+    so a channel that posts a booking gets a 500 and retries. Polling works, so
+    leads still arrive — but any partner expecting push delivery is silently
+    unserved.
+  </p>
+</div>
+
+<div class="finding sev2">
+  <h3>5. Customer notification preference is written and never read</h3>
+  <p class="meta"><b>Severity</b> medium &middot; <b>Pre-existing</b> &middot; <b>Verified</b> source</p>
+  <p>
+    <code>customers.preferred_channel</code> appears nowhere in the API source.
+    A customer who asks for SMS gets whatever the notification code defaults to.
+    The same shape as every other bug found today: a column written by a form,
+    read by nothing.
+  </p>
+</div>
+
+<div class="finding sev2">
+  <h3>6. Task comments record an author nobody reads</h3>
+  <p class="meta"><b>Severity</b> low &middot; <b>Verified</b> source</p>
+  <p>
+    <code>task_comments.author_id</code> is never referenced, so a comment
+    thread cannot show who said what.
+  </p>
+</div>
+
+<div class="finding sev2">
+  <h3>7. The revoked-token set grows forever</h3>
+  <p class="meta"><b>Severity</b> low now, certain later &middot; <b>Verified</b> Redis</p>
+  <p>
+    <code>revoked_tokens</code> has no TTL and currently holds 10 entries. Every
+    sign-out, password change and deactivation adds one and nothing removes
+    them. A JTI is only worth remembering until the token it names would have
+    expired anyway.
+  </p>
+</div>
+
+<div class="panel">
+  <h3>Also found, minor</h3>
+  <ul>
+    <li><code>staff_users.phone_verified_at</code> and <code>tax_templates.is_seed</code> are written and never read.</li>
+    <li>New workspaces are provisioned with one branch, one rate code and <strong>no vehicles</strong>, so they cannot sell anything until a fleet is added. The onboarding checklist exists and says so; nothing chases it.</li>
+  </ul>
+</div>
+
+<h2>Feature gaps</h2>
+<p class="lede">Things absent rather than broken.</p>
+
+<h3>Commercial</h3>
+<ul>
+  <li><strong>Renter payment capture is unproven end to end.</strong> The Stripe path for taking a renter’s card exists and is wired, but I have not seen a real authorisation and capture run through it. Distinct from platform subscription billing, which was tested today.</li>
+  <li><strong>Forward-booking import.</strong> The tenant export writes <code>forward_bookings_for_import.csv</code> in the layout the importer expects. There is no importer.</li>
+  <li><strong>Dunning.</strong> A failed subscription payment is logged and nothing else happens — no retry schedule, no email, no escalation.</li>
+</ul>
+
+<h3>Operator tooling</h3>
+<ul>
+  <li><strong>No durable platform action log.</strong> Every console action — password resets, staff changes, plan changes, manual verification — is a structlog line, not a queryable record. For credential-affecting actions on somebody else’s account that is thin.</li>
+  <li><strong>No support access.</strong> Consent-gated, read-only, time-boxed impersonation was items 7–10 of the console plan and remains unbuilt.</li>
+  <li><strong>No MFA reset.</strong> If a tenant user loses their authenticator, an operator cannot clear it.</li>
+  <li><strong>Sessions are unreadable.</strong> <code>/auth/sessions</code> returns bare JTIs — no device, no address, no last-seen — so “sign out my other devices” is a guess.</li>
+  <li><strong>No notification delivery view.</strong> When a customer says an email never arrived, there is nothing to look at.</li>
+</ul>
+
+<h3>Correctness and hygiene</h3>
+<ul>
+  <li><strong>Verification tokens break when one address owns two workspaces.</strong> Known, unfixed.</li>
+  <li><strong>The last platform admin can deactivate themselves</strong>, locking everybody out of the console.</li>
+  <li><strong>Deleted workspaces keep their TLS certificate</strong> for roughly 90 days.</li>
+  <li><strong>Open tasks are not reassigned</strong> when the person holding them is deactivated.</li>
+</ul>
+
+<h2>What is genuinely solid</h2>
+<p>
+  Worth saying, because an audit that only lists problems misrepresents the
+  system.
+</p>
+<ul>
+  <li><strong>Tenant isolation.</strong> Every table carrying a <code>tenant_id</code> has row-level security; the sole exception is the platform’s own subscription mirror, which has no tenant. A lint walks the AST and fails the build on any query that touches a tenant table without a predicate.</li>
+  <li><strong>Authentication.</strong> No route handler lacks an auth dependency. Platform and tenant identities are separate tables, separate cookies, separate token types, and each decoder rejects the other’s tokens by name.</li>
+  <li><strong>Plan enforcement.</strong> Caps and features are enforced at every creation path, batch imports included, and a second lint asserts that every capped table reaches the limit check and that no plan column goes unread.</li>
+  <li><strong>Subscription billing.</strong> Signature verification, replay protection, idempotency and term enforcement were all exercised against real Stripe deliveries today.</li>
+</ul>
+
+<h2>What I did not audit</h2>
+<p>
+  So the coverage of this document is not overstated:
+</p>
+<ul>
+  <li><strong>Business-logic correctness.</strong> Pricing arithmetic, availability, overlap detection, tax and damage workflows were not re-derived. There are 600 reservations in the demo workspace and I did not check whether their totals are right.</li>
+  <li><strong>Test suite health.</strong> I ran the two isolation and enforcement lints, not the wider test suite.</li>
+  <li><strong>Performance.</strong> No query plans, no load testing, no index review beyond what migrations add.</li>
+  <li><strong>Frontend behaviour</strong> beyond structure and the pages touched today. Several pages I have never opened.</li>
+  <li><strong>The counter application</strong>, which I have only exercised through its API.</li>
+</ul>
+
+<div class="mea">
+  <p>
+    <strong>On finding 1.</strong> I introduced it today. I built the mechanism
+    for selling capabilities and filled it with a list that sounded right, and
+    the one check that mattered — does each of these exist — is the one I did
+    not run. It is the same failure this codebase keeps producing: something
+    written, nothing reading it, nobody noticing. The lint I added catches it
+    for plan columns and would not have caught it for plan features.
+  </p>
+</div>
+
+<footer>
+  Ceez Rentals · application audit · 2 August 2026 ·
+  findings verified against production unless marked otherwise
+</footer>
+
+</div>

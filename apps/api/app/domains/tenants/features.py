@@ -27,24 +27,41 @@ class Feature:
     # Shown to an operator deciding which tier should include it, and to a
     # tenant being told what they are missing. Written for the second reader.
     blurb: str
+    # Whether anything is actually behind the gate.
+    #
+    # Exists because three capabilities were on the price list while gating
+    # nothing at all: corporate_accounts had a router with a health check and
+    # no routes, telematics had no code, api_access gated nothing. The gating
+    # mechanism worked perfectly, which is exactly why nobody noticed.
+    #
+    # Declared here, checked two ways: tests/plan_enforcement_lint.py fails the
+    # build if this disagrees with whether a route is really gated, and
+    # set_plan_features refuses to tick a feature that is not built. A promise
+    # that cannot be kept should be impossible to make, not merely discouraged.
+    implemented: bool = True
 
 
 FEATURES: tuple[Feature, ...] = (
     Feature("ota_channels", "Channel manager",
             "List vehicles on Expedia, Booking.com and other travel sites."),
     Feature("corporate_accounts", "Corporate accounts",
-            "Negotiated rates, billing accounts and booker permissions."),
+            "Negotiated rates, billing accounts and booker permissions.",
+            implemented=False),
     Feature("advanced_reporting", "Advanced reporting",
             "Utilisation, revenue and fleet analytics beyond the dashboard."),
     Feature("agent_assistant", "AI assistant",
             "The assistant that answers questions about the business."),
     Feature("telematics", "Telematics",
-            "Live vehicle location, mileage and fuel from connected hardware."),
+            "Live vehicle location, mileage and fuel from connected hardware.",
+            implemented=False),
     Feature("api_access", "API access",
-            "Programmatic access for integrations built in-house."),
+            "Programmatic access for integrations built in-house.",
+            implemented=False),
 )
 
 FEATURE_KEYS: frozenset[str] = frozenset(f.key for f in FEATURES)
+# The subset a plan may actually include. Anything else is a roadmap entry.
+SELLABLE_KEYS: frozenset[str] = frozenset(f.key for f in FEATURES if f.implemented)
 
 
 async def features_for_tenant(

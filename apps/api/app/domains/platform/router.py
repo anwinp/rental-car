@@ -1970,7 +1970,7 @@ async def set_plan_features(
     revokes it mid-session. That is the right default for a control an operator
     reaches for deliberately, but it is worth knowing before clicking.
     """
-    from app.domains.tenants.features import FEATURE_KEYS
+    from app.domains.tenants.features import FEATURES, SELLABLE_KEYS
 
     await enforce_limit(
         request, bucket="platform-plans", limit=60, window_seconds=3600,
@@ -1979,13 +1979,29 @@ async def set_plan_features(
     code = code.strip().upper()
     wanted = {k.strip() for k in payload.features if k.strip()}
 
-    unknown = sorted(wanted - FEATURE_KEYS)
+    known = {f.key for f in FEATURES}
+    unknown = sorted(wanted - known)
     if unknown:
         raise HTTPException(
             status_code=400,
             detail=(
                 f"Not a known capability: {', '.join(unknown)}. "
                 "A key with no gate behind it would grant nothing."
+            ),
+        )
+
+    # Refused, not warned. A capability that is not built cannot be delivered,
+    # so putting it on a plan is a promise nobody can keep — and the last time
+    # that happened it reached the public pricing page and stayed there.
+    not_built = sorted(wanted - SELLABLE_KEYS)
+    if not_built:
+        labels = {f.key: f.label for f in FEATURES}
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"{', '.join(labels[k] for k in not_built)} "
+                f"{'is' if len(not_built) == 1 else 'are'} not built yet and "
+                "cannot be sold. It will become tickable here the moment it works."
             ),
         )
 

@@ -23,7 +23,7 @@ Reading by hand does not scale and will not be repeated reliably. This is the
 same technique as tenant_sql_lint.py — walk the AST, assert the property, keep
 a small allowlist where each exemption carries a written reason.
 
-Two checks:
+Three checks:
 
   1. INSERTION — every function that inserts into a capped table reaches
      assert_within_limit, directly or through a helper.
@@ -32,6 +32,18 @@ Two checks:
      module that administers it. A column only the admin screen touches is a
      control that does nothing, which is the exact failure this file exists to
      stop recurring.
+
+  3. HOLLOW FEATURES — every key in the feature registry gates a real route,
+     and every gated router has something behind it beyond a health check.
+
+     Added after selling three capabilities that did not exist. The gating
+     worked perfectly: corporate_accounts was gated, mounted, and its router
+     held one health endpoint; telematics had no domain at all; api_access
+     gated nothing. All three were on the price list, and an Enterprise
+     customer would have paid for six things and received two and a half.
+
+     The mechanism working is precisely what hid it, which is why this has to
+     be a build-time check rather than a habit of remembering.
 """
 from __future__ import annotations
 
@@ -84,6 +96,13 @@ DEAD_COLUMN_ALLOWLIST = {
 # Where a plan column being read "counts". The plans router administers them;
 # reading one there proves nothing about enforcement.
 ADMIN_MODULES = ("domains/platform/router.py",)
+
+# No allowlist. A feature that gates nothing declares implemented=False in the
+# registry, which makes it unsellable at the API rather than merely excused
+# here — and this check then verifies that declaration is honest in both
+# directions: nothing claims to be built while gating nothing, and nothing
+# claims to be unbuilt while a real gate exists (which would silently withhold
+# a working capability from every plan).
 
 findings: list[str] = []
 
@@ -241,9 +260,95 @@ def check_dead_columns() -> None:
         )
 
 
+def _has_real_routes(router_var: str) -> bool:
+    """Whether a gated router offers anything beyond a health check."""
+    import re as _re
+
+    if not router_var:
+        return False
+    rf = ROOT / "domains" / router_var.replace("_router", "") / "router.py"
+    if not rf.exists():
+        return False
+    routes = _re.findall(
+        r"@router\.(?:get|post|patch|put|delete)\(\s*[\"']([^\"']+)", rf.read_text()
+    )
+    return any(r.strip("/") not in ("health", "") for r in routes)
+
+
+def check_hollow_features() -> None:
+    """A sellable capability must be gated, and the gate must guard something."""
+    import re as _re
+
+    reg = ROOT / "domains" / "tenants" / "features.py"
+    if not reg.exists():
+        findings.append("domains/tenants/features.py is missing; cannot check features.")
+        return
+
+    reg_src = reg.read_text()
+    keys = set(_re.findall(r'Feature\(\s*"([a-z_]+)"', reg_src))
+    # Everything after a key up to the next Feature( or the tuple end, so the
+    # implemented=False flag is attributed to the right entry.
+    declared_unbuilt = set()
+    for m in _re.finditer(r'Feature\(\s*"([a-z_]+)"(.*?)(?=Feature\(|\)\n)', reg_src, _re.S):
+        if "implemented=False" in m.group(2):
+            declared_unbuilt.add(m.group(1))
+    if not keys:
+        findings.append("No feature keys found in the registry — the scraper is broken.")
+        return
+
+    # Every require_feature("...") anywhere, and the router it is mounted on.
+    gated: dict[str, str] = {}
+    main_py = (ROOT / "main.py").read_text()
+    for m in _re.finditer(
+        r"include_router\(\s*(\w+)[^)]*?require_feature\(\s*[\"']([a-z_]+)[\"']\s*\)",
+        main_py, _re.S,
+    ):
+        gated[m.group(2)] = m.group(1)
+    for m in _re.finditer(r'require_feature\(\s*["\']([a-z_]+)["\']\s*\)', main_py):
+        gated.setdefault(m.group(1), "")
+
+    for key in sorted(keys):
+        if key not in gated and key not in declared_unbuilt:
+            findings.append(
+                f"feature '{key}' gates no route but claims implemented=True. It "
+                f"can be ticked on a plan and sold while granting nothing. Gate "
+                f"it, or mark implemented=False in the registry."
+            )
+        # "Has a gate" is not "works": corporate_accounts is gated on a router
+        # holding nothing but a health check. Only complain about an unbuilt
+        # flag when there is something real behind the gate to withhold.
+        if key in gated and key in declared_unbuilt and _has_real_routes(gated[key]):
+            findings.append(
+                f"feature '{key}' has a real gate with real routes behind it but "
+                f"is marked implemented=False, so no plan can include it. Flip "
+                f"the flag — it works."
+            )
+
+    # A gated router with only a health endpoint is an empty promise wearing a
+    # lock. corporate_accounts was exactly this.
+    for key, router_var in gated.items():
+        if key in declared_unbuilt or not router_var:
+            continue
+        domain = router_var.replace("_router", "")
+        rf = ROOT / "domains" / domain / "router.py"
+        if not rf.exists():
+            findings.append(
+                f"feature '{key}' gates {router_var}, whose domain has no router.py."
+            )
+            continue
+        routes = _re.findall(r"@router\.(?:get|post|patch|put|delete)\(\s*[\"']([^\"']+)", rf.read_text())
+        real = [r for r in routes if r.strip("/") not in ("health", "")]
+        if not real:
+            findings.append(
+                f"feature '{key}' gates {domain}, whose router has no route beyond "
+                f"/health. It is sellable and hollow."
+            )
+
+
 def main() -> int:
     check_insertions()
     check_dead_columns()
+    check_hollow_features()
 
     if not findings:
         print("\033[32m  plan enforcement lint: clean\033[0m")

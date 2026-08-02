@@ -94,6 +94,10 @@ def create_app() -> FastAPI:
 
     # ── Exception handlers ────────────────────────────────────────────────────
     app.add_exception_handler(AppError, app_error_handler)
+    # Before anything else: a 422 must never repeat the submitted value.
+    from fastapi.exceptions import RequestValidationError
+    from app.core.exceptions import validation_error_handler
+    app.add_exception_handler(RequestValidationError, validation_error_handler)
 
     # SQLAlchemy integrity errors (23P01 exclusion, 23505 unique) mapped to AppError
     try:

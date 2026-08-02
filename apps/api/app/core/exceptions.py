@@ -337,3 +337,40 @@ async def sqlalchemy_integrity_error_handler(
         mapped = DuplicateError("A record with these values already exists.")
         return await app_error_handler(request, mapped)
     raise exc
+
+
+# ── Validation errors must not repeat what was submitted ─────────────────────
+
+async def validation_error_handler(request, exc):  # noqa: ANN001, ANN201
+    """FastAPI's default validation response includes the offending input.
+
+    That is helpful for a malformed date and dangerous for a password field: a
+    422 for `platform/billing/config` echoed the whole request body back,
+    Stripe secret included, and the same body would appear in any log or error
+    tracker that records response payloads. A key pasted into the wrong box
+    would end up in browser history and screenshots too.
+
+    So `input` is dropped from every error, and `ctx` with it — ctx carries the
+    value for several of Pydantic's own validators. What remains is the field
+    that failed and why, which is all a caller needs to fix their request.
+    """
+    from fastapi.responses import JSONResponse
+
+    safe = []
+    for err in exc.errors():
+        safe.append({
+            "type": err.get("type"),
+            "loc": err.get("loc"),
+            "msg": err.get("msg"),
+        })
+    return JSONResponse(
+        status_code=422,
+        content={
+            "type": "https://errors.rcm.app/validation-error",
+            "title": "Validation Error",
+            "status": 422,
+            "detail": safe,
+            "instance": str(request.url.path),
+        },
+        media_type="application/problem+json",
+    )

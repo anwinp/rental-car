@@ -9,8 +9,17 @@ from app.core.config import settings
 # ── App instance ─────────────────────────────────────────────────────────────
 
 _broker_url = settings.redis_broker_url.get_secret_value()
-# Use DB 1 on the broker cluster for the result backend
-_broker_base = _broker_url.rstrip("/0").rstrip("/")
+# Use DB 1 on the broker cluster for the result backend.
+#
+# removesuffix, not rstrip. str.rstrip takes a SET OF CHARACTERS, not a suffix,
+# so rstrip("/0") ate the trailing "/0" and then kept going into the port:
+# redis://redis-broker:6380/0 became redis://redis-broker:638, and the result
+# backend has pointed at a port nothing listens on since this line was written.
+# Every task dispatched from the API raised ConnectionError as a result, so no
+# report, no notification and no background job requested through the API has
+# ever run. The broker URL itself was fine, which is why the workers looked
+# healthy and the queues looked empty.
+_broker_base = _broker_url.removesuffix("/0").rstrip("/")
 _result_backend = f"{_broker_base}/1"
 
 celery_app = Celery(

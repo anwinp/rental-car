@@ -15,7 +15,12 @@ from sqlalchemy.orm import Session as SyncSession
 from sqlalchemy.pool import NullPool
 
 from app.core.config import settings
-from app.core.tenancy import TenantMismatch, current_tenant_id, resolve_tenant
+from app.core.tenancy import (
+    TenantMismatch,
+    current_actor,
+    current_tenant_id,
+    resolve_tenant,
+)
 
 # ── Connecting through PgBouncer in transaction-pooling mode ─────────────────
 # Server connections are rebound to a different client on every transaction, so
@@ -93,12 +98,69 @@ async def dispose_engine() -> None:
 @event.listens_for(SyncSession, "after_begin")
 def _stamp_tenant_on_transaction(session, transaction, connection) -> None:  # noqa: ANN001
     tenant_id = current_tenant_id.get()
-    if not tenant_id:
+    actor = current_actor.get() or {}
+    if not tenant_id and not actor:
         return
-    connection.execute(
-        text("SELECT set_config('app.current_tenant_id', :tid, true)"),
-        {"tid": str(tenant_id)},
+
+    # All five variables the audit triggers read, not only the one RLS needs.
+    #
+    # Set individually, and ONLY when a value exists. The trigger casts these
+    # with a bare ::UUID, ::user_role and ::INET — no NULLIF — so an empty
+    # string does not read as "absent", it raises: `SELECT ''::uuid` is an
+    # error, and it would be an error inside a trigger, which means every
+    # INSERT and UPDATE on the seven audited tables would fail. An unset GUC
+    # read with missing_ok returns NULL, which casts cleanly, so the safe way
+    # to say "nobody" is to say nothing at all.
+    settings: list[tuple[str, str]] = []
+    if tenant_id:
+        settings.append(("app.current_tenant_id", str(tenant_id)))
+    if actor.get("user_id"):
+        settings.append(("app.current_user_id", str(actor["user_id"])))
+    if actor.get("role"):
+        settings.append(("app.current_role", str(actor["role"])))
+    if actor.get("ip"):
+        settings.append(("app.client_ip", str(actor["ip"])))
+    if actor.get("request_id"):
+        settings.append(("app.request_id", str(actor["request_id"])))
+
+    if not settings:
+        return
+
+    clauses = ", ".join(
+        f"set_config(:k{i}, :v{i}, true)" for i in range(len(settings))
     )
+    params = {}
+    for i, (key, value) in enumerate(settings):
+        params[f"k{i}"] = key
+        params[f"v{i}"] = value
+    connection.execute(text(f"SELECT {clauses}"), params)
+
+
+def _actor_from_request(request: Request) -> dict:
+    """Who is making this request, for the audit trail.
+
+    Best-effort by design. An unauthenticated request has no actor and that is
+    a fact worth recording as NULL, not a reason to fail. Decoding is wrapped
+    because a malformed cookie must not turn into a 500 on a route that does
+    not require authentication in the first place — the auth dependency is what
+    rejects a bad token, not this.
+    """
+    token = request.cookies.get("rcm_access")
+    if not token:
+        return {}
+    try:
+        from app.core.security import decode_token
+
+        claims = decode_token(token)
+    except Exception:  # noqa: BLE001 — see docstring
+        return {}
+    return {
+        "user_id": str(claims.user_id),
+        "role": claims.primary_role,
+        "ip": (request.headers.get("X-Forwarded-For", "") or "").split(",")[0].strip()
+        or (request.client.host if request.client else ""),
+        "request_id": getattr(request.state, "request_id", "") or "",
+    }
 
 
 async def get_session(request: Request = None) -> AsyncGenerator[AsyncSession, None]:  # noqa: RUF013
@@ -117,8 +179,15 @@ async def get_session(request: Request = None) -> AsyncGenerator[AsyncSession, N
     """
     async with AsyncSessionLocal() as session:
         ctx_token = None
+        actor_token = None
         try:
             if request is not None:
+                # Identity for the audit trail, published before any query runs.
+                # Read from the signed token, never from a header: an audit row
+                # naming an actor the caller chose is worse than one naming
+                # nobody.
+                actor_token = current_actor.set(_actor_from_request(request))
+
                 try:
                     tenant_id = await resolve_tenant(request, session)
                 except TenantMismatch as exc:
@@ -155,6 +224,8 @@ async def get_session(request: Request = None) -> AsyncGenerator[AsyncSession, N
             await session.rollback()
             raise
         finally:
+            if actor_token is not None:
+                current_actor.reset(actor_token)
             if ctx_token is not None:
                 current_tenant_id.reset(ctx_token)
                 try:
@@ -176,39 +247,6 @@ async def get_session_untenanted() -> AsyncGenerator[AsyncSession, None]:
         except Exception:
             await session.rollback()
             raise
-
-
-async def get_db(
-    claims: "UserClaims",  # noqa: F821 — imported at call site to avoid circular
-    request_id: str,
-    client_ip: str,
-    session: AsyncSession,
-) -> AsyncGenerator[AsyncSession, None]:
-    """
-    Set all 5 PostgreSQL GUC session variables within this transaction.
-    Must be called BEFORE any query that touches RLS-protected tables.
-
-    The `true` third argument to set_config() scopes the value to the
-    current transaction only — critical for connection-pool reuse safety.
-    """
-    await session.execute(
-        text(
-            "SELECT "
-            "  set_config('app.current_tenant_id', :tid,  true), "
-            "  set_config('app.current_user_id',   :uid,  true), "
-            "  set_config('app.current_role',       :role, true), "
-            "  set_config('app.client_ip',          :ip,   true), "
-            "  set_config('app.request_id',         :rid,  true)"
-        ),
-        {
-            "tid":  str(claims.tenant_id),
-            "uid":  str(claims.user_id),
-            "role": claims.primary_role,
-            "ip":   client_ip,
-            "rid":  request_id,
-        },
-    )
-    yield session
 
 
 async def check_db_health() -> bool:

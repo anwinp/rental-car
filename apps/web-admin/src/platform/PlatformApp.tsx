@@ -5,6 +5,7 @@ import PlatformTenantsPage from '../pages/PlatformTenantsPage'
 import { PlatformTenantDetailPage } from '../pages/PlatformTenantDetailPage'
 import PlatformPlansPage from '../pages/PlatformPlansPage'
 import { CeezLogo } from './CeezLogo'
+import { PlatformSecurity } from './PlatformSecurity'
 
 /**
  * The console at rcm-admin.ceez.ai.
@@ -47,6 +48,10 @@ function PlatformLogin({ onSignedIn }: { onSignedIn: (p: Profile) => void }) {
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  // Set when the password was right and a second factor is armed. The server
+  // returns no cookie at that point — this is a half-finished sign-in.
+  const [challenge, setChallenge] = useState('')
+  const [code, setCode] = useState('')
 
   async function submit(e: React.FormEvent) {
     e.preventDefault()
@@ -58,8 +63,32 @@ function PlatformLogin({ onSignedIn }: { onSignedIn: (p: Profile) => void }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password }),
       })
-      if (res.ok) onSignedIn((await res.json()) as Profile)
+      if (res.ok) { onSignedIn((await res.json()) as Profile); return }
+      const pending = res.headers.get('X-MFA-Challenge')
+      if (pending) { setChallenge(pending); setError('') }
       else setError(await problem(res, 'Incorrect email or password.'))
+    } catch {
+      setError('Could not reach the server.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function submitCode(e: React.FormEvent) {
+    e.preventDefault()
+    setBusy(true); setError('')
+    try {
+      const res = await fetch(`${API}/mfa/challenge`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ challenge, code }),
+      })
+      if (res.ok) onSignedIn((await res.json()) as Profile)
+      else {
+        setError(await problem(res, 'That code is not right.'))
+        setCode('')
+      }
     } catch {
       setError('Could not reach the server.')
     } finally {
@@ -82,6 +111,40 @@ function PlatformLogin({ onSignedIn }: { onSignedIn: (p: Profile) => void }) {
           </p>
         </div>
 
+        {challenge ? (
+          <form onSubmit={submitCode} className="space-y-4">
+            <div>
+              <label htmlFor="pf-code" className="block text-xs font-medium"
+                     style={{ color: 'var(--text-2)' }}>
+                Code from your authenticator app
+              </label>
+              <input
+                id="pf-code" required autoFocus inputMode="text"
+                autoComplete="one-time-code" value={code}
+                onChange={(e) => setCode(e.target.value)}
+                placeholder="123456"
+                className="mt-1 w-full rounded-lg px-3 py-2 font-mono text-sm tracking-widest outline-none"
+                style={{ background: 'var(--card-bg)', color: 'var(--text-1)',
+                         border: '1px solid var(--border)' }}
+              />
+              <p className="mt-1.5 text-xs" style={{ color: 'var(--text-3)' }}>
+                A backup code works here too, and is used up once.
+              </p>
+            </div>
+            {error && <p className="text-sm text-red-400">{error}</p>}
+            <button type="submit" disabled={busy}
+                    className="w-full rounded-lg px-3 py-2.5 text-sm font-semibold disabled:opacity-60"
+                    style={{ background: 'var(--accent, #da291c)', color: '#fff' }}>
+              {busy ? 'Checking…' : 'Continue'}
+            </button>
+            <button type="button"
+                    onClick={() => { setChallenge(''); setCode(''); setError('') }}
+                    className="w-full text-xs hover:underline"
+                    style={{ color: 'var(--text-3)' }}>
+              Start again
+            </button>
+          </form>
+        ) : (
         <form onSubmit={submit} className="space-y-4">
           <div>
             <label htmlFor="pf-email" className="block text-xs font-medium"
@@ -116,6 +179,7 @@ function PlatformLogin({ onSignedIn }: { onSignedIn: (p: Profile) => void }) {
             {busy ? 'Signing in…' : 'Sign in'}
           </button>
         </form>
+        )}
       </div>
     </div>
   )
@@ -123,9 +187,10 @@ function PlatformLogin({ onSignedIn }: { onSignedIn: (p: Profile) => void }) {
 
 // ── Shell ────────────────────────────────────────────────────────────────────
 
-function PlatformChrome({ me, onSignedOut, children }: {
+function PlatformChrome({ me, onSignedOut, onReload, children }: {
   me: Profile
   onSignedOut: () => void
+  onReload: () => void
   children: React.ReactNode
 }) {
   const { pathname } = useLocation()
@@ -153,11 +218,7 @@ function PlatformChrome({ me, onSignedOut, children }: {
                 which identity is acting, because everything done here is done
                 to somebody else's data. */}
             <span style={{ color: 'var(--text-3)' }}>{me.email}</span>
-            {!me.is_mfa_enabled && (
-              <span className="text-amber-400" title="This account can suspend or delete any workspace.">
-                MFA off
-              </span>
-            )}
+            <PlatformSecurity armed={me.is_mfa_enabled} onChanged={onReload} />
             <button onClick={() => void signOut()} style={{ color: 'var(--text-2)' }}
                     className="hover:underline">
               Sign out
@@ -176,14 +237,14 @@ export function PlatformApp() {
   const [me, setMe] = useState<Profile | null>(null)
   const [ready, setReady] = useState(false)
 
-  useEffect(() => {
-    let cancelled = false
-    fetch(`${API}/me`, { credentials: 'include' })
+  function refresh() {
+    void fetch(`${API}/me`, { credentials: 'include' })
       .then(async (res) => (res.ok ? ((await res.json()) as Profile) : null))
       .catch(() => null)
-      .then((p) => { if (!cancelled) { setMe(p); setReady(true) } })
-    return () => { cancelled = true }
-  }, [])
+      .then((p) => { setMe(p); setReady(true) })
+  }
+
+  useEffect(() => { refresh() }, [])
 
   if (!ready) {
     return (
@@ -198,7 +259,7 @@ export function PlatformApp() {
 
   return (
     <BrowserRouter>
-      <PlatformChrome me={me} onSignedOut={() => setMe(null)}>
+      <PlatformChrome me={me} onSignedOut={() => setMe(null)} onReload={refresh}>
         <Routes>
           <Route path="/" element={<Navigate to="/platform" replace />} />
           <Route path="/login" element={<Navigate to="/platform" replace />} />

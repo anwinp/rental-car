@@ -32,6 +32,23 @@ current_tenant_id: contextvars.ContextVar[Optional[str]] = contextvars.ContextVa
     "current_tenant_id", default=None
 )
 
+# Who is acting, alongside what workspace they are acting in.
+#
+# The audit triggers on seven tables read five session variables and only one of
+# them — app.current_tenant_id — was ever set. Every audit row ever written
+# therefore recorded what changed and never who changed it: 6,390 rows with a
+# NULL actor at the time this was fixed.
+#
+# The function that set all five, core.database.get_db, existed from the
+# beginning and had zero callers. It was deleted rather than wired up: it took
+# claims, a request id and an ip as arguments, so every route would have had to
+# thread them through, which is why nobody ever did. ContextVars carry them the
+# same way the tenant is already carried, and the existing after_begin hook
+# stamps them with no call site involved.
+current_actor: contextvars.ContextVar[Optional[dict]] = contextvars.ContextVar(
+    "current_actor", default=None
+)
+
 # Slugs that can never belong to a tenant: they collide with platform hosts or
 # imply endorsement. Enforced at registration, not only in the UI.
 RESERVED_SLUGS: frozenset[str] = frozenset({

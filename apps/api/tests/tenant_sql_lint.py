@@ -42,6 +42,11 @@ ALLOWLIST = {
     ("platform/auth_router.py", "platform_login"),      # platform_admins has no tenant
     ("platform/auth_router.py", "platform_me"),         # platform_admins has no tenant
     ("platform/auth_router.py", "platform_change_password"),  # same
+    ("platform/auth_router.py", "platform_mfa_challenge"),    # same
+    ("platform/auth_router.py", "platform_mfa_enroll"),       # same
+    ("platform/auth_router.py", "platform_mfa_confirm"),      # same
+    ("platform/auth_router.py", "platform_mfa_disable"),      # same
+    ("platform/auth_router.py", "_finish_login"),             # same
 }
 
 

@@ -1,0 +1,488 @@
+<title>Making plans enforceable — Ceez Rentals</title>
+<style>
+  :root {
+    --ink: #14161a;
+    --ink-2: #4a5058;
+    --ink-3: #757d87;
+    --paper: #fbfaf8;
+    --panel: #ffffff;
+    --rule: #e3e1dc;
+    --rule-soft: #eeece8;
+    --accent: #7c5cff;
+    --accent-soft: rgba(124, 92, 255, 0.10);
+    --ok: #1a7f52;
+    --warn: #9a6212;
+    --bad: #b0341f;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+    --sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ink: #e8e6e3; --ink-2: #a8a6a2; --ink-3: #75736f;
+      --paper: #131316; --panel: #1a1a1e;
+      --rule: #2c2c32; --rule-soft: #232328;
+      --accent: #9d84ff; --accent-soft: rgba(157, 132, 255, 0.13);
+      --ok: #4fbe8b; --warn: #d9a441; --bad: #e8705a;
+    }
+  }
+  :root[data-theme="light"] {
+    --ink: #14161a; --ink-2: #4a5058; --ink-3: #757d87;
+    --paper: #fbfaf8; --panel: #ffffff;
+    --rule: #e3e1dc; --rule-soft: #eeece8;
+    --accent: #7c5cff; --accent-soft: rgba(124, 92, 255, 0.10);
+    --ok: #1a7f52; --warn: #9a6212; --bad: #b0341f;
+  }
+  :root[data-theme="dark"] {
+    --ink: #e8e6e3; --ink-2: #a8a6a2; --ink-3: #75736f;
+    --paper: #131316; --panel: #1a1a1e;
+    --rule: #2c2c32; --rule-soft: #232328;
+    --accent: #9d84ff; --accent-soft: rgba(157, 132, 255, 0.13);
+    --ok: #4fbe8b; --warn: #d9a441; --bad: #e8705a;
+  }
+
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.62;
+    margin: 0;
+    padding: 0 24px 96px;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 860px; margin: 0 auto; }
+
+  header.masthead {
+    padding: 72px 0 36px;
+    border-bottom: 1px solid var(--rule);
+    margin-bottom: 44px;
+  }
+  .eyebrow {
+    font-size: 11px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.16em; color: var(--ink-3); margin: 0 0 14px;
+  }
+  h1 {
+    font-size: clamp(30px, 5vw, 42px); font-weight: 600; line-height: 1.12;
+    letter-spacing: -0.022em; margin: 0 0 18px; text-wrap: balance;
+  }
+  .standfirst {
+    font-size: 18px; color: var(--ink-2); margin: 0; max-width: 62ch;
+    text-wrap: pretty;
+  }
+
+  h2 {
+    font-size: 23px; font-weight: 600; letter-spacing: -0.015em;
+    margin: 60px 0 6px; padding-top: 26px; border-top: 1px solid var(--rule-soft);
+    text-wrap: balance;
+  }
+  h2:first-of-type { border-top: 0; padding-top: 0; }
+  h2 .num {
+    font-family: var(--mono); font-size: 13px; font-weight: 500;
+    color: var(--accent); margin-right: 12px; letter-spacing: 0;
+  }
+  h3 {
+    font-size: 16px; font-weight: 600; margin: 32px 0 6px;
+    letter-spacing: -0.005em;
+  }
+  p { margin: 0 0 15px; max-width: 68ch; text-wrap: pretty; }
+  ul, ol { margin: 0 0 15px; padding-left: 22px; max-width: 66ch; }
+  li { margin-bottom: 7px; }
+  a { color: var(--accent); }
+  code {
+    font-family: var(--mono); font-size: 0.87em;
+    background: var(--accent-soft); padding: 1px 5px; border-radius: 3px;
+  }
+  strong { font-weight: 600; }
+
+  .lede { color: var(--ink-2); font-size: 15px; margin: 0 0 22px; }
+
+  .scroller { overflow-x: auto; margin: 22px 0 26px; }
+  table {
+    border-collapse: collapse; width: 100%; font-size: 14.5px;
+    min-width: 560px;
+  }
+  th {
+    text-align: left; font-size: 11px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.09em; color: var(--ink-3);
+    padding: 0 14px 9px 0; border-bottom: 1px solid var(--rule);
+    white-space: nowrap;
+  }
+  td {
+    padding: 11px 14px 11px 0; border-bottom: 1px solid var(--rule-soft);
+    vertical-align: top;
+  }
+  td:first-child { font-family: var(--mono); font-size: 13px; white-space: nowrap; }
+  .num-cell { font-variant-numeric: tabular-nums; }
+
+  .tag {
+    display: inline-block; font-size: 10.5px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.07em;
+    padding: 2px 7px; border-radius: 3px; white-space: nowrap;
+  }
+  .tag.ok   { color: var(--ok);   background: color-mix(in srgb, var(--ok) 13%, transparent); }
+  .tag.warn { color: var(--warn); background: color-mix(in srgb, var(--warn) 15%, transparent); }
+  .tag.bad  { color: var(--bad);  background: color-mix(in srgb, var(--bad) 13%, transparent); }
+
+  .panel {
+    background: var(--panel); border: 1px solid var(--rule);
+    border-radius: 6px; padding: 20px 22px; margin: 22px 0;
+  }
+  .panel h3 { margin-top: 0; }
+  .panel p:last-child, .panel ul:last-child { margin-bottom: 0; }
+
+  .decide {
+    border-left: 3px solid var(--accent); background: var(--accent-soft);
+    border-radius: 0 4px 4px 0; padding: 15px 18px; margin: 20px 0;
+  }
+  .decide .label {
+    font-size: 10.5px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.11em; color: var(--accent); display: block; margin-bottom: 5px;
+  }
+  .decide p:last-child { margin-bottom: 0; }
+  .decide p { font-size: 15px; }
+
+  .meta {
+    display: flex; flex-wrap: wrap; gap: 8px 20px; margin: 0 0 18px;
+    font-size: 12.5px; color: var(--ink-3);
+  }
+  .meta b { color: var(--ink-2); font-weight: 600; }
+
+  footer {
+    margin-top: 68px; padding-top: 22px; border-top: 1px solid var(--rule);
+    font-size: 13px; color: var(--ink-3);
+  }
+</style>
+
+<div class="wrap">
+
+<header class="masthead">
+  <p class="eyebrow">Ceez Rentals · Platform</p>
+  <h1>Making plans enforceable</h1>
+  <p class="standfirst">
+    Three of a plan's attributes now bite. Four do nothing at all, and one of
+    those is a button in the console that writes a date no code ever reads.
+    This is what it takes to close the gap, in the order the pieces depend on
+    each other.
+  </p>
+</header>
+
+<h2><span class="num">01</span>Where it stands today</h2>
+<p class="lede">
+  Verified against production by exercising each path, not by reading the code.
+</p>
+
+<div class="scroller">
+<table>
+  <thead>
+    <tr><th>Attribute</th><th>Status</th><th>What actually happens</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>max_staff</td>
+      <td><span class="tag ok">enforced</span></td>
+      <td>402 at invite, invite acceptance, reactivation, and both console paths. Pending invitations hold seats.</td>
+    </tr>
+    <tr>
+      <td>max_vehicles</td>
+      <td><span class="tag ok">enforced</span></td>
+      <td>402 on single create and on bulk import, checked for the whole batch before validation.</td>
+    </tr>
+    <tr>
+      <td>max_locations</td>
+      <td><span class="tag ok">enforced</span></td>
+      <td>402 on create.</td>
+    </tr>
+    <tr>
+      <td>is_active</td>
+      <td><span class="tag ok">enforced</span></td>
+      <td>An archived plan cannot be newly assigned. Workspaces already on one keep it.</td>
+    </tr>
+    <tr>
+      <td>is_default</td>
+      <td><span class="tag ok">enforced</span></td>
+      <td>Signup reads the flag instead of a hardcoded literal.</td>
+    </tr>
+    <tr>
+      <td>trial_ends_at</td>
+      <td><span class="tag bad">read by nothing</span></td>
+      <td><strong>A trial never ends.</strong> The console's "Extend trial 14 days" writes a date zero lines of code consult.</td>
+    </tr>
+    <tr>
+      <td>subscription_ends_at</td>
+      <td><span class="tag bad">read by nothing</span></td>
+      <td>Same. A lapsed subscription changes nothing.</td>
+    </tr>
+    <tr>
+      <td>price_cents, currency, billing_period</td>
+      <td><span class="tag warn">data only</span></td>
+      <td>Nothing charges a tenant. The Stripe integration is per-tenant, for <em>their</em> renters' cards.</td>
+    </tr>
+    <tr>
+      <td>&mdash; features &mdash;</td>
+      <td><span class="tag bad">no such concept</span></td>
+      <td>Plans cap counts and nothing else. OTA channels, telematics, the agent tooling and reporting are on for every tenant on every plan.</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<div class="panel">
+  <h3>The load-bearing observation</h3>
+  <p>
+    Every gap below is the same gap: a column exists, a UI writes to it, and no
+    read path consults it. That is also how <code>GROWTH</code> came to be
+    unassignable while <code>PROFESSIONAL</code> was silently unlimited, and how
+    <code>max_vehicles</code> sat in the admin UI for months while a Starter
+    workspace could hold ten thousand cars.
+  </p>
+  <p>
+    So Phase 5 matters more than its position suggests. Everything before it
+    fixes today's holes; Phase 5 is what stops the next one being found by a
+    customer.
+  </p>
+</div>
+
+<h2><span class="num">02</span>Phase 1 — Make time mean something</h2>
+<div class="meta">
+  <span><b>Size</b> ~1 day</span>
+  <span><b>Blocks</b> Phase 4</span>
+  <span><b>Needs a decision</b> yes</span>
+</div>
+<p>
+  <code>trial_ends_at</code> and <code>subscription_ends_at</code> are the two
+  most damaging gaps, because the console presents them as working controls. An
+  operator extends a trial, sees a success message, and has changed nothing.
+</p>
+
+<h3>What to build</h3>
+<ol>
+  <li>
+    <strong>One function that answers "may this workspace trade?"</strong>
+    There is already <code>assert_tenant_trading()</code> gating the storefront
+    on tenant status. Extend it — rather than adding a parallel check — to also
+    fail when a workspace is on a trial or subscription whose date has passed.
+    One function, so the rule cannot be enforced in three places and disagree.
+  </li>
+  <li>
+    <strong>A daily sweep that moves state, not just blocks reads.</strong>
+    <code>app/worker/tasks/tenant_maintenance.py</code> already runs
+    <code>tenants.sweep_unverified</code> on RedBeat at 03:30 UTC. Add
+    <code>tenants.sweep_expired</code> beside it: flip lapsed workspaces to a
+    terminal status so the state is visible in the console rather than computed
+    invisibly at every request.
+  </li>
+  <li>
+    <strong>Warn before the wall.</strong> Email at 7 days, 3 days, and on the
+    day. A trial that dies silently at 03:30 with no warning is a support
+    ticket and a refund conversation, not a conversion.
+  </li>
+  <li>
+    <strong>Show the clock.</strong> The tenant's own admin should display days
+    remaining. Today only the platform console knows.
+  </li>
+</ol>
+
+<div class="decide">
+  <span class="label">Decision needed before I build this</span>
+  <p>
+    When a trial or subscription lapses, what stops? My recommendation:
+    <strong>the storefront stops selling, staff keep signing in.</strong> That
+    mirrors how suspension already behaves and it is the deliberate split in the
+    existing code — an operator locked out of their own back office cannot
+    export their data or reach a payment page, so a hard lockout converts worse
+    <em>and</em> is harder to reverse. The alternative is a full lockout, which
+    is simpler and more coercive. Tell me which.
+  </p>
+</div>
+
+<h2><span class="num">03</span>Phase 2 — Plans that gate features, not only counts</h2>
+<div class="meta">
+  <span><b>Size</b> ~2 days</span>
+  <span><b>Blocks</b> nothing</span>
+  <span><b>Needs a decision</b> yes</span>
+</div>
+<p>
+  A plan can currently say <em>how much</em> but never <em>what</em>. Every
+  tenant on every plan gets OTA channel integration, telematics, the AI agent
+  tooling, corporate accounts and the full reporting suite. If Growth is meant
+  to unlock capability rather than bigger numbers, this is the missing half of
+  the pricing model.
+</p>
+
+<h3>What to build</h3>
+<ol>
+  <li>
+    <strong><code>plan_features(plan_code, feature_key, enabled)</code></strong>
+    — a join table, not a JSON blob on <code>plans</code>. A blob cannot be
+    queried for "which plans include telematics", which is the first question
+    anyone asks when repricing.
+  </li>
+  <li>
+    <strong>A registry of feature keys in code, not free text.</strong> The
+    database stores which plan has what; the application owns the vocabulary.
+    A typo'd key that silently grants nothing is exactly the failure mode this
+    whole document is about.
+  </li>
+  <li>
+    <strong>One dependency, <code>require_feature("ota")</code></strong>,
+    applied at the router level so a whole surface is gated in one line and the
+    gate is visible in the route table during review.
+  </li>
+  <li>
+    <strong>Hide what is not included.</strong> Tenant config already ships to
+    the browser at boot; add the resolved feature set so the admin nav does not
+    advertise a page that 402s.
+  </li>
+  <li>
+    <strong>Checkboxes on the plans page</strong>, so this is administered where
+    caps already are.
+  </li>
+</ol>
+
+<div class="decide">
+  <span class="label">Decision needed</span>
+  <p>
+    Which capabilities are premium? The plausible candidates are OTA channels,
+    telematics, the agent assistant, corporate accounts, advanced reporting and
+    API access. I would not guess at this — it is a pricing decision, not an
+    engineering one. Give me the split and I will build to it; give me nothing
+    and I will build the mechanism with every feature enabled everywhere, which
+    is at least honest.
+  </p>
+</div>
+
+<h2><span class="num">04</span>Phase 3 — Let tenants see where they stand</h2>
+<div class="meta">
+  <span><b>Size</b> ~half a day</span>
+  <span><b>Blocks</b> nothing</span>
+  <span><b>Needs a decision</b> no</span>
+</div>
+<p>
+  Enforcement a customer cannot see is indistinguishable from a bug. Today a
+  Starter workspace discovers its 25-vehicle cap by being refused mid-task, with
+  no prior signal and no page showing the number.
+</p>
+<p>
+  <code>get_usage()</code> already computes everything needed and is surfaced
+  nowhere except a seat count buried in the team page. This phase is mostly
+  wiring:
+</p>
+<ul>
+  <li>A plan-and-usage panel in the tenant's own settings: what they are on, what they have used of each cap, when their term ends.</li>
+  <li>A warning at 80&nbsp;% of any cap, so the refusal is never the first news.</li>
+  <li>The 402 already names the plan and the cap. It should also link to the upgrade page, once one exists.</li>
+</ul>
+
+<h2><span class="num">05</span>Phase 4 — Charging for the plan</h2>
+<div class="meta">
+  <span><b>Size</b> ~1 week</span>
+  <span><b>Blocks</b> nothing, but pointless before Phase 1</span>
+  <span><b>Needs a decision</b> yes</span>
+</div>
+<p>
+  This is the one genuinely large piece, and the one most easily got wrong by
+  starting early. <code>price_cents</code> is a note to yourself until a
+  provider is chosen.
+</p>
+<p>
+  Worth being explicit about a distinction that has already caused confusion:
+  the Stripe code in this repository is <strong>per tenant</strong> — each
+  rental company's own gateway, charging their renters. Platform billing is a
+  second, separate integration, with its own account, its own webhooks and its
+  own reconciliation.
+</p>
+
+<h3>Sequence</h3>
+<ol>
+  <li>Provider and account. Stripe Billing is the obvious default given Stripe is already a dependency, though the existing usage shares nothing but the vendor name.</li>
+  <li><code>tenant_subscriptions</code> — external subscription id, status, current period end, cancel-at-period-end.</li>
+  <li>Webhook receiver. The <code>processed_webhooks</code> table and its idempotency pattern already exist and should be reused rather than reinvented.</li>
+  <li><strong>Webhook drives <code>subscription_ends_at</code>, which Phase 1 already enforces.</strong> This is why Phase 1 comes first: build it now and the enforcement is already waiting.</li>
+  <li>A self-serve upgrade path from the tenant admin, and dunning on failed payment.</li>
+</ol>
+
+<div class="decide">
+  <span class="label">Decision needed</span>
+  <p>
+    Provider, and whether upgrades are self-serve or sales-assisted. Everything
+    else follows from those two answers.
+  </p>
+</div>
+
+<h2><span class="num">06</span>Phase 5 — Stop finding these by hand</h2>
+<div class="meta">
+  <span><b>Size</b> ~half a day</span>
+  <span><b>Blocks</b> nothing</span>
+  <span><b>Needs a decision</b> no</span>
+</div>
+<p>
+  Three bypasses turned up in this week's audit: bulk import ignored
+  <code>max_vehicles</code> entirely, and two console paths ignored
+  <code>max_staff</code>. All three were found by reading every write path by
+  hand. That does not scale and will not be repeated reliably.
+</p>
+<p>
+  This repository already has the right shape of answer in
+  <code>tests/tenant_sql_lint.py</code>, which walks the AST looking for queries
+  that touch tenant tables without a tenant predicate, with a small allowlist
+  where crossing is legitimate. The same technique applies here:
+</p>
+<ul>
+  <li>Enumerate every function that inserts into a capped table.</li>
+  <li>Assert each one reaches <code>assert_within_limit</code>, or appears on an allowlist with a written reason — the first staff member of a brand-new workspace, for instance, which cannot exceed any valid cap.</li>
+  <li>Fail the build otherwise.</li>
+</ul>
+<p>
+  A second, blunter check is worth having beside it: assert that every column on
+  <code>plans</code> is read somewhere outside the plans router itself. That
+  single test would have caught <code>trial_ends_at</code>,
+  <code>max_vehicles</code> and <code>max_locations</code> on the day each was
+  added, instead of months later.
+</p>
+
+<h2><span class="num">07</span>Order, and what I need from you</h2>
+<p>
+  Phases 1, 3 and 5 need nothing from you beyond the trial-expiry policy and can
+  start immediately. Phase 2 needs the premium split. Phase 4 needs a provider.
+</p>
+
+<div class="scroller">
+<table>
+  <thead>
+    <tr><th>Phase</th><th>Size</th><th>Blocked on</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>1 · Time</td><td class="num-cell">~1 day</td><td>Lockout policy &mdash; storefront only, or everything</td></tr>
+    <tr><td>5 · Lint</td><td class="num-cell">~0.5 day</td><td>Nothing</td></tr>
+    <tr><td>3 · Visibility</td><td class="num-cell">~0.5 day</td><td>Nothing</td></tr>
+    <tr><td>2 · Features</td><td class="num-cell">~2 days</td><td>Which capabilities are premium</td></tr>
+    <tr><td>4 · Billing</td><td class="num-cell">~1 week</td><td>Provider; self-serve or sales-assisted</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>
+  I would take them in that order: <strong>1, 5, 3, 2, 4</strong>. Phase 5 sits
+  second on purpose. It is half a day, it is the only item that prevents
+  recurrence rather than fixing an instance, and every phase after it lands
+  safer for having it.
+</p>
+
+<div class="panel">
+  <h3>One thing deliberately not proposed</h3>
+  <p>
+    Retroactive enforcement. A workspace that exceeds a cap after a downgrade
+    keeps everything it has and simply cannot add more. Disabling vehicles
+    somebody is mid-rental with, or locking staff out of a shift in progress,
+    would be worse than the overage and would land on the renter at the counter
+    rather than on the customer who downgraded. If you want a different policy
+    here, say so — but it should be a deliberate choice, not a default.
+  </p>
+</div>
+
+<footer>
+  Ceez Rentals · plan enforcement · 2 August 2026 ·
+  status verified against production, not inferred from source
+</footer>
+
+</div>

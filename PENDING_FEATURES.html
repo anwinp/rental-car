@@ -77,6 +77,11 @@
   .item.blocker { --tone: var(--blocker); }
   .item.major   { --tone: var(--major); }
   .item.later   { --tone: var(--later); }
+  /* Shipped items stay in place rather than disappearing — the list is more
+     useful as a record of what was closed than as a shrinking backlog. */
+  .item.shipped { --tone: var(--done); }
+  .item.shipped .title { text-decoration: line-through; text-decoration-thickness: 1px; color: var(--ink-3); }
+  .item.shipped .why   { color: var(--ink-3); }
 
   .row { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
   .title { font-weight: 600; font-size: 15.5px; letter-spacing: -.005em; }
@@ -86,6 +91,7 @@
     color: var(--ink-3); white-space: nowrap;
   }
   .tag.effort { border-color: var(--rule); }
+  .tag.ship { border-color: var(--done); color: var(--done); }
   .why { margin: 9px 0 0; color: var(--ink-2); font-size: 14px; max-width: 76ch; }
   .ev {
     margin: 11px 0 0; padding: 9px 12px; background: var(--ground);
@@ -124,10 +130,11 @@
   </header>
 
   <dl class="meta">
-    <div><dt>API endpoints</dt><dd>157</dd></div>
-    <div><dt>Blockers to selling</dt><dd>7</dd></div>
+    <div><dt>API operations</dt><dd>162</dd></div>
+    <div><dt>Blockers remaining</dt><dd>7</dd></div>
+    <div><dt>Shipped since this card</dt><dd>3</dd></div>
     <div><dt>Tables, zero cross-tenant leak</dt><dd>31</dd></div>
-    <div><dt>Migrations ahead of prod</dt><dd>17</dd></div>
+    <div><dt>Migrations ahead of prod</dt><dd>19</dd></div>
   </dl>
 
   <div class="callout">
@@ -193,18 +200,20 @@
     <div class="ev">3 call sites → /api/v1/counter/…   ·   routers mounted: 0</div>
   </div>
 
-  <div class="item blocker">
+  <div class="item shipped">
     <div class="row">
       <span class="title">No rental agreement is ever produced</span>
-      <span class="tag">legal</span><span class="tag effort">M</span>
+      <span class="tag">legal</span><span class="tag ship">shipped</span>
     </div>
     <p class="why">
-      Signature capture is real and hashed. The document is not — <code>weasyprint</code>
-      is in requirements and imported nowhere. A signed agreement is legally
+      Signature capture was real and hashed. The document was not — <code>weasyprint</code>
+      was in requirements and imported nowhere. A signed agreement is legally
       required and cannot be recreated after the fact, which is exactly when it
       is needed.
     </p>
-    <div class="ev">weasyprint==62.3 installed  ·  imports in app/: 0</div>
+    <div class="ev">GET /api/v1/checkout/agreements/{id}/document → PDF, rendered once and keyed
+Migration 068 stores the key so a later rate change cannot alter a signed document
+Migration 069 restores extras-name resolution for agreements predating 065</div>
   </div>
 
   <div class="item blocker">
@@ -223,19 +232,21 @@
     <div class="ev">import/export endpoints across all 22 domains: 1 (vehicles only)</div>
   </div>
 
-  <div class="item blocker">
+  <div class="item shipped">
     <div class="row">
       <span class="title">No data export</span>
-      <span class="tag">legal</span><span class="tag effort">M</span>
+      <span class="tag">legal</span><span class="tag ship">shipped</span>
     </div>
     <p class="why">
-      Not one export route exists. GDPR erasure is implemented properly, including
-      legal holds — so the product can delete a person's data and cannot give it
+      Not one export route existed. GDPR erasure is implemented properly, including
+      legal holds — so the product could delete a person's data and could not give it
       to them. Export must also work while an account is past-due or suspended;
       holding a business's operating records over an unpaid invoice is not
-      defensible. A per-tenant CSV is already written to S3 nightly with no route
-      to download it, so this is half-built.
+      defensible.
     </p>
+    <div class="ev">GET /api/v1/tenants/me/export → zip of 24 CSVs + importer-shaped forward bookings
+Gated on workspace admin only, never on billing standing
+Isolation suite +4 probes (36/36); both new probes verified by mutation</div>
   </div>
 
   <div class="item blocker">
@@ -285,17 +296,20 @@
     </p>
   </div>
 
-  <div class="item major">
+  <div class="item shipped">
     <div class="row">
       <span class="title">Customers page shows six invented people</span>
-      <span class="tag">crm</span><span class="tag effort">S</span>
+      <span class="tag">crm</span><span class="tag ship">shipped</span>
     </div>
     <p class="why">
-      The customers API is complete — nine routes including merge and GDPR
-      erasure — but the list renders <code>INIT_CUSTOMERS</code>. A tenant with
-      629 real customers sees the same six fictional names as an empty one.
-      Wiring it up is small and visible.
+      The customers API was complete — nine routes including merge and GDPR
+      erasure — but the list rendered <code>INIT_CUSTOMERS</code>. A tenant with
+      629 real customers saw the same six fictional names as an empty one.
     </p>
+    <div class="ev">Wired to /customers with server-side search, persisting add/edit/DNR
+Rental history from /reservations/crm-list
+Real data carried a loyalty tier the fake seed never had (MEMBER, 348 rows) — the
+browser caught a crash the typechecker could not</div>
   </div>
 
   <div class="item major">

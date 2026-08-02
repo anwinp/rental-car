@@ -191,6 +191,62 @@ function LLMSettingsSection() {
   )
 }
 
+function DataExportSection() {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  async function handleExport() {
+    setBusy(true)
+    setError(null)
+    try {
+      const res = await fetch('/api/v1/tenants/me/export', {
+        credentials: 'include',
+        headers: { 'X-Tenant-ID': tenantId() },
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        setError((err as { detail?: string }).detail || 'The export could not be produced.')
+        return
+      }
+      // Read the filename the server chose — it carries the workspace slug and
+      // a timestamp, so two exports never overwrite each other in Downloads.
+      const disposition = res.headers.get('Content-Disposition') || ''
+      const match = /filename="([^"]+)"/.exec(disposition)
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = match?.[1] || 'rcm-export.zip'
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(url)
+    } catch {
+      setError('Network error — please try again.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="space-y-3">
+      <button className="btn-secondary text-[13px]" onClick={handleExport} disabled={busy}>
+        {busy ? 'Preparing your export…' : 'Download all workspace data'}
+      </button>
+      {error && (
+        <p className="text-[12px]" style={{ color: 'var(--danger)' }}>{error}</p>
+      )}
+      <p className="text-[11.5px] leading-relaxed" style={{ color: 'var(--text-3)' }}>
+        A zip of CSV files — one per record type — covering your fleet, customers,
+        bookings, agreements, payments and pricing. Upcoming bookings are also
+        written in the layout our own importer accepts, so they can be loaded
+        straight into another system. Passwords and API keys are never included.
+      </p>
+    </div>
+  )
+}
+
+
 function SectionCard({ title, description, children }: { title: string; description?: string; children: ReactNode }) {
   return (
     <div className="panel overflow-hidden">
@@ -346,6 +402,18 @@ export function SettingsPage() {
         </div>
         <LLMSettingsSection />
       </div>
+
+      {/* Your data — deliberately placed above Security rather than buried at
+          the bottom. Being able to leave with your records is a feature, not a
+          liability to hide. */}
+      <SectionCard
+        title="Your Data"
+        description="Export everything this workspace holds, at any time"
+      >
+        <Field label="Full export" hint="Available to workspace administrators">
+          <DataExportSection />
+        </Field>
+      </SectionCard>
 
       {/* Security */}
       <SectionCard title="Security" description="Authentication and session settings">

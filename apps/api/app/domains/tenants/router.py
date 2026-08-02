@@ -1,7 +1,7 @@
 """Tenant domain router — CRUD + readiness gate + ToS acceptance."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_session
@@ -219,6 +219,47 @@ async def onboarding_checklist(
         "total": len(items),
         "ready": done == len(items),
     }
+
+
+# ── GET /tenants/me/export ───────────────────────────────────────────────────
+
+
+# Two segments, so this cannot be swallowed by the "/{tenant_id}" GET declared
+# above — same reason /me/slug is shaped the way it is.
+@router.get(
+    "/me/export",
+    summary="Download everything this workspace owns",
+    response_class=Response,
+)
+async def export_workspace(
+    session: AsyncSession = Depends(get_session),
+    claims: UserClaims = Depends(get_current_user),
+) -> Response:
+    """Every tenant-owned record as a zip of CSVs.
+
+    Deliberately gated on being an administrator of the workspace and nothing
+    else — not on the tenant's billing standing. A business that has fallen
+    behind on an invoice still needs its bookings for tomorrow morning, and
+    holding operating data hostage over a payment dispute is both a bad way to
+    treat a customer and, for EU tenants, likely unlawful under GDPR Art. 20.
+
+    Scoped by the caller's JWT, never by a path parameter: there is no shape of
+    this request that can name another workspace.
+    """
+    if claims.primary_role not in ("SYSTEM_ADMIN", "SUPER_ADMIN"):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Only administrators can export the workspace.",
+        )
+
+    from app.domains.tenants.export import build_export
+
+    blob, filename = await build_export(session, str(claims.tenant_id))
+    return Response(
+        content=blob,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 # ── PATCH /tenants/slug ──────────────────────────────────────────────────────

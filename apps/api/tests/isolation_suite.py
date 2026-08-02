@@ -16,6 +16,7 @@ Idempotent: re-running re-uses the two fixture tenants.
 from __future__ import annotations
 
 import asyncio
+import csv
 import sys
 import uuid
 
@@ -483,6 +484,74 @@ def http_probes() -> None:
                 r.status_code in (200, 404),
                 f"status {r.status_code} — the fix must not break the real flow",
             )
+
+        # The bulk export is the highest-consequence surface in the product: one
+        # request returns every record a workspace owns. A scoping mistake here
+        # does not leak a row, it leaks a company. Probed three ways.
+        import io as _io
+        import zipfile as _zipfile
+
+        r = ca.get(f"{API}/api/v1/tenants/me/export",
+                   headers={"X-Tenant-ID": str(A_TENANT)})
+        check(
+            "http: A can export its own workspace",
+            r.status_code == 200 and r.content[:2] == b"PK",
+            f"status {r.status_code} — an export the owner cannot fetch is not an export",
+        )
+
+        if r.status_code == 200 and r.content[:2] == b"PK":
+            # Every tenant_id inside the archive must be A's. Reading the CSVs
+            # rather than trusting the row counts: a JOIN that drops its tenant
+            # predicate produces a plausible-looking file, not an error.
+            foreign: list[str] = []
+            # Credentials must never ride along: an export gets forwarded to
+            # accountants, lawyers and successor vendors. Checked against the
+            # DECOMPRESSED headers — the first version of this probe scanned
+            # r.content for the literal column name and passed unconditionally,
+            # because DEFLATE means "password_hash" never appears as raw bytes
+            # in the archive. It reported green with redaction fully disabled.
+            secrets_found: list[str] = []
+            SECRET_COLS = ("password_hash", "pin_hash", "mfa_secret",
+                           "mfa_backup_codes", "token_hash", "esignature_hash",
+                           "anthropic_api_key")
+
+            with _zipfile.ZipFile(_io.BytesIO(r.content)) as z:
+                for entry in z.namelist():
+                    if not entry.endswith(".csv"):
+                        continue
+                    reader = csv.DictReader(
+                        z.read(entry).decode("utf-8").splitlines())
+                    header = reader.fieldnames or []
+                    secrets_found += [
+                        f"{entry}:{c}" for c in SECRET_COLS if c in header
+                    ]
+                    if "tenant_id" not in header:
+                        continue
+                    if any((row["tenant_id"] or "").strip() != str(A_TENANT)
+                           for row in reader):
+                        foreign.append(entry)
+
+            check(
+                "http: the export contains no other tenant's rows",
+                not foreign,
+                f"foreign rows in {', '.join(foreign)}",
+            )
+            check(
+                "http: the export carries no credential columns",
+                not secrets_found,
+                f"exported {', '.join(secrets_found)}",
+            )
+
+        # A's session claiming to be B must not export B. There is no path
+        # parameter to forge, so the header is the only lever — and the JWT has
+        # to win.
+        r = ca.get(f"{API}/api/v1/tenants/me/export",
+                   headers={"X-Tenant-ID": str(B_TENANT)})
+        check(
+            "http: a forged tenant header cannot redirect the export",
+            not (r.status_code == 200 and b"Shelbyville Hub" in r.content),
+            "header override let tenant A export tenant B's workspace",
+        )
 
         # Anonymous public endpoint must not default to some other tenant.
         r = httpx.get(f"{API}/api/v1/locations/public", timeout=30)

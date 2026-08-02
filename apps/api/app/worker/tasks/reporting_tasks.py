@@ -210,7 +210,8 @@ async def _generate_daily_revenue_report_async(tenant_id: str, date: str) -> dic
                 WHERE tenant_id = :tid
                   AND created_at >= :day_start
                   AND created_at < :day_end
-                  AND deleted_at IS NULL
+                  -- No deleted_at on payments: a payment is never soft-deleted,
+                  -- it is refunded, and the refund is a column on the row.
                 GROUP BY payment_type, payment_method, status, currency
                 ORDER BY payment_type, payment_method
             """),
@@ -229,7 +230,7 @@ async def _generate_daily_revenue_report_async(tenant_id: str, date: str) -> dic
                 WHERE tenant_id = :tid
                   AND created_at >= :day_start
                   AND created_at < :day_end
-                  AND deleted_at IS NULL
+                  -- rental_agreements has no deleted_at either.
             """),
             {"tid": tenant_id, "day_start": day_start, "day_end": day_end},
         )
@@ -413,7 +414,11 @@ async def _calculate_fleet_utilization_async(
                 SELECT COUNT(*) AS vehicle_count
                 FROM vehicles
                 WHERE tenant_id = :tid
-                  AND is_active = true
+                  -- vehicles has no is_active column; the vocabulary is
+                  -- `status`. A retired or sold car is not part of the
+                  -- operating fleet and must not sit in a utilisation
+                  -- denominator, which is what this count is.
+                  AND status NOT IN ('RETIRED', 'SOLD')
                   AND deleted_at IS NULL
             """),
             {"tid": tenant_id},
@@ -427,16 +432,15 @@ async def _calculate_fleet_utilization_async(
                     COUNT(DISTINCT ra.vehicle_id) AS distinct_vehicles_rented,
                     SUM(
                         EXTRACT(EPOCH FROM (
-                            LEAST(COALESCE(ra.returned_at, :end_dt), :end_dt)
-                            - GREATEST(ra.picked_up_at, :start_dt)
+                            LEAST(COALESCE(ra.actual_return_datetime, :end_dt), :end_dt)
+                            - GREATEST(ra.created_at, :start_dt)
                         )) / 86400.0
                     ) AS total_vehicle_days_rented
                 FROM rental_agreements ra
                 WHERE ra.tenant_id = :tid
                   AND ra.status IN ('CHECKED_OUT', 'RETURNED')
-                  AND ra.picked_up_at < :end_dt
-                  AND (ra.returned_at IS NULL OR ra.returned_at > :start_dt)
-                  AND ra.deleted_at IS NULL
+                  AND ra.created_at < :end_dt
+                  AND (ra.actual_return_datetime IS NULL OR ra.actual_return_datetime > :start_dt)
             """),
             {"tid": tenant_id, "start_dt": start_dt, "end_dt": end_dt},
         )
@@ -459,21 +463,20 @@ async def _calculate_fleet_utilization_async(
                     COUNT(DISTINCT ra.vehicle_id) AS rented_vehicles,
                     SUM(
                         EXTRACT(EPOCH FROM (
-                            LEAST(COALESCE(ra.returned_at, :end_dt), :end_dt)
-                            - GREATEST(ra.picked_up_at, :start_dt)
+                            LEAST(COALESCE(ra.actual_return_datetime, :end_dt), :end_dt)
+                            - GREATEST(ra.created_at, :start_dt)
                         )) / 86400.0
                     ) AS vehicle_days_rented
                 FROM vehicle_classes vc
-                JOIN vehicles v ON v.class_id = vc.class_id
+                JOIN vehicles v ON v.vehicle_class_id = vc.class_id
                 LEFT JOIN rental_agreements ra
                     ON ra.vehicle_id = v.vehicle_id
                     AND ra.tenant_id = :tid
                     AND ra.status IN ('CHECKED_OUT', 'RETURNED')
-                    AND ra.picked_up_at < :end_dt
-                    AND (ra.returned_at IS NULL OR ra.returned_at > :start_dt)
-                    AND ra.deleted_at IS NULL
-                WHERE v.tenant_id = :tid
-                  AND v.is_active = true
+                    AND ra.created_at < :end_dt
+                    AND (ra.actual_return_datetime IS NULL OR ra.actual_return_datetime > :start_dt)
+                  WHERE v.tenant_id = :tid
+                  AND v.status NOT IN ('RETIRED', 'SOLD')
                   AND v.deleted_at IS NULL
                 GROUP BY vc.class_id, vc.name
                 ORDER BY vc.name
@@ -501,21 +504,20 @@ async def _calculate_fleet_utilization_async(
                     COUNT(DISTINCT v.vehicle_id) AS total_vehicles,
                     SUM(
                         EXTRACT(EPOCH FROM (
-                            LEAST(COALESCE(ra.returned_at, :end_dt), :end_dt)
-                            - GREATEST(ra.picked_up_at, :start_dt)
+                            LEAST(COALESCE(ra.actual_return_datetime, :end_dt), :end_dt)
+                            - GREATEST(ra.created_at, :start_dt)
                         )) / 86400.0
                     ) AS vehicle_days_rented
                 FROM locations l
-                JOIN vehicles v ON v.location_id = l.location_id
+                JOIN vehicles v ON v.home_location_id = l.location_id
                 LEFT JOIN rental_agreements ra
                     ON ra.vehicle_id = v.vehicle_id
                     AND ra.tenant_id = :tid
                     AND ra.status IN ('CHECKED_OUT', 'RETURNED')
-                    AND ra.picked_up_at < :end_dt
-                    AND (ra.returned_at IS NULL OR ra.returned_at > :start_dt)
-                    AND ra.deleted_at IS NULL
-                WHERE v.tenant_id = :tid
-                  AND v.is_active = true
+                    AND ra.created_at < :end_dt
+                    AND (ra.actual_return_datetime IS NULL OR ra.actual_return_datetime > :start_dt)
+                  WHERE v.tenant_id = :tid
+                  AND v.status NOT IN ('RETIRED', 'SOLD')
                   AND v.deleted_at IS NULL
                 GROUP BY l.location_id, l.name
                 ORDER BY l.name

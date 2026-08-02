@@ -311,8 +311,11 @@ export function HeroSearch() {
     // Resolve the workspace first: the API refuses anonymous requests that
     // carry no tenant rather than defaulting to somebody else's catalogue.
     resolveTenant()
-      .then((tenant) => {
-        if (!tenant) {
+      .then((result) => {
+        // resolveTenant now reports which of the three states applies rather
+        // than returning null for all of them; only a real workspace should
+        // proceed to load locations.
+        if (result.kind !== 'tenant') {
           if (!cancelled) { setLoadingLoc(false); setTenantMissing(true) }
           return null
         }

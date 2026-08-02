@@ -49,7 +49,7 @@ export function currentSlug(): string | null {
 }
 
 let cached: TenantConfig | null = null
-let inflight: Promise<TenantConfig | null> | null = null
+let inflight: Promise<TenantResolution> | null = null
 
 export function cachedTenant(): TenantConfig | null {
   return cached
@@ -61,21 +61,54 @@ export function cachedTenant(): TenantConfig | null {
  * De-duplicated: several components mount at once on the landing page and would
  * otherwise each fire the same lookup.
  */
-export async function resolveTenant(): Promise<TenantConfig | null> {
-  if (cached) return cached
+export type TenantResolution =
+  | { kind: 'tenant'; config: TenantConfig }
+  /** The platform host itself — rcm.ceez.ai. Not a workspace, by design. */
+  | { kind: 'platform' }
+  /** Tenant-shaped hostname with no workspace behind it. */
+  | { kind: 'unknown' }
+
+/**
+ * Resolve the workspace this page is serving, from the SERVER.
+ *
+ * This used to derive the slug in the browser and pass it as a query
+ * parameter, which meant the client re-implemented the hostname rules — and got
+ * them wrong. slugFromHostname() knows nothing about the "-rcm" platform
+ * suffix, so on acme-rcm.ceez.ai it asked for a workspace literally named
+ * "acme-rcm", got a 404, and every tenant storefront in production sat on
+ * "Loading…" forever.
+ *
+ * The API already derives the tenant from the Host header, and that is the same
+ * logic it enforces isolation with. Sending no slug at all makes the server the
+ * single source of truth, and its three answers map exactly onto the three
+ * states this app has to render:
+ *
+ *   200 -> a workspace          400 -> the platform host        404 -> no such workspace
+ *
+ * The ?workspace= escape hatch is preserved for local development, where the
+ * hostname carries no label at all.
+ */
+export async function resolveTenant(): Promise<TenantResolution> {
+  if (cached) return { kind: 'tenant', config: cached }
   if (inflight) return inflight
 
-  const slug = currentSlug()
-  if (!slug) return null
+  const override = typeof window !== 'undefined'
+    ? new URLSearchParams(window.location.search).get('workspace')
+    : null
 
   inflight = (async () => {
     try {
-      const res = await fetch(`/api/v1/public/tenant-config?slug=${encodeURIComponent(slug)}`)
-      if (!res.ok) return null
+      const res = await fetch(
+        override
+          ? `/api/v1/public/tenant-config?slug=${encodeURIComponent(override)}`
+          : '/api/v1/public/tenant-config',
+      )
+      if (res.status === 400) return { kind: 'platform' } as const
+      if (!res.ok) return { kind: 'unknown' } as const
       cached = (await res.json()) as TenantConfig
-      return cached
+      return { kind: 'tenant', config: cached } as const
     } catch {
-      return null
+      return { kind: 'unknown' } as const
     } finally {
       inflight = null
     }

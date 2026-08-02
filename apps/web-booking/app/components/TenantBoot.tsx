@@ -1,7 +1,8 @@
 'use client'
 
 import { useEffect, useState, type ReactNode } from 'react'
-import { resolveTenant, currentSlug } from '../lib/tenant'
+import { resolveTenant } from '../lib/tenant'
+import PlatformLanding from './PlatformLanding'
 
 /**
  * Resolves the workspace from the hostname before the app renders.
@@ -10,23 +11,35 @@ import { resolveTenant, currentSlug } from '../lib/tenant'
  * refuses anonymous requests that carry none — so resolving first is what makes
  * a single build able to serve every workspace without leaking one tenant's
  * catalogue onto another's site.
+ *
+ * Three outcomes, and they are genuinely different pages:
+ *
+ *   tenant   — a real workspace: render its storefront
+ *   platform — rcm.ceez.ai itself: render the product's front door, where a new
+ *              operator signs up. This host previously fell into the "unknown"
+ *              branch and told every prospective customer to check their link.
+ *   unknown  — a tenant-shaped hostname with nothing behind it
  */
 export default function TenantBoot({ children }: { children: ReactNode }) {
-  const [state, setState] = useState<'resolving' | 'ready' | 'unknown'>('resolving')
+  const [state, setState] = useState<'resolving' | 'ready' | 'platform' | 'unknown'>(
+    'resolving',
+  )
 
   useEffect(() => {
-    if (!currentSlug()) {
-      // No tenant label in the hostname (plain localhost). Render anyway: the
-      // API will refuse tenant-scoped reads, which surfaces as empty results
-      // rather than another tenant's data.
-      setState('ready')
-      return
-    }
     let cancelled = false
-    resolveTenant().then((tenant) => {
-      if (!cancelled) setState(tenant ? 'ready' : 'unknown')
+    resolveTenant().then((result) => {
+      if (cancelled) return
+      setState(
+        result.kind === 'tenant'
+          ? 'ready'
+          : result.kind === 'platform'
+            ? 'platform'
+            : 'unknown',
+      )
     })
-    return () => { cancelled = true }
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   if (state === 'resolving') {
@@ -35,6 +48,10 @@ export default function TenantBoot({ children }: { children: ReactNode }) {
         Loading…
       </div>
     )
+  }
+
+  if (state === 'platform') {
+    return <PlatformLanding />
   }
 
   if (state === 'unknown') {

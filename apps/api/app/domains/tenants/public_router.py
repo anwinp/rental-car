@@ -593,3 +593,56 @@ async def workspace_open(
         "locations": row.get("locations", 0),
         "reason": None if ready else "This company has not published its fleet yet.",
     }
+
+
+# ── Reactivation after a lapsed term ─────────────────────────────────────────
+
+@router.get("/reactivation/{token}", summary="What a reactivation link refers to")
+async def reactivation_details(
+    token: str,
+    session: AsyncSession = Depends(get_session_untenanted),
+) -> dict:
+    """Resolve a reactivation token to the workspace it belongs to.
+
+    Unauthenticated by necessity. The expiry policy is a hard lockout, so the
+    person who needs this cannot sign in to reach it — the token in their email
+    is the whole credential, which is why it is 32 random bytes, single-use, and
+    tied to one workspace.
+
+    Returns only what a renewal page must display: the workspace's name and what
+    it costs to restore. No staff list, no counts, no configuration. Somebody
+    who guessed a token should learn nothing they could not read off the
+    company's own website.
+    """
+    row = (
+        await session.execute(
+            text(
+                "SELECT t.slug, "
+                "       COALESCE(t.trading_name, t.legal_name, t.slug) AS name, "
+                "       t.status, t.expired_at, "
+                "       p.code AS plan_code, p.display_name AS plan_name, "
+                "       p.price_cents, p.currency, p.billing_period "
+                "  FROM tenants t "
+                "  LEFT JOIN plans p ON p.code = t.subscription_tier "
+                " WHERE t.reactivation_token = :tok AND t.deleted_at IS NULL"
+            ),
+            {"tok": token},
+        )
+    ).mappings().first()
+
+    if not row:
+        raise HTTPException(status_code=404, detail="This link is no longer valid.")
+
+    return {
+        "slug": row["slug"],
+        "name": row["name"],
+        # An already-restored workspace should say so rather than offer a
+        # payment for something the customer has already sorted out.
+        "already_active": row["status"] != "EXPIRED",
+        "expired_at": row["expired_at"],
+        "plan_code": row["plan_code"],
+        "plan_name": row["plan_name"],
+        "price_cents": row["price_cents"],
+        "currency": row["currency"],
+        "billing_period": row["billing_period"],
+    }

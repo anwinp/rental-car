@@ -549,9 +549,27 @@ async def reactivate_tenant(
     # reason; these two never did.
     await session.execute(text("SELECT set_config('app.current_tenant_id', '', true)"))
 
+    # Clearing the term matters as much as setting the status. A workspace that
+    # expired did so because a date is in the past; flipping only the status
+    # would leave that date where it is, and the nightly sweep would lock the
+    # customer straight back out at 03:35 — a reactivation that reports success
+    # and silently reverses itself overnight. NULL means "not on a clock",
+    # which is the right state for a term granted by hand: billing sets a real
+    # one when it takes over.
     res = await session.execute(
-        text("UPDATE tenants SET status = 'ACTIVE', updated_at = now() "
-             "WHERE tenant_id = :t AND deleted_at IS NULL RETURNING slug"),
+        text(
+            "UPDATE tenants "
+            "   SET status = 'ACTIVE', "
+            "       trial_ends_at = NULL, "
+            "       subscription_ends_at = NULL, "
+            "       expired_at = NULL, "
+            "       reactivation_token = NULL, "
+            "       expiry_warn_stage = 0, "
+            "       expiry_warned_at = NULL, "
+            "       status_before_expiry = NULL, "
+            "       updated_at = now() "
+            " WHERE tenant_id = :t AND deleted_at IS NULL RETURNING slug, status"
+        ),
         {"t": str(tenant_id)},
     )
     row = res.first()
@@ -560,7 +578,10 @@ async def reactivate_tenant(
 
     await invalidate_slug_cache(row[0])
     log.info("platform_tenant_reactivated", slug=row[0], by=str(claims.admin_id))
-    return ActionResult(ok=True, message=f"{row[0]} is active again.")
+    return ActionResult(
+        ok=True,
+        message=f"{row[0]} is active again, with no end date set.",
+    )
 
 
 # ── Delete ───────────────────────────────────────────────────────────────────

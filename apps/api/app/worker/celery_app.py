@@ -32,6 +32,7 @@ celery_app = Celery(
         "app.worker.tasks.channel_tasks",
         # Tenant lifecycle housekeeping
         "app.worker.tasks.tenant_maintenance",
+        "app.worker.tasks.tenant_expiry",
         # Agent tasks (Foundation stubs — real implementations in Wave 3)
         "app.worker.tasks.agent_tasks",
     ],
@@ -152,6 +153,15 @@ celery_app.conf.update(
         "sweep-unverified-tenants": {
             "task": "tenants.sweep_unverified",
             "schedule": crontab(minute=30, hour=3),
+            "options": {"queue": "batch", "expires": 3600},
+        },
+        # Term expiry — daily at 03:35 UTC, just after the unverified sweep so
+        # the two never contend for the same rows. Warns at 7/3/0 days, then
+        # locks out. See tasks/tenant_expiry.py for why the email it sends is
+        # part of the mechanism rather than a courtesy.
+        "sweep-expired-tenants": {
+            "task": "tenants.sweep_expired",
+            "schedule": crontab(minute=35, hour=3),
             "options": {"queue": "batch", "expires": 3600},
         },
         # Pre-auth renewal — every 6 hours

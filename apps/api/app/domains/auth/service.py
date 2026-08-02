@@ -121,6 +121,16 @@ class AuthService:
             raise AuthenticationError(
                 "This workspace is suspended. Contact your administrator."
             )
+        if status == "EXPIRED":
+            # A hard lockout: no sign-in at all once the term lapses. Which
+            # makes the wording load-bearing — the person reading it cannot get
+            # in to find a renewal page, so it has to say where the link is
+            # rather than leave them clicking "forgot password".
+            raise AuthenticationError(
+                "This workspace's subscription has ended. Nothing has been "
+                "deleted. Use the renewal link emailed to the workspace owner "
+                "to restore access."
+            )
         if status in ("CANCELLED", "DELETED"):
             raise AuthenticationError("This workspace is no longer active.")
         if status == "PENDING_VERIFICATION":

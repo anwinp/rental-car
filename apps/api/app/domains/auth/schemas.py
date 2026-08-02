@@ -64,9 +64,14 @@ class PasswordChange(BaseModel):
 
 
 class PasswordResetRequest(BaseModel):
-    """Body for POST /auth/request-password-reset."""
+    """Body for POST /auth/request-password-reset.
+
+    Deliberately carries no tenant. It used to require one, which meant the
+    caller chose which workspace's account to reset — and the shipped front end
+    sent the tenant in a HEADER instead, so every request 422'd and no reset
+    email was ever sent to anyone. The tenant is now derived from the host.
+    """
     email: str = Field(min_length=3, max_length=254)
-    tenant_id: UUID
 
 
 class PasswordResetComplete(BaseModel):

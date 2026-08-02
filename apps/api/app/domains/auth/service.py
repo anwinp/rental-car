@@ -59,6 +59,10 @@ log = structlog.get_logger()
 
 # Redis key for password reset tokens: "pwreset:{token_hash}" → user_id
 PWRESET_KEY = "pwreset:{token_hash}"
+# One hour. The previous 24h window is a long time for a credential that
+# arrives in an inbox and grants a password change; an hour is the usual bound
+# and still comfortable for someone who reads mail on a phone.
+_PWRESET_TTL_SECONDS = 3600
 # Redis key for MFA backup codes: "mfa_backup:{user_id}" → JSON list
 MFA_BACKUP_KEY = "mfa_backup:{user_id}"
 # Redis key prefix for session index: "sessions:{user_id}" → SET of JTIs
@@ -719,76 +723,150 @@ class AuthService:
     # ── Password Reset ────────────────────────────────────────────────────────
 
     async def request_password_reset(
-        self, email: str, tenant_id: str, reset_base_url: str = ""
+        self, email: str, tenant_id: str | None = None, reset_base_url: str = ""
     ) -> None:
+        """Send recovery links for every account this address can sign in to.
+
+        Two things were wrong with the previous implementation.
+
+        The tenant came from the request BODY, so the caller chose whose
+        account to reset. Paired with the unauthenticated tenant-config
+        endpoint, which returns a tenant_id for any slug, that was a targeted
+        account-takeover primitive.
+
+        The link's base URL came from the Origin HEADER, unvalidated. Setting
+        Origin to a host you control produced a genuine email, from this
+        system, carrying a valid token, pointing anywhere you liked.
+
+        Now: the tenant is only ever derived from the resolved host, and links
+        are built from the configured public hosts. Neither is caller-supplied.
+
+        When no tenant can be derived — the platform host, or a bare API call —
+        this covers every workspace the address belongs to, one link each, in a
+        single email. The response is identical either way, so nothing is
+        disclosed to whoever typed the address; only the mailbox owner learns
+        anything, and only about their own accounts.
+
+        `reset_base_url` is accepted and ignored. It is kept so an old caller
+        cannot silently change behaviour by passing one.
         """
-        Generate a 24-hour signed reset token and dispatch email.
-        Always returns successfully (prevents email enumeration).
-        """
-        # staff_users is RLS-protected. This endpoint is reachable without a
-        # session and callers do not always send a tenant header, so bind the
-        # tenant named in the request before looking anyone up — otherwise the
-        # lookup silently returns nothing and no reset email is ever sent,
-        # which is indistinguishable from "no such user" and impossible to
-        # diagnose from the caller's side.
         from sqlalchemy import text as _text
 
-        await self._session.execute(
-            _text("SELECT set_config('app.current_tenant_id', :t, true)"),
-            {"t": str(tenant_id)},
-        )
-
-        user = await self._repo.get_by_email_and_tenant(email, tenant_id)
-        if user is None:
-            return  # Silently succeed — do not leak existence
-
-        raw_token = secrets.token_urlsafe(32)
-        token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
-        redis = get_session_redis()
-        await redis.setex(
-            PWRESET_KEY.format(token_hash=token_hash),
-            86400,  # 24 hours
-            user.user_id,
-        )
-
-        # Actually send it. This previously only logged a comment saying
-        # production "should" dispatch a notification — which meant the sole
-        # administrator of a newly registered workspace had no way back in
-        # after forgetting their password. For a single-user tenant that is
-        # not an inconvenience, it is permanent loss of the workspace.
+        from app.core.config import settings
         from app.core.mailer import send_email, wrap_html
+        from app.core.tenancy import tenant_host
 
-        reset_link = f"{reset_base_url.rstrip('/')}/reset-password?token={raw_token}"
-        transport = await send_email(
-            to_email=user.email,
-            subject="Reset your RCM password",
-            html=wrap_html(
-                "Reset your password",
-                "<p>We received a request to reset the password for your RCM "
-                "account. This link expires in 24 hours and can be used once.</p>"
+        rows = (
+            await self._session.execute(
+                _text(
+                    "SELECT user_id, tenant_id, slug, display_name, email "
+                    "  FROM find_password_reset_targets(:e)"
+                ),
+                {"e": email},
+            )
+        ).mappings().all()
+
+        # A host-derived tenant narrows to that workspace. Anything else covers
+        # them all — that is the generic case and the one people actually hit.
+        if tenant_id:
+            rows = [r for r in rows if str(r["tenant_id"]) == str(tenant_id)]
+
+        if not rows:
+            # Silently succeed. The caller must not learn whether the address
+            # exists, here or in the timing of this return.
+            log.info("password_reset_requested", matched=0)
+            return
+
+        redis = get_session_redis()
+        scheme = settings.public_url_scheme
+        links: list[tuple[str, str]] = []
+
+        for row in rows:
+            raw_token = secrets.token_urlsafe(32)
+            token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
+            # The token carries its tenant. Redemption binds it before reading
+            # the user — without that, a token minted for one workspace is
+            # invisible to RLS when redeemed anywhere else, and the holder gets
+            # "invalid link" for a link that was just emailed to them.
+            await redis.setex(
+                PWRESET_KEY.format(token_hash=token_hash),
+                _PWRESET_TTL_SECONDS,
+                f"{row['user_id']}|{row['tenant_id']}",
+            )
+            host = tenant_host(row["slug"], settings.public_admin_host)
+            links.append(
+                (row["display_name"], f"{scheme}://{host}/reset-password?token={raw_token}")
+            )
+
+        if len(links) == 1:
+            name, url = links[0]
+            body = (
+                f"<p>We received a request to reset the password for your "
+                f"<strong>{name}</strong> account. This link expires in one hour "
+                f"and can be used once.</p>"
                 "<p>If you did not request this, you can ignore this email — "
-                "your password will not change.</p>",
-                cta_text="Choose a new password",
-                cta_url=reset_link,
-            ),
+                "your password will not change.</p>"
+            )
+            html = wrap_html(
+                "Reset your password", body,
+                cta_text="Choose a new password", cta_url=url,
+            )
+        else:
+            # More than one workspace uses this address. Name them, so the
+            # person picks rather than guessing which link is which.
+            items = "".join(
+                f'<li style="margin:0 0 10px"><a href="{url}" '
+                f'style="color:#4f46e5">{name}</a></li>'
+                for name, url in links
+            )
+            html = wrap_html(
+                "Reset your password",
+                "<p>This address can sign in to more than one workspace. Choose "
+                "the one you want to reset — each link expires in one hour and "
+                "can be used once.</p>"
+                f'<ul style="padding-left:18px;margin:18px 0">{items}</ul>'
+                "<p>If you did not request this, you can ignore this email — "
+                "no password will change.</p>",
+            )
+
+        transport = await send_email(
+            to_email=rows[0]["email"],
+            subject="Reset your RCM password",
+            html=html,
             kind="password_reset",
         )
 
         log.info(
             "password_reset_requested",
-            user_id=user.user_id,
-            tenant_id=tenant_id,
+            matched=len(rows),
+            scoped_to_tenant=bool(tenant_id),
             transport=transport,
-            # raw_token is never logged; only the hash is stored, above.
+            # Raw tokens are never logged; only their hashes are stored, above.
         )
 
     async def reset_password(self, token: str, new_password: str) -> None:
         """Validate reset token, update password, revoke all sessions."""
         token_hash = hashlib.sha256(token.encode()).hexdigest()
         redis = get_session_redis()
-        user_id = await redis.get(PWRESET_KEY.format(token_hash=token_hash))
-        if not user_id:
+        stored = await redis.get(PWRESET_KEY.format(token_hash=token_hash))
+        if not stored:
             raise TokenInvalidError()
+
+        # Tokens carry "user_id|tenant_id". The tenant half is what makes a
+        # link redeemable from wherever the person opens their mail: staff_users
+        # is under strict RLS, so without binding the token's own tenant the
+        # lookup below returns nothing and a perfectly valid link reports itself
+        # invalid. Older single-value tokens still redeem, under whatever tenant
+        # the request resolved to, as they did before.
+        raw = stored.decode() if isinstance(stored, bytes) else str(stored)
+        user_id, _, token_tenant = raw.partition("|")
+        if token_tenant:
+            from sqlalchemy import text as _text
+
+            await self._session.execute(
+                _text("SELECT set_config('app.current_tenant_id', :t, true)"),
+                {"t": token_tenant},
+            )
 
         user = await self._repo.get_by_id(user_id)
         if user is None:

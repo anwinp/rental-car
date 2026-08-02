@@ -5,13 +5,14 @@ import secrets
 from typing import Optional
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, Cookie, Depends, Request, Response, status
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.database import get_session
+from app.core.ratelimit import enforce_limit
 from app.core.redis import get_session_redis, SESSION_KEY
 from app.core.security import UserClaims, get_current_user
 from app.domains.auth.schemas import (
@@ -64,6 +65,14 @@ async def login(
     """
     client_ip = request.headers.get("X-Forwarded-For", request.client.host or "").split(",")[0].strip()
     # tenant_id resolved from header or request.state (set by middleware)
+    # Per (address, account). The 5-strike lockout in the service is
+    # per-account, so it does not meter one password sprayed across many
+    # accounts; this does.
+    await enforce_limit(
+        request, bucket="login", limit=10, window_seconds=300,
+        subject=payload.email,
+        message="Too many sign-in attempts. Try again in a few minutes.",
+    )
     tenant_id = request.headers.get("X-Tenant-ID") or getattr(request.state, "tenant_id", "")
     if not tenant_id:
         from app.core.exceptions import AuthenticationError
@@ -235,21 +244,41 @@ async def request_password_reset(
     Always returns 202 regardless of whether the email is registered
     (prevents email enumeration).
     """
-    # The reset link must point back at the workspace host the request came
-    # from, so the user lands where their session cookie will be set.
-    origin = request.headers.get("origin") or f"http://{request.headers.get('host', 'localhost')}"
-    await service.request_password_reset(
-        payload.email, str(payload.tenant_id), reset_base_url=origin
+    # This endpoint sends real email, so an unmetered one is a mail-bombing
+    # tool aimed at any address someone can guess.
+    await enforce_limit(
+        request, bucket="pwreset", limit=5, window_seconds=900,
+        subject=payload.email,
+        message="Too many reset requests. Try again shortly.",
     )
+
+    # The tenant comes from the resolved host and nowhere else. It used to be
+    # read from the request body, which let the caller choose whose account to
+    # reset; the link's host used to come from the Origin header, unvalidated,
+    # which let the caller choose where the token was delivered. Together those
+    # made this endpoint an account-takeover primitive rather than a recovery
+    # flow. Both are now derived server-side.
+    #
+    # None is the normal case on the platform host, and means "every workspace
+    # this address can sign in to" — see the service docstring.
+    host_tenant = getattr(request.state, "tenant_id", None)
+    await service.request_password_reset(payload.email, host_tenant)
     return {"message": "If the email exists, a reset link has been sent."}
 
 
 @router.post("/reset-password", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
 async def reset_password(
     payload: PasswordResetComplete,
+    request: Request,
     service: AuthService = Depends(_get_auth_service),
 ) -> None:
     """Complete password reset using the token from the reset email."""
+    # Bounds brute-forcing of the token itself. 256 bits is not guessable, but
+    # an unmetered redemption endpoint is still free compute for an attacker.
+    await enforce_limit(
+        request, bucket="pwreset_redeem", limit=10, window_seconds=900,
+        message="Too many attempts. Request a new reset link.",
+    )
     await service.reset_password(payload.token, payload.new_password)
 
 
@@ -292,6 +321,7 @@ class MFAChallengeRequest(BaseModel):
 async def mfa_challenge(
     payload: MFAChallengeRequest,
     response: Response,
+    request: Request,
     service: AuthService = Depends(_get_auth_service),
 ) -> UserProfile:
     """Second stage of sign-in for accounts with MFA enabled.
@@ -301,6 +331,12 @@ async def mfa_challenge(
     single-use, expires in five minutes, and is destroyed after five wrong
     codes. Accepts a TOTP code or a single-use backup code.
     """
+    # The per-challenge counter caps guesses against ONE challenge; nothing
+    # stopped an attacker cycling fresh challenges to keep guessing.
+    await enforce_limit(
+        request, bucket="mfa_challenge", limit=20, window_seconds=900,
+        message="Too many verification attempts. Sign in again to restart.",
+    )
     access_token, _ = await service.complete_mfa_login(
         challenge_id=payload.challenge_id,
         code=payload.code,

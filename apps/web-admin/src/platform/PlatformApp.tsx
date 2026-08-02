@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate, Link, useLocation } from 'react
 
 import PlatformTenantsPage from '../pages/PlatformTenantsPage'
 import { PlatformTenantDetailPage } from '../pages/PlatformTenantDetailPage'
+import PlatformBillingPage from '../pages/PlatformBillingPage'
 import PlatformPlansPage from '../pages/PlatformPlansPage'
 import { CeezLogo } from './CeezLogo'
 import { PlatformSecurity } from './PlatformSecurity'
@@ -214,6 +215,9 @@ function PlatformChrome({ me, onSignedOut, onReload, children }: {
             <Link to="/platform/plans" style={{ color: 'var(--text-2)' }} className="hover:underline">
               Plans
             </Link>
+            <Link to="/platform/billing" style={{ color: 'var(--text-2)' }} className="hover:underline">
+              Billing
+            </Link>
             {/* Named plainly: an operator should be able to tell at a glance
                 which identity is acting, because everything done here is done
                 to somebody else's data. */}
@@ -265,6 +269,7 @@ export function PlatformApp() {
           <Route path="/login" element={<Navigate to="/platform" replace />} />
           <Route path="/platform" element={<PlatformTenantsPage />} />
           <Route path="/platform/plans" element={<PlatformPlansPage />} />
+          <Route path="/platform/billing" element={<PlatformBillingPage />} />
           {/* After /platform/plans: ":tenantId" would swallow it. */}
           <Route path="/platform/:tenantId" element={<PlatformTenantDetailPage />} />
           <Route path="*" element={<Navigate to="/platform" replace />} />

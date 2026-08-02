@@ -47,6 +47,15 @@ ALLOWLIST = {
     ("platform/auth_router.py", "platform_mfa_confirm"),      # same
     ("platform/auth_router.py", "platform_mfa_disable"),      # same
     ("platform/auth_router.py", "_finish_login"),             # same
+    # platform_billing_config is the platform's own Stripe account, not a
+    # tenant's. It has no tenant_id and never will.
+    ("platform/billing_router.py", "_read"),
+    ("platform/billing_router.py", "_reauthenticate"),
+    ("platform/billing_router.py", "get_billing_config"),
+    ("platform/billing_router.py", "set_billing_config"),
+    ("platform/billing_router.py", "verify_billing_config"),
+    ("platform/billing_router.py", "set_billing_enabled"),
+    ("platform/billing_router.py", "clear_billing_config"),
 }
 
 

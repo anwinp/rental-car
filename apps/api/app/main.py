@@ -111,6 +111,7 @@ def create_app() -> FastAPI:
     from app.domains.platform.router       import router as platform_router
     from app.domains.tenants.features      import require_feature
     from app.domains.platform.auth_router  import router as platform_auth_router
+    from app.domains.platform.billing_router import router as platform_billing_router
     from app.domains.tenants.team_router   import router as team_router
     from app.domains.tenants.team_router   import public_router as invite_public_router
     from app.domains.locations.router    import router as locations_router
@@ -149,6 +150,7 @@ def create_app() -> FastAPI:
     # and a login endpoint the browser will not send the cookie back to is a
     # login endpoint that cannot refresh a session.
     app.include_router(platform_auth_router,  prefix=PREFIX,                    tags=["platform-auth"])
+    app.include_router(platform_billing_router, prefix=PREFIX,                  tags=["platform-billing"])
     app.include_router(platform_router,       prefix=f"{PREFIX}/platform",      tags=["platform"])
     # Team management for a workspace, and the public half of the invite flow
     # (accepting a link, before the invitee has any session).

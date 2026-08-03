@@ -2,7 +2,12 @@
 
 How a rental company makes the booking site look like theirs.
 
-Status: research and proposal. Nothing built.
+Status: design agreed, nothing built.
+
+**Decisions taken** (2026-08-03): tenants choose from preset templates rather
+than assembling a look from controls; custom domains are connect-only, we do not
+sell them; a curated font library, with genuinely modern options; the payment
+step inherits colours, logo and fonts and nothing else.
 
 ---
 
@@ -111,7 +116,7 @@ payment step", and that is what this design gives without the box.
 
 ---
 
-## 4. The model: tokens and sections, not a template language
+## 4. The model: preset templates over tokens, not a template language
 
 **Reject full Liquid-style theming.** Not because it is bad — because the leverage
 is somewhere else:
@@ -135,32 +140,107 @@ is somewhere else:
   * **Curated, self-hosted fonts.** Not arbitrary URLs — that would be a CSP hole,
     a third-party request on a payment page, and (for Google Fonts served from
     Google) a GDPR problem for European tenants.
-  * **Presets as first-party themes.** A handful of complete looks — the
-    equivalent of Dawn — so a tenant gets something good without touching a
-    single control.
   * **Draft and publish.** Shopify's editor works on an unpublished copy. Editing
     the live storefront in place, in front of customers, is not acceptable.
 
 **Do not adopt (yet):** merchant-authored templates, a theme marketplace,
 arbitrary script injection, or per-page layout editing outside the landing page.
 
+### Preset-first, per the decision
+
+The tenant picks a template. They do not assemble one.
+
+This is a bigger simplification than it sounds. The usual failure of a themeable
+product is a settings page with forty controls, a tenant who is not a designer,
+and a storefront that ends up worse than the default — Shopify's
+`color_scheme_group` exists precisely because loose colour pickers produce broken
+stores. Starting from a complete, designed look and allowing a narrow set of
+overrides inverts that: the floor is "good", not "default".
+
+So the model is:
+
+  1. **Choose a template** from a gallery of complete first-party looks. Every
+     token is set. A tenant who stops here has a coherent site.
+  2. **Make it theirs** with a deliberately small set of overrides: logo,
+     favicon, one brand colour, and the copy.
+  3. **Adjust the details** — fonts, radius, header style — for those who want
+     to, tucked behind an "advanced" disclosure rather than presented up front.
+
+The brand colour is the important one. It does not replace a token; the preset
+declares *how* its scheme derives from a brand hue, and re-derives the scheme
+around whatever the tenant supplies. A company can use its actual brand red
+without having to reason about what that does to seven other tokens or to text
+contrast.
+
 ---
 
-## 5. Concrete design
+## 5. The templates
+
+Six, covering the kinds of company that actually rent cars. They are not six
+recolourings of one layout — the shape language differs too, because a budget
+operator and an exotic-hire company do not want the same corners.
+
+| Template | For | Ground / accent | Headings / body | Shape |
+|---|---|---|---|---|
+| **Meridian** | The safe default. Anything, anyone. | Near-white `#FAFAF9`, ink `#1A1A19`, single confident blue | Figtree / Source Sans 3 | 8px, solid buttons |
+| **Terminal** | Airport and national chains. Dense, trustworthy. | Deep navy `#0B1B33`, cool white, signal amber | IBM Plex Sans / IBM Plex Sans | 4px, square, tight |
+| **Coastal** | Local independents. Warm, human. | Warm off-white `#FBF7F0`, sea blue, sand | Manrope / Manrope | 14px, generous, soft shadow |
+| **Marque** | Luxury and exotic hire. | Near-black `#0C0C0D`, champagne `#C9A961` | Fraunces / Inter | 2px, hairline rules, wide letter-spacing on labels |
+| **Voltage** | EV and eco fleets. | White, electric lime, graphite | Plus Jakarta Sans / Plus Jakarta Sans | 12px, pill buttons |
+| **Rally** | Budget and high-volume. Loud on purpose. | White, safety orange `#FF5A1F`, black | Archivo Expanded / Archivo | 0px, heavy weights, high contrast |
+
+Each template declares the full token set *and* a rule for re-deriving its scheme
+from a supplied brand hue, so "Coastal in our green" is a coherent result rather
+than one mismatched button.
+
+Every template ships in light and dark. The storefront's tokens are already
+HSL-based, which makes deriving a dark variant a lightness transform rather than
+a second hand-authored palette.
+
+### The font library
+
+All SIL OFL or Apache 2.0, all variable, all self-hosted and subsetted. The
+brief was modern options rather than safe ones, so the list is deliberately not
+six grotesques:
+
+| Face | Character | Use |
+|---|---|---|
+| Figtree | Geometric, friendly, low-key | Body or headings |
+| Source Sans 3 | Humanist, invisible in the right way | Long-form body |
+| IBM Plex Sans | Structured, technical, excellent language coverage | Information-dense UI |
+| Manrope | Geometric-humanist, warm | Body or headings |
+| Plus Jakarta Sans | Modern geometric with a little character | Body or headings |
+| Space Grotesk | Distinctive, brand-forward | Headings only |
+| Archivo / Archivo Expanded | Strong, sporty, wide axis | Headings, loud brands |
+| Fraunces | Expressive variable serif, soft-to-sharp axis | Display headings |
+| Source Serif 4 | Screen-tuned serif with optical sizes | Editorial body |
+| Literata | Long-read serif, weight and optical axes | Editorial body |
+
+Two notes for a global product. **Inter** stays in the library as a body
+workhorse for its script coverage, but is not the display face of any template —
+it is the most-used interface font on the web and a storefront set in it looks
+like every other storefront. And a **Noto fallback chain** is needed for CJK,
+Arabic and Indic scripts, which none of the above cover; that is a fallback
+concern, not a choice we put in front of a tenant.
+
+## 6. Concrete design
 
 ### Settings schema
 
 Groups, each with typed settings, served to the admin UI the way
 `/payments/config/providers` already serves the provider registry:
 
-| Group | Settings |
-|---|---|
-| Brand | logo (image), logo dark variant, favicon, company display name |
-| Colours | scheme (select from named schemes), or custom: primary, background, surface, text, border, accent |
-| Typography | heading font, body font (curated select), base size (range) |
-| Layout | corner radius (range), header style (select), button style (select) |
-| Content | hero heading, hero subheading, hero image, promo strip |
-| Legal | terms URL, privacy URL, support phone and email |
+| Group | Settings | Shown |
+|---|---|---|
+| Template | preset (gallery), light/dark/auto | first |
+| Brand | logo, logo dark variant, favicon, brand colour | first |
+| Content | hero heading, hero subheading, hero image, promo strip | first |
+| Legal | terms URL, privacy URL, support phone and email | first |
+| Typography | heading font, body font (curated select), base size | advanced |
+| Layout | corner radius, header style, button style | advanced |
+
+The `Shown` column is part of the schema, not a UI decision made later. Preset
+-first only works if the advanced controls are genuinely out of the way.
 
 `richtext` is a **sanitised subset** — a whitelist of tags and no attributes
 beyond `href` — not a passthrough.
@@ -212,31 +292,35 @@ relationship and a different business.
 
 ---
 
-## 6. Phasing
+## 7. Phasing
 
 | Phase | What | Why there |
 |---|---|---|
-| 0 | Upload a logo, and render the one we already store | It is stored, typed in both clients, and displayed nowhere. Smallest real win available |
-| 1 | Theme tokens, named schemes, curated fonts, first-party presets, draft/publish | Covers the overwhelming majority of "make it ours" |
-| 2 | Live preview in the admin, rendering the real storefront against draft settings | Choosing colours blind is why themed products look bad |
-| 3 | Sections with presets on the landing page only | The one page whose content genuinely varies per tenant |
-| 4 | Custom domains with DNS verification | Highest perceived value, but worthless before the site looks like theirs |
-| 5 | Carry the theme into emails and PDFs | The invoice PDF already reads `logo_url`; unify rather than duplicate |
+| 0 | Upload a logo, and render the one we already store | It is stored, typed in both clients, and displayed nowhere. The smallest real win available |
+| 1 | Token plumbing: server-generated CSS variables from a published theme, overriding `globals.css` | Nothing else can land until the storefront reads a theme at all |
+| 2 | The six templates, the font library, the gallery, draft/publish | The decision: a tenant picks a look and is done |
+| 3 | Brand-colour derivation and the advanced controls | Makes a template theirs without letting them break it |
+| 4 | Live preview against draft settings | Choosing a look blind is why themed products end up worse than the default |
+| 5 | Sections on the landing page only | The one page whose content genuinely varies per tenant |
+| 6 | Custom domains with DNS verification, connect-only | Highest perceived value, but worthless before the site looks like theirs |
+| 7 | Carry the theme into emails and PDFs | The invoice PDF already reads `logo_url`; unify rather than duplicate |
 
 ---
 
-## 7. Decisions I need from you
+## 8. Still open
 
-1. **How far does control go?** Tokens and copy (Phase 1) is most of the value
-   for a fraction of the work. Sections (Phase 3) means tenants can rearrange a
-   landing page. Full template authoring I would argue against.
-2. **Custom domains — connect only, or do we sell them?** Connecting is a
-   feature; selling is a registrar business.
-3. **Fonts: curated list only?** Allowing uploaded font files means hosting and
-   licensing questions we would rather not own.
-4. **Is a shared look acceptable at the payment step?** My recommendation is that
-   it inherits colours, logo and font and nothing else. Confirming that now
-   avoids arguing about it when a tenant asks for a custom checkout.
+Not blocking, but worth settling before Phase 5.
+
+- **Contrast enforcement.** A tenant supplying a pale brand colour can make a
+  template unreadable. Recommendation: clamp derived tokens to a minimum
+  contrast ratio and tell them we adjusted it, rather than either rejecting the
+  colour or shipping unreadable text.
+- **Template updates.** If we improve *Coastal*, do live storefronts move? Shopify
+  versions themes and asks. Simplest honest answer is that a tenant's published
+  theme is a snapshot, and an improved template is offered rather than applied.
+- **Landing-page sections** (Phase 5) are the one place this could still grow
+  into a template language. Worth re-deciding when we get there rather than
+  designing for it now.
 
 ---
 

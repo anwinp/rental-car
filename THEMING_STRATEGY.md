@@ -371,7 +371,13 @@ pass, stated here rather than left to be discovered later.
 **A real bug found by testing the admin form by hand, not just its API.**
 Publishing produced no visible feedback in the viewport when clicked from the
 bottom of a long settings section — the success/error notice rendered at the
-top. Fixed by repeating the notice beside the Publish button itself.
+top. Fixed by repeating the notice beside the Publish button itself, and the
+fix was then re-verified the same way the bug was found: clicked Publish again
+in a live browser session and confirmed "Published — the booking site is
+showing this now." appears beside the button with no scrolling required. The
+hero/navbar brand-colour fix was re-confirmed the same way, a third time, with
+a third distinct colour (Meridian's default blue) — proving the storefront was
+reading the fresh publish rather than a cached one.
 
 Not built: sections (phase 5), custom domains (phase 6), and theme in emails/
 PDFs (phase 7) — unchanged from the original phasing, still ahead.

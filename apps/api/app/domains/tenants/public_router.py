@@ -166,6 +166,16 @@ class TenantConfigResponse(BaseModel):
     booking_url: str | None = None
     admin_url: str | None = None
 
+    # Theming. theme_css is the whole point: it is a server-generated <style>
+    # body, safe to inject verbatim — see app/domains/theme/presets.render_css
+    # for why nothing in it can ever be attacker- or tenant-controlled text.
+    # A tenant who has never published a theme gets None here, and the front
+    # end falls back to its own default palette rather than an empty page.
+    favicon_url: str | None = None
+    theme_css: str | None = None
+    hero_heading: str | None = None
+    hero_subheading: str | None = None
+
 
 # ── Rate limiting ────────────────────────────────────────────────────────────
 
@@ -592,6 +602,38 @@ async def tenant_config(
         )
     ).mappings().first()
 
+    # tenant_theme is RLS-protected like every other per-tenant table, and this
+    # session started deliberately unbound — that is how an anonymous visitor's
+    # workspace gets resolved in the first place. The slug lookup above already
+    # established which tenant this request is for, so binding to it now for the
+    # rest of the request is the same trusted transition registration uses
+    # above, not a new exception to the rule.
+    await session.execute(
+        text("SELECT set_config('app.current_tenant_id', :t, true)"),
+        {"t": tenant_id},
+    )
+    theme_row = (
+        await session.execute(
+            text(
+                "SELECT published_preset, settings, logo_dark_url, favicon_url "
+                "  FROM tenant_theme WHERE tenant_id = :t AND settings IS NOT NULL"
+            ),
+            {"t": tenant_id},
+        )
+    ).mappings().first()
+
+    theme_css = None
+    if theme_row:
+        from app.domains.theme import presets as theme_presets
+
+        s = theme_row["settings"] or {}
+        theme_css = theme_presets.render_css(
+            theme_row["published_preset"] or "meridian",
+            brand_hex=s.get("brand_hex"), heading_font=s.get("heading_font"),
+            body_font=s.get("body_font"), radius_px=s.get("radius_px"),
+            button_style=s.get("button_style"),
+        )
+
     scheme = settings.public_url_scheme
     return TenantConfigResponse(
         booking_url=f"{scheme}://{row['slug']}.{settings.public_booking_host}",
@@ -603,6 +645,10 @@ async def tenant_config(
         currency=(row["default_currency"] or "USD").strip(),
         timezone=row["default_timezone"] or "America/New_York",
         logo_url=row["logo_url"],
+        favicon_url=(theme_row or {}).get("favicon_url"),
+        theme_css=theme_css,
+        hero_heading=((theme_row or {}).get("settings") or {}).get("hero_heading"),
+        hero_subheading=((theme_row or {}).get("settings") or {}).get("hero_subheading"),
     )
 
 

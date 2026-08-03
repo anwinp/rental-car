@@ -6,6 +6,7 @@ import { Navbar } from './components/Navbar'
 import { Footer } from './components/Footer'
 import { Providers } from './providers'
 import { AgentChatPanel } from './components/agent/AgentChatPanel'
+import { allFontVariables } from './fonts'
 
 const inter = Inter({
   subsets: ['latin'],
@@ -25,7 +26,7 @@ import { StorefrontOnly } from './components/StorefrontOnly'
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    <html lang="en" className={inter.variable}>
+    <html lang="en" className={`${inter.variable} ${allFontVariables}`}>
       <body className="min-h-screen bg-background text-foreground font-sans antialiased">
         <TenantBoot><Providers>
           <a

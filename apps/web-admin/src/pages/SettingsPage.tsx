@@ -5,6 +5,7 @@ import { useAuth } from '@rcm/ui/auth'
 import type { ReactNode } from 'react'
 import { describeApiError } from '../apiError'
 import { PaymentSettings } from '../components/PaymentSettings'
+import { ThemeSettings } from '../components/ThemeSettings'
 
 
 function LLMSettingsSection() {
@@ -352,6 +353,14 @@ export function SettingsPage() {
         description="How this workspace charges renters. Money goes to your own account, not ours."
       >
         <PaymentSettings />
+      </SectionCard>
+
+      {/* Booking site theme */}
+      <SectionCard
+        title="Booking site theme"
+        description="How your booking site looks — template, brand colour, logo and copy."
+      >
+        <ThemeSettings />
       </SectionCard>
 
       {/* My Account */}

@@ -108,6 +108,14 @@ for b in "${S3_DOCUMENTS_BUCKET}" "${S3_PHOTOS_BUCKET}" "${S3_REPORTS_BUCKET}"; 
     || echo "   ! CORS not set on $b (mc too old) — default MinIO policy applies"
 done
 
+# Tenant branding (logo, favicon) is rendered on every anonymous visit to a
+# storefront, so it cannot be a presigned URL — those expire and a page cached
+# by a browser for days would start 403ing. Anonymous READ is scoped to this
+# one prefix only; the rest of rcm-photos (damage photos, signatures) stays
+# private. Verified against production: the prefix serves 200 anonymously,
+# a sibling prefix in the same bucket still 403s.
+docker exec rcm-minio mc anonymous set download "local/${S3_PHOTOS_BUCKET}/branding"
+
 echo "   buckets:" && docker exec rcm-minio mc ls local
 echo "   ✓ buckets ready"
 

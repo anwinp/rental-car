@@ -119,6 +119,16 @@
     --agent-sheet-height:       82vh;
     --agent-sheet-handle:       rgba(255,255,255,0.15);
     --agent-handoff-border:     rgba(255,255,255,0.14);
+
+    /* ── Tenant theme — defaults, overridden by a server-generated <style>   ──
+       block injected by TenantBoot from the published theme (see
+       app/domains/theme/presets.py::render_css on the API). These three exist
+       so every component has something valid to read before that block loads
+       or for a tenant who has never published one, rather than resolving to
+       nothing. */
+    --tenant-font-heading: var(--font-sans);
+    --tenant-font-body:    var(--font-sans);
+    --tenant-radius:       var(--radius);
   }
 }
 
@@ -127,23 +137,23 @@
   body {
     background-color: var(--p-surface);
     color: var(--p-text-1);
-    font-family: var(--font-sans), 'Inter', system-ui, sans-serif;
+    font-family: var(--tenant-font-body), 'Inter', system-ui, sans-serif;
     font-weight: 400;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
   h1 {
-    font-family: var(--font-sans), 'Inter', system-ui, sans-serif;
+    font-family: var(--tenant-font-heading), 'Inter', system-ui, sans-serif;
     font-weight: 500;
     letter-spacing: -0.04em;
   }
   h2 {
-    font-family: var(--font-sans), 'Inter', system-ui, sans-serif;
+    font-family: var(--tenant-font-heading), 'Inter', system-ui, sans-serif;
     font-weight: 500;
     letter-spacing: -0.03em;
   }
   h3, h4 {
-    font-family: var(--font-sans), 'Inter', system-ui, sans-serif;
+    font-family: var(--tenant-font-heading), 'Inter', system-ui, sans-serif;
     font-weight: 600;
     letter-spacing: -0.02em;
   }

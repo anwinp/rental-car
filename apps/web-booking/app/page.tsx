@@ -1,11 +1,16 @@
 'use client'
 
-import { tenantId } from './lib/tenant'
+import { tenantId, cachedTenant } from './lib/tenant'
 
 import { useState, useEffect, useRef } from 'react'
 
-const RED = '#da291c'
-const RED_ACTIVE = '#b01e0a'
+// Read from the theme tokens (defaulting to the Cosmos ferrari red already in
+// globals.css) rather than a fixed hex, so the ~10 brand touchpoints on this
+// page — the CTA button, the promo band, link colours — all move together
+// when a tenant publishes a different brand colour, instead of the hero
+// changing while the button it sits above stays the old colour.
+const RED = 'var(--p-brand)'
+const RED_ACTIVE = 'var(--p-brand-dark)'
 
 interface PromoVehicle {
   vehicle_id: string
@@ -385,10 +390,21 @@ export default function HomePage() {
     window.location.href = `/search?${p.toString()}`
   }
 
+  const tenant = cachedTenant()
+  const heroHeading = tenant?.hero_heading || 'Drive The Dream.'
+  const heroSubheading = tenant?.hero_subheading
+    || 'Reserve an exclusive vehicle from our elite fleet. Delivered directly to your estate or private hangar.'
+
   return (
     <>
       {/* ── 1. CINEMA HERO ──────────────────────────────────────────────────── */}
-      <section style={{ position: 'relative', width: '100%', height: '100vh', minHeight: 900, background: '#181818', display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', overflow: 'hidden' }}>
+      {/* Colours read from the --p-* theme tokens rather than fixed hex, so a
+          tenant's published theme actually reaches the storefront's single
+          highest-visibility surface. Radius reads --tenant-radius so a
+          template's shape language (a hairline Marque vs. a pill-shaped
+          Voltage) shows up on the booking widget without a style-name branch —
+          the server already resolved "pill" to 999px in the generated CSS. */}
+      <section style={{ position: 'relative', width: '100%', height: '100vh', minHeight: 900, background: 'var(--p-bg)', display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', overflow: 'hidden' }}>
         {/* Full-bleed photo */}
         <img
           src="/assets/hero_cinema.png"
@@ -397,19 +413,19 @@ export default function HomePage() {
           style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', zIndex: 0 }}
         />
         {/* Bottom gradient */}
-        <div style={{ position: 'absolute', bottom: 0, left: 0, width: '100%', height: '60%', background: 'linear-gradient(180deg, transparent, rgba(24,24,24,0.97))', zIndex: 1 }} />
+        <div style={{ position: 'absolute', bottom: 0, left: 0, width: '100%', height: '60%', background: 'linear-gradient(180deg, transparent, var(--p-bg))', zIndex: 1 }} />
 
         {/* Content */}
         <div style={{ position: 'relative', zIndex: 2, maxWidth: 1280, margin: '0 auto', width: '100%', padding: '0 48px 96px' }}>
-          <h1 style={{ fontSize: 'clamp(32px, 5.5vw, 80px)', fontWeight: 500, letterSpacing: '-1.6px', lineHeight: 1.05, color: '#ffffff', margin: '0 0 16px' }}>
-            Drive The Dream.
+          <h1 style={{ fontSize: 'clamp(32px, 5.5vw, 80px)', fontWeight: 500, letterSpacing: '-1.6px', lineHeight: 1.05, color: 'var(--p-text-1)', margin: '0 0 16px' }}>
+            {heroHeading}
           </h1>
-          <p style={{ fontSize: 16, fontWeight: 400, color: '#e0e0e0', maxWidth: 600, lineHeight: 1.5, margin: 0 }}>
-            Reserve an exclusive vehicle from our elite fleet. Delivered directly to your estate or private hangar.
+          <p style={{ fontSize: 16, fontWeight: 400, color: 'var(--p-text-2)', maxWidth: 600, lineHeight: 1.5, margin: 0 }}>
+            {heroSubheading}
           </p>
 
           {/* Booking widget */}
-          <form onSubmit={handleSearch} className="booking-grid" style={{ background: '#303030', border: '1px solid #303030', padding: 32, marginTop: 48, display: 'grid', gap: 24, borderRadius: 0 }}>
+          <form onSubmit={handleSearch} className="booking-grid" style={{ background: 'var(--p-surface-2)', border: '1px solid var(--p-surface-2)', padding: 32, marginTop: 48, display: 'grid', gap: 24, borderRadius: 'var(--tenant-radius)' }}>
             <div style={{ display: 'flex', flexDirection: 'column' }}>
               <label htmlFor="hp-pickup" style={LABEL_UPPER}>Pick-up Location</label>
               <LocationCombobox

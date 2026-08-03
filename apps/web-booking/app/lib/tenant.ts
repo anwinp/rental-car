@@ -25,6 +25,16 @@ export interface TenantConfig {
   logo_url: string | null
   booking_url?: string | null
   admin_url?: string | null
+
+  // Theming. theme_css is a complete server-generated <style> body — safe to
+  // inject verbatim, since the API never lets a tenant-supplied value reach
+  // it unparsed (app/domains/theme/presets.py::render_css). null means the
+  // tenant has never published a theme, and the storefront keeps its own
+  // built-in default palette rather than rendering nothing.
+  favicon_url?: string | null
+  theme_css?: string | null
+  hero_heading?: string | null
+  hero_subheading?: string | null
 }
 
 const NON_TENANT_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', ''])

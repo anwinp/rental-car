@@ -296,11 +296,11 @@ relationship and a different business.
 
 | Phase | What | Why there |
 |---|---|---|
-| 0 | Upload a logo, and render the one we already store | It is stored, typed in both clients, and displayed nowhere. The smallest real win available |
-| 1 | Token plumbing: server-generated CSS variables from a published theme, overriding `globals.css` | Nothing else can land until the storefront reads a theme at all |
-| 2 | The six templates, the font library, the gallery, draft/publish | The decision: a tenant picks a look and is done |
-| 3 | Brand-colour derivation and the advanced controls | Makes a template theirs without letting them break it |
-| 4 | Live preview against draft settings | Choosing a look blind is why themed products end up worse than the default |
+| 0 ✅ | Upload a logo, and render the one we already store | It is stored, typed in both clients, and displayed nowhere. The smallest real win available |
+| 1 ✅ | Token plumbing: server-generated CSS variables from a published theme, overriding `globals.css` | Nothing else can land until the storefront reads a theme at all |
+| 2 ✅ | The six templates, the font library, the gallery, draft/publish | The decision: a tenant picks a look and is done |
+| 3 ✅ | Brand-colour derivation and the advanced controls | Makes a template theirs without letting them break it |
+| 4 ✅ | Live preview against draft settings — a mini mockup rendered from the exact server CSS, not the full storefront in an iframe | Choosing a look blind is why themed products end up worse than the default |
 | 5 | Sections on the landing page only | The one page whose content genuinely varies per tenant |
 | 6 | Custom domains with DNS verification, connect-only | Highest perceived value, but worthless before the site looks like theirs |
 | 7 | Carry the theme into emails and PDFs | The invoice PDF already reads `logo_url`; unify rather than duplicate |
@@ -333,3 +333,45 @@ Not blocking, but worth settling before Phase 5.
 - [Shopify — checkout compliance](https://www.shopify.com/enterprise/blog/shopify-checkout-compliance)
 - [Reflectiz — Shopify PCI compliance and the favicon Magecart attack](https://www.reflectiz.com/blog/shopify-pci-compliance/)
 - [cside — PCI DSS 6.4.3 and 11.6.1 on Shopify](https://cside.com/blog/does-shopify-make-you-pci-compliant-6-4-3-11-6-1)
+
+
+---
+
+## 9. Built (2026-08-03) — what shipped and what did not
+
+Phases 0–4 above. Verified end to end: colour math and injection-safety tested
+directly (not just asserted), a real image with embedded EXIF confirmed
+stripped, an SVG upload confirmed rejected over the live HTTP endpoint, a
+published theme confirmed live on the real storefront and confirmed reverting
+byte-for-byte to the original look when unpublished, and the admin form
+clicked through in a real browser session including the one bug that surfaced
+under real use (see below).
+
+**A finding that changed scope, made honestly rather than silently.** Every
+template ships as a **dark palette only**. `apps/web-booking`'s
+`color-scheme: dark` is hardcoded and no component anywhere in that app has a
+light-mode variant — verified by reading the code, not assumed from this
+document's earlier draft. Shipping a "light" preset against components
+written for a dark background would have been the exact failure this design
+exists to prevent: a themed storefront that looks broken. A true light mode is
+future work gated on a pass over the storefront's components, not a token
+change.
+
+**A second finding, also not assumed.** The claim "the storefront already has
+a token system" was optimistic. `globals.css`'s tokens are consumed by roughly
+10 of the app's ~40 components; the other ~30, including the homepage hero —
+the single highest-visibility surface — used raw hardcoded hex. This pass
+converted the homepage hero and the navbar's brand touchpoints (the CTA
+button, both confirmed visually inconsistent with a published brand colour
+before the fix and consistent after). The remaining ~28 files (search, booking
+flow, account, login, footer, confirmation) still carry hardcoded colours and
+do not yet reflect a published theme. That is a separate, larger mechanical
+pass, stated here rather than left to be discovered later.
+
+**A real bug found by testing the admin form by hand, not just its API.**
+Publishing produced no visible feedback in the viewport when clicked from the
+bottom of a long settings section — the success/error notice rendered at the
+top. Fixed by repeating the notice beside the Publish button itself.
+
+Not built: sections (phase 5), custom domains (phase 6), and theme in emails/
+PDFs (phase 7) — unchanged from the original phasing, still ahead.

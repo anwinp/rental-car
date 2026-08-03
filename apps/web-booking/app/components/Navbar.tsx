@@ -49,14 +49,14 @@ export function Navbar() {
       position: 'fixed', top: 0, left: 0, width: '100%', height: 64, zIndex: 200,
       display: 'flex', alignItems: 'center', justifyContent: 'space-between',
       padding: '0 48px',
-      background: scrolled ? '#181818' : 'rgba(18,18,18,0.55)',
+      background: scrolled ? 'var(--p-bg)' : 'rgba(18,18,18,0.55)',
       backdropFilter: 'blur(16px)',
       WebkitBackdropFilter: 'blur(16px)',
-      borderBottom: scrolled ? '1px solid #303030' : '1px solid rgba(255,255,255,0.06)',
+      borderBottom: scrolled ? '1px solid var(--p-surface-2)' : '1px solid rgba(255,255,255,0.06)',
       transition: 'background 0.3s ease, border-color 0.3s ease',
     }}>
       {/* Logo */}
-      <Link href="/" style={{ fontSize: 18, fontWeight: 700, letterSpacing: '2px', textTransform: 'uppercase', color: '#ffffff', textDecoration: 'none' }}>
+      <Link href="/" style={{ fontSize: 18, fontWeight: 700, letterSpacing: '2px', textTransform: 'uppercase', color: 'var(--p-text-1)', textDecoration: 'none' }}>
         RCM
       </Link>
 
@@ -80,9 +80,9 @@ export function Navbar() {
             <Link href={'/account' as any} style={{ textDecoration: 'none', display: 'flex', alignItems: 'center', gap: 10 }}>
               <div style={{
                 width: 34, height: 34, borderRadius: '50%',
-                background: '#303030',
+                background: 'var(--p-surface-2)',
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
-                fontSize: 13, fontWeight: 600, color: '#fff',
+                fontSize: 13, fontWeight: 600, color: 'var(--p-text-1)',
                 letterSpacing: '0.02em', userSelect: 'none',
                 flexShrink: 0,
               }}>
@@ -119,9 +119,9 @@ export function Navbar() {
                 fontSize: 11, fontWeight: 700, letterSpacing: '1.4px',
                 textTransform: 'uppercase',
                 color: '#fff', textDecoration: 'none',
-                background: '#da291c',
+                background: 'var(--p-brand)',
                 padding: '0 20px', height: 36, display: 'inline-flex', alignItems: 'center',
-                borderRadius: 0,
+                borderRadius: 'var(--tenant-radius)',
                 transition: 'opacity 0.15s',
               }}
               onMouseEnter={e => (e.currentTarget as HTMLElement).style.opacity = '0.85'}
@@ -148,7 +148,7 @@ export function Navbar() {
 
       {/* Mobile menu */}
       {mobileOpen && (
-        <div style={{ position: 'absolute', top: 64, left: 0, width: '100%', background: '#181818', borderBottom: '1px solid #303030', padding: '24px 48px' }}>
+        <div style={{ position: 'absolute', top: 64, left: 0, width: '100%', background: 'var(--p-bg)', borderBottom: '1px solid var(--p-surface-2)', padding: '24px 48px' }}>
           <nav style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
             {NAV_LINKS.map(link => (
               // eslint-disable-next-line @typescript-eslint/no-explicit-any

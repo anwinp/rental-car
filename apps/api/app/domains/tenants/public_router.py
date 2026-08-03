@@ -629,9 +629,11 @@ async def tenant_config(
         s = theme_row["settings"] or {}
         theme_css = theme_presets.render_css(
             theme_row["published_preset"] or "meridian",
-            brand_hex=s.get("brand_hex"), heading_font=s.get("heading_font"),
-            body_font=s.get("body_font"), radius_px=s.get("radius_px"),
-            button_style=s.get("button_style"),
+            brand_hex=s.get("brand_hex"),
+            background_hex=s.get("background_hex"), surface_hex=s.get("surface_hex"),
+            navbar_hex=s.get("navbar_hex"), footer_hex=s.get("footer_hex"),
+            heading_font=s.get("heading_font"), body_font=s.get("body_font"),
+            radius_px=s.get("radius_px"), button_style=s.get("button_style"),
         )
 
     scheme = settings.public_url_scheme

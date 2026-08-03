@@ -46,6 +46,17 @@ class ThemeSettings(BaseModel):
     the database cannot become a CSS injection vector either.
     """
     brand_hex: str | None = None
+    # The rest of the storefront's canvas — previously fixed by the template
+    # alone. Each is independent: a tenant can give the header its own colour
+    # without touching the page background, or vice versa. All four pass
+    # through presets.clamp_to_dark at render time, which is why validation
+    # here only checks the *shape* of the value (a real hex colour) and not
+    # how light it is — the darkening happens once, at the point that also
+    # has to derive the surface scale and the readable foreground, not here.
+    background_hex: str | None = None
+    surface_hex: str | None = None
+    navbar_hex: str | None = None
+    footer_hex: str | None = None
     heading_font: str | None = None
     body_font: str | None = None
     radius_px: int | None = Field(default=None, ge=0, le=999)
@@ -59,11 +70,11 @@ class ThemeSettings(BaseModel):
     support_phone: str | None = Field(default=None, max_length=40)
     support_email: str | None = Field(default=None, max_length=_MAX_TEXT)
 
-    @field_validator("brand_hex")
+    @field_validator("brand_hex", "background_hex", "surface_hex", "navbar_hex", "footer_hex")
     @classmethod
     def _validate_hex(cls, v: str | None) -> str | None:
         if v is not None and not presets.is_hex_colour(v):
-            raise ValueError("brand_hex must be a 6-digit hex colour like #3b82f6.")
+            raise ValueError("Must be a 6-digit hex colour like #3b82f6.")
         return v
 
     @field_validator("heading_font", "body_font")
@@ -105,6 +116,10 @@ class ThemeOut(BaseModel):
     favicon_url: str | None = None
     preview_css: str
     published_css: str | None = None
+    # Which colour(s) in the *draft* got darkened to stay legible, so the UI
+    # can say "we darkened that a touch" rather than the tenant wondering why
+    # the preview doesn't quite match what they typed.
+    adjusted: list[str] = Field(default_factory=list)
 
 
 class UploadOut(BaseModel):
@@ -136,7 +151,7 @@ def _to_out(row: dict) -> ThemeOut:
     preset = row["preset"] or "meridian"
     draft = row["draft_settings"] or {}
     published = row["settings"]
-    css = presets.render_css(preset, **_css_kwargs(draft))
+    draft_result = presets.render_theme(preset, **_css_kwargs(draft))
     published_css = (
         presets.render_css(row["published_preset"] or preset, **_css_kwargs(published))
         if published is not None else None
@@ -151,8 +166,9 @@ def _to_out(row: dict) -> ThemeOut:
         logo_url=row["logo_url"],
         logo_dark_url=row["logo_dark_url"],
         favicon_url=row["favicon_url"],
-        preview_css=css,
+        preview_css=draft_result.css,
         published_css=published_css,
+        adjusted=list(draft_result.adjusted),
     )
 
 
@@ -160,6 +176,10 @@ def _css_kwargs(settings: dict | None) -> dict:
     s = settings or {}
     return {
         "brand_hex": s.get("brand_hex"),
+        "background_hex": s.get("background_hex"),
+        "surface_hex": s.get("surface_hex"),
+        "navbar_hex": s.get("navbar_hex"),
+        "footer_hex": s.get("footer_hex"),
         "heading_font": s.get("heading_font"),
         "body_font": s.get("body_font"),
         "radius_px": s.get("radius_px"),

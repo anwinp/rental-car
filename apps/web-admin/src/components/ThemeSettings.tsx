@@ -38,6 +38,10 @@ interface TemplatePreview {
 
 interface ThemeSettingsValues {
   brand_hex?: string
+  background_hex?: string
+  surface_hex?: string
+  navbar_hex?: string
+  footer_hex?: string
   heading_font?: string
   body_font?: string
   radius_px?: number
@@ -60,6 +64,11 @@ interface ThemeOut {
   logo_dark_url: string | null
   favicon_url: string | null
   preview_css: string
+  // Which colour(s) the server darkened to keep text legible on it — see
+  // presets.clamp_to_dark. Surfaced so a tenant who picks something too light
+  // sees why the preview doesn't quite match what they typed, rather than
+  // wondering if the form is broken.
+  adjusted: string[]
 }
 
 export function ThemeSettings() {
@@ -161,7 +170,6 @@ export function ThemeSettings() {
   }
 
   const selected = templates.find((t) => t.key === preset) ?? templates[0]
-  const brandHex = values.brand_hex || selected.preview.brand
   const headingFonts = fonts.filter((f) => f.role === 'heading' || f.role === 'either')
   const bodyFonts = fonts.filter((f) => f.role === 'body' || f.role === 'either')
   const previewCss = (theme.preview_css || '').replace(':root {', '.theme-preview-scope {')
@@ -217,55 +225,92 @@ export function ThemeSettings() {
         </div>
       </div>
 
-      {/* ── Live mini-preview — the exact CSS the storefront will render ─── */}
-      <div className="theme-preview-scope rounded-xl p-5"
-           style={{ background: 'var(--p-bg, #141414)', border: '1px solid var(--border)' }}>
-        <p className="text-[10px] uppercase tracking-wider mb-3" style={{ color: 'var(--p-text-3, #888)' }}>
+      {/* ── Live mini-preview — the exact CSS the storefront will render,
+          including the navbar and footer strips so all five palette colours
+          are visible together rather than only the hero card. ──────────── */}
+      <div className="theme-preview-scope rounded-xl overflow-hidden"
+           style={{ border: '1px solid var(--border)' }}>
+        <p className="px-4 pt-3 text-[10px] uppercase tracking-wider" style={{ color: 'var(--p-text-3, #888)' }}>
           Preview — reflects the draft, updates as you edit
         </p>
-        <div className="rounded-xl p-4" style={{ background: 'var(--p-surface, #1c1c1c)' }}>
-          <h3 style={{
-            color: 'var(--p-text-1, #fff)', fontFamily: 'var(--tenant-font-heading)',
-            fontSize: 22, fontWeight: 600, margin: '0 0 6px',
-          }}>
-            {values.hero_heading || 'Your headline goes here.'}
-          </h3>
-          <p style={{ color: 'var(--p-text-2, #aaa)', fontFamily: 'var(--tenant-font-body)', fontSize: 13, margin: '0 0 14px' }}>
-            {values.hero_subheading || 'A short line about what makes this fleet worth booking.'}
-          </p>
+        <div className="flex items-center justify-between px-4 py-2.5 mt-2"
+             style={{ background: 'var(--p-navbar-bg, #141414)' }}>
           <span style={{
-            display: 'inline-block', background: 'var(--p-cta, #3b82f6)', color: 'var(--p-cta-fg, #fff)',
-            fontFamily: 'var(--tenant-font-body)', fontSize: 12, fontWeight: 700,
-            padding: '9px 18px', borderRadius: 'var(--tenant-radius)',
-          }}>
-            Check availability
+            color: 'var(--p-navbar-fg, #fff)', fontFamily: 'var(--tenant-font-heading)',
+            fontSize: 13, fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase',
+          }}>Your Company</span>
+          <span style={{ color: 'var(--p-navbar-fg-dim, #999)', fontFamily: 'var(--tenant-font-body)', fontSize: 11 }}>
+            Reserve · Locations · Sign in
           </span>
+        </div>
+        <div className="p-5" style={{ background: 'var(--p-bg, #141414)' }}>
+          <div className="rounded-xl p-4" style={{ background: 'var(--p-surface, #1c1c1c)' }}>
+            <h3 style={{
+              color: 'var(--p-text-1, #fff)', fontFamily: 'var(--tenant-font-heading)',
+              fontSize: 22, fontWeight: 600, margin: '0 0 6px',
+            }}>
+              {values.hero_heading || 'Your headline goes here.'}
+            </h3>
+            <p style={{ color: 'var(--p-text-2, #aaa)', fontFamily: 'var(--tenant-font-body)', fontSize: 13, margin: '0 0 14px' }}>
+              {values.hero_subheading || 'A short line about what makes this fleet worth booking.'}
+            </p>
+            <span style={{
+              display: 'inline-block', background: 'var(--p-cta, #3b82f6)', color: 'var(--p-cta-fg, #fff)',
+              fontFamily: 'var(--tenant-font-body)', fontSize: 12, fontWeight: 700,
+              padding: '9px 18px', borderRadius: 'var(--tenant-radius)',
+            }}>
+              Check availability
+            </span>
+          </div>
+        </div>
+        <div className="px-4 py-3 text-[11px]" style={{ background: 'var(--p-footer-bg, #141414)', color: 'var(--p-footer-fg-dim, #999)' }}>
+          © Your Company — footer
         </div>
       </div>
 
-      {/* ── Brand ────────────────────────────────────────────────────────── */}
+      {theme.adjusted.length > 0 && (
+        <p className="text-[12px]" style={{ color: '#fbbf24' }}>
+          Darkened {theme.adjusted.join(', ')} a touch to keep text readable on it.
+        </p>
+      )}
+
+      {/* ── Palette ──────────────────────────────────────────────────────── */}
       <div className="rounded-xl p-4 space-y-4" style={{ border: '1px solid var(--border)' }}>
         <div>
-          <label className="text-[12px] font-medium" style={{ color: 'var(--text-2)' }}>Brand colour</label>
-          <div className="mt-1 flex items-center gap-2">
-            <input type="color" value={brandHex}
-                   onChange={(e) => setValues({ ...values, brand_hex: e.target.value })}
-                   className="h-9 w-12 rounded border-0 bg-transparent" />
-            <input type="text" value={values.brand_hex ?? ''} placeholder={selected.preview.brand}
-                   onChange={(e) => setValues({ ...values, brand_hex: e.target.value || undefined })}
-                   className={`${field} max-w-[140px] font-mono`} style={fieldStyle} />
-            <button type="button" onClick={() => setValues({ ...values, brand_hex: undefined })}
-                    className="text-[11px] underline" style={{ color: 'var(--text-3)' }}>
-              use template default
-            </button>
-          </div>
+          <p className="text-[12px] font-semibold uppercase tracking-wider" style={{ color: 'var(--text-3)' }}>
+            Palette
+          </p>
           <p className="mt-1 text-[11px]" style={{ color: 'var(--text-3)' }}>
-            The rest of the template — surfaces, text, shape — stays as designed;
-            only the accent moves to your colour.
+            Each colour below is independent — give the header its own colour
+            without changing the page behind it, or leave any of them to the
+            template's own default. Pick something too light and it gets
+            darkened a touch automatically, so the text sitting on it never
+            goes unreadable.
           </p>
         </div>
 
         <div className="grid gap-4 sm:grid-cols-2">
+          <ColorField label="Background" hint="The page canvas."
+                      value={values.background_hex} defaultHex={selected.preview.bg}
+                      onChange={(v) => setValues({ ...values, background_hex: v })} />
+          <ColorField label="Surface" hint="Cards and panels sitting on the background."
+                      value={values.surface_hex} defaultHex={selected.preview.surface}
+                      onChange={(v) => setValues({ ...values, surface_hex: v })} />
+          <ColorField label="Navbar" hint="The header bar — independent of the page background."
+                      value={values.navbar_hex} defaultHex={values.background_hex || selected.preview.bg}
+                      onChange={(v) => setValues({ ...values, navbar_hex: v })} />
+          <ColorField label="Footer" hint="The footer band at the bottom of every page."
+                      value={values.footer_hex} defaultHex={values.background_hex || selected.preview.bg}
+                      onChange={(v) => setValues({ ...values, footer_hex: v })} />
+        </div>
+
+        <div className="border-t pt-4" style={{ borderColor: 'var(--border)' }}>
+          <ColorField label="Accent" hint="Buttons, links, highlights."
+                      value={values.brand_hex} defaultHex={selected.preview.brand}
+                      onChange={(v) => setValues({ ...values, brand_hex: v })} />
+        </div>
+
+        <div className="grid gap-4 sm:grid-cols-2 border-t pt-4" style={{ borderColor: 'var(--border)' }}>
           <AssetUploader label="Logo" hint="Shown on the booking site header." current={theme.logo_url}
                          busy={busy} onFile={(f) => void uploadAsset(f, 'logo')} />
           <AssetUploader label="Favicon" hint="The browser-tab icon." current={theme.favicon_url}
@@ -389,6 +434,43 @@ export function ThemeSettings() {
           Publish
         </button>
       </div>
+    </div>
+  )
+}
+
+/** One colour lever: a picker, a hex field, and a reset to the template's own
+ *  value. `value` undefined means "not overridden" — the swatch then shows
+ *  `defaultHex` so the field never looks blank, but typing/reset are the only
+ *  ways an override actually gets set. */
+function ColorField({
+  label, hint, value, defaultHex, onChange,
+}: {
+  label: string
+  hint: string
+  value: string | undefined
+  defaultHex: string
+  onChange: (v: string | undefined) => void
+}) {
+  const shown = value ?? defaultHex
+  return (
+    <div>
+      <label className="text-[12px] font-medium" style={{ color: 'var(--text-2)' }}>{label}</label>
+      <div className="mt-1 flex items-center gap-2">
+        <input type="color" value={shown}
+               onChange={(e) => onChange(e.target.value)}
+               className="h-9 w-12 rounded border-0 bg-transparent shrink-0" />
+        <input type="text" value={value ?? ''} placeholder={defaultHex}
+               onChange={(e) => onChange(e.target.value || undefined)}
+               className="w-full rounded-lg px-3 py-2 text-[13px] font-mono outline-none"
+               style={{ background: 'var(--page-bg)', color: 'var(--text-1)', border: '1px solid var(--border)' }} />
+        {value && (
+          <button type="button" onClick={() => onChange(undefined)}
+                  className="shrink-0 text-[11px] underline" style={{ color: 'var(--text-3)' }}>
+            reset
+          </button>
+        )}
+      </div>
+      <p className="mt-1 text-[11px]" style={{ color: 'var(--text-3)' }}>{hint}</p>
     </div>
   )
 }

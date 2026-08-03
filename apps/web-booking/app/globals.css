@@ -57,6 +57,21 @@
     --p-surface-3:    #2a2a2a;
     --p-surface-dark: #0f0f0f;
 
+    /* Header and footer used to be tied directly to --p-bg/--p-text-1 in the
+       components themselves, which meant a tenant could not give either its
+       own colour without also changing the page background. They are now
+       independent tokens the theme can override on their own — defaulting to
+       the page colours here so nothing changes until a tenant deliberately
+       sets one. */
+    --p-navbar-bg:     var(--p-bg);
+    --p-navbar-fg:     var(--p-text-1);
+    --p-navbar-fg-dim: rgba(255,255,255,0.62);
+    --p-navbar-border: rgba(255,255,255,0.12);
+    --p-footer-bg:     var(--p-bg);
+    --p-footer-fg:     var(--p-text-1);
+    --p-footer-fg-dim: rgba(255,255,255,0.55);
+    --p-footer-border: rgba(255,255,255,0.10);
+
     --p-border:       rgba(255,255,255,0.08);
     --p-border-mid:   rgba(255,255,255,0.14);
     --p-border-light: rgba(255,255,255,0.04);

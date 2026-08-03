@@ -381,3 +381,45 @@ reading the fresh publish rather than a cached one.
 
 Not built: sections (phase 5), custom domains (phase 6), and theme in emails/
 PDFs (phase 7) — unchanged from the original phasing, still ahead.
+
+
+---
+
+## 10. Built (2026-08-03, second pass) — background, surface, navbar, footer
+
+The gap: after phase 4 shipped, a tenant could move exactly one colour
+(accent) and pick from six fixed palettes — the page canvas, the header, and
+the footer were locked to whichever template they chose. Reported directly:
+"even in the homepage its very limited configuration."
+
+Background, surface, navbar and footer are now four independent colour
+levers, each with its own token (`--p-bg`, `--p-surface`, `--p-navbar-bg`,
+`--p-footer-bg`) and its own automatically-computed foreground — a tenant can
+give the header its own colour without the page behind it changing, or vice
+versa, which is the literal ask ("navbar color, page background color").
+
+**The safety mechanism, not a rewrite.** ~30 of the storefront's ~40
+components still hardcode white text — converting all of them was rejected in
+phase 4 as too large and too risky to do blind. Rather than either block on
+that rewrite or let a tenant pick a pale background that makes those pages
+unreadable, every background-family colour passes through `clamp_to_dark`: a
+WCAG-derived ceiling (relative luminance ≤ 0.18, the point below which white
+text no longer holds 4.5:1 contrast) that real dark colours — navy, forest
+green, maroon, deep amber — pass through untouched, and only something
+genuinely too light gets pulled down, with the tenant told so rather than it
+happening silently. Verified numerically before wiring anything up: six
+realistic "dark but colourful" swatches all measured well under the ceiling;
+pure white clamps to a legible mid-grey, which is the honest answer for a
+colour with no hue to preserve.
+
+Navbar and footer got their own foreground computation too, not an assumed
+white — `_readable_foreground`, the same WCAG check already used for the CTA
+button, now applied to whatever background comes out of the clamp. Verified
+live: a maroon navbar, forest-green page, and navy footer, all simultaneously
+legible, was published and screenshotted on the real storefront, then
+reverted and confirmed byte-for-byte back to the original.
+
+Navbar.tsx and Footer.tsx — the two components in the direct line of the
+request — were fully converted off hardcoded hex onto the new tokens; the
+remaining ~28 files are unchanged and still do not reflect a published theme,
+stated the same as it was in phase 4.

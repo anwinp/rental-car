@@ -81,6 +81,52 @@ def is_hex_colour(value: str) -> bool:
     return bool(_HEX_RE.match(value or ""))
 
 
+# The widest a background/surface/navbar/footer colour may go and still hold
+# WCAG AA (4.5:1) against the white body text this codebase has hardcoded
+# across roughly thirty components that do not yet read from the token system
+# — verified, not assumed: relative luminance L solves (1.05)/(L+0.05) >= 4.5,
+# i.e. L <= 0.183. This is what makes it safe to let a tenant pick their own
+# canvas colour without first rewriting every page that assumes a dark one:
+# the clamp keeps every one of those un-converted pages legible regardless of
+# what colour comes out of this function.
+_MAX_CANVAS_LUMINANCE = 0.18
+
+
+def clamp_to_dark(hex_colour: str) -> tuple[str, bool]:
+    """A colour, darkened if needed to stay under the legibility ceiling.
+
+    Returns (colour, was_adjusted). Real colourful darks pass through
+    untouched — a deep navy, forest green or maroon all measure well under the
+    ceiling. Only something that would actually break white text on it gets
+    pulled down, and the caller is told so rather than the adjustment
+    happening silently.
+    """
+    if _relative_luminance(hex_colour) <= _MAX_CANVAS_LUMINANCE:
+        return hex_colour, False
+    lo, hi = -0.95, 0.0
+    darkened = hex_colour
+    for _ in range(24):  # binary search on the lightness delta; converges fast
+        mid = (lo + hi) / 2
+        candidate = _shift_lightness(hex_colour, mid)
+        if _relative_luminance(candidate) <= _MAX_CANVAS_LUMINANCE:
+            darkened = candidate
+            lo = mid
+        else:
+            hi = mid
+    return darkened, True
+
+
+def derive_surface_scale(bg_hex: str) -> tuple[str, str, str]:
+    """(surface, surface_2, surface_3) — a graduated elevation scale from a
+    single background colour, the same relationship every hand-authored
+    template already uses (each step a little lighter than the last)."""
+    return (
+        _shift_lightness(bg_hex, 0.03),
+        _shift_lightness(bg_hex, 0.06),
+        _shift_lightness(bg_hex, 0.09),
+    )
+
+
 def derive_brand_shades(brand_hex: str) -> "BrandShades":
     """The three shades every template's accent needs, from one hex.
 
@@ -119,6 +165,11 @@ class Tokens:
     button_style: str  # "solid" | "pill" | "square"
     heading_font: str  # theme.fonts key
     body_font: str
+    # None means "use bg" — every template ships with the header and footer
+    # blending into the page, which is what every tenant sees until they
+    # deliberately give one its own colour.
+    navbar_hex: str | None = None
+    footer_hex: str | None = None
 
 
 @dataclass(frozen=True)
@@ -223,16 +274,29 @@ def describe() -> list[dict]:
 
 # ── rendering: the only place a value reaches CSS ───────────────────────────
 
-def render_css(
+@dataclass(frozen=True)
+class RenderResult:
+    css: str
+    # Which override(s) got darkened to stay legible, if any — so the UI can
+    # tell the tenant "we darkened that a touch to keep your text readable"
+    # instead of the colour silently coming out different from what they typed.
+    adjusted: tuple[str, ...] = ()
+
+
+def render_theme(
     preset_key: str,
     *,
     brand_hex: str | None = None,
+    background_hex: str | None = None,
+    surface_hex: str | None = None,
+    navbar_hex: str | None = None,
+    footer_hex: str | None = None,
     heading_font: str | None = None,
     body_font: str | None = None,
     radius_px: int | None = None,
     button_style: str | None = None,
-) -> str:
-    """The `<style>` body for this tenant's published theme.
+) -> RenderResult:
+    """The `<style>` body for this tenant's published theme, and what changed.
 
     Every override is validated before use and silently ignored if it fails —
     an invalid value falls back to the template's own, never to something
@@ -240,13 +304,51 @@ def render_css(
     corrupted settings row as well as a malicious one: there is no code path
     from a stored string to a CSS token that does not go through one of the
     checks below.
+
+    Background-family colours (background, surface, navbar, footer) additionally
+    pass through `clamp_to_dark` — real freedom to pick a colour, but not one
+    that would make the white text on ~30 pages that do not yet read from this
+    token system unreadable. See the constant's docstring for the exact bound.
     """
     tmpl = TEMPLATES.get(preset_key) or TEMPLATES["meridian"]
     tok = tmpl.tokens
+    adjusted: list[str] = []
+
+    def _dark_override(value: str | None, label: str) -> str | None:
+        if not value or not is_hex_colour(value):
+            return None
+        clamped, was_adjusted = clamp_to_dark(value)
+        if was_adjusted:
+            adjusted.append(label)
+        return clamped
 
     shades = tok.shades
     if brand_hex and is_hex_colour(brand_hex):
         shades = derive_brand_shades(brand_hex)
+
+    bg = _dark_override(background_hex, "background") or tok.bg
+    # Surface follows background unless independently overridden — so setting
+    # only the page background still produces a coherent, graduated set of
+    # card/panel tones rather than leaving them at the old template's values.
+    if surface_hex:
+        surface_base = _dark_override(surface_hex, "surface") or tok.surface
+        surface, surface_2, surface_3 = derive_surface_scale(surface_base)
+    elif background_hex:
+        surface, surface_2, surface_3 = derive_surface_scale(bg)
+    else:
+        surface, surface_2, surface_3 = tok.surface, tok.surface_2, tok.surface_3
+
+    navbar_bg = _dark_override(navbar_hex, "navbar") or tok.navbar_hex or bg
+    footer_bg = _dark_override(footer_hex, "footer") or tok.footer_hex or bg
+    # Foreground text is computed from whatever background came out above —
+    # never assumed white. A navbar colour clamped down from something pale can
+    # still land closer to mid-tone than the page's own dark surfaces, and
+    # _readable_foreground is the same WCAG check used for the CTA button text,
+    # just pointed at the navbar/footer background instead of the brand colour.
+    navbar_fg = _readable_foreground(navbar_bg)
+    footer_fg = _readable_foreground(footer_bg)
+    nav_r, nav_g, nav_b = _hex_to_rgb(navbar_fg)
+    foot_r, foot_g, foot_b = _hex_to_rgb(footer_fg)
 
     heading = FONTS.get(heading_font or "")
     heading_var = heading.css_var if heading and heading.role in ("heading", "either") \
@@ -266,16 +368,28 @@ def render_css(
     button = button_style if button_style in _BUTTON_STYLES else tok.button_style
     radius_css = "999px" if button == "pill" else f"{radius}px"
 
+    # Body text stays the template's own colour rather than being recomputed
+    # per background: every current template's text_1 is white or near-white,
+    # which the luminance clamp above exists specifically to keep legible
+    # against whatever background comes out of it.
     b_r, b_g, b_bl = tok.border_rgb.split(",")
 
     lines = [
         "/* generated from tenant_theme — see app/domains/theme/presets.py */",
         ":root {",
-        f"  --p-bg: {tok.bg};",
-        f"  --p-surface: {tok.surface};",
-        f"  --p-surface-2: {tok.surface_2};",
-        f"  --p-surface-3: {tok.surface_3};",
-        f"  --p-surface-dark: {tok.bg};",
+        f"  --p-bg: {bg};",
+        f"  --p-surface: {surface};",
+        f"  --p-surface-2: {surface_2};",
+        f"  --p-surface-3: {surface_3};",
+        f"  --p-surface-dark: {bg};",
+        f"  --p-navbar-bg: {navbar_bg};",
+        f"  --p-navbar-fg: {navbar_fg};",
+        f"  --p-navbar-fg-dim: rgba({nav_r},{nav_g},{nav_b},0.62);",
+        f"  --p-navbar-border: rgba({nav_r},{nav_g},{nav_b},0.12);",
+        f"  --p-footer-bg: {footer_bg};",
+        f"  --p-footer-fg: {footer_fg};",
+        f"  --p-footer-fg-dim: rgba({foot_r},{foot_g},{foot_b},0.55);",
+        f"  --p-footer-border: rgba({foot_r},{foot_g},{foot_b},0.10);",
         f"  --p-text-1: {tok.text_1};",
         f"  --p-text-2: rgba({b_r},{b_g},{b_bl},0.72);",
         f"  --p-text-3: rgba({b_r},{b_g},{b_bl},0.52);",
@@ -296,20 +410,20 @@ def render_css(
         f"  --p-grad: linear-gradient(135deg, {shades.brand} 0%, {shades.brand_dark} 100%);",
         f"  --p-grad-text: linear-gradient(135deg, {shades.brand} 0%, {shades.brand_mid} 100%);",
         "",
-        f"  --background: {_hex_to_hsl_triple(tok.bg)};",
+        f"  --background: {_hex_to_hsl_triple(bg)};",
         f"  --foreground: {_hex_to_hsl_triple(tok.text_1)};",
-        f"  --card: {_hex_to_hsl_triple(tok.surface)};",
+        f"  --card: {_hex_to_hsl_triple(surface)};",
         f"  --card-foreground: {_hex_to_hsl_triple(tok.text_1)};",
-        f"  --popover: {_hex_to_hsl_triple(tok.surface)};",
+        f"  --popover: {_hex_to_hsl_triple(surface)};",
         f"  --popover-foreground: {_hex_to_hsl_triple(tok.text_1)};",
         f"  --primary: {_hex_to_hsl_triple(shades.brand)};",
         f"  --primary-foreground: {_hex_to_hsl_triple(shades.cta_fg)};",
-        f"  --secondary: {_hex_to_hsl_triple(tok.surface_2)};",
+        f"  --secondary: {_hex_to_hsl_triple(surface_2)};",
         f"  --secondary-foreground: {_hex_to_hsl_triple(tok.text_1)};",
-        f"  --muted: {_hex_to_hsl_triple(tok.surface_2)};",
-        f"  --accent: {_hex_to_hsl_triple(tok.surface_3)};",
-        f"  --border: {_hex_to_hsl_triple(tok.surface_3)};",
-        f"  --input: {_hex_to_hsl_triple(tok.surface_2)};",
+        f"  --muted: {_hex_to_hsl_triple(surface_2)};",
+        f"  --accent: {_hex_to_hsl_triple(surface_3)};",
+        f"  --border: {_hex_to_hsl_triple(surface_3)};",
+        f"  --input: {_hex_to_hsl_triple(surface_2)};",
         f"  --ring: {_hex_to_hsl_triple(shades.brand)};",
         f"  --radius: {radius_css if button != 'pill' else '999px'};",
         "",
@@ -319,7 +433,16 @@ def render_css(
         f"  --tenant-button-style: {button};",
         "}",
     ]
-    return "\n".join(lines)
+    return RenderResult(css="\n".join(lines), adjusted=tuple(adjusted))
+
+
+def render_css(preset_key: str, **kwargs: object) -> str:
+    """Back-compat shim — CSS text only, no adjustment reporting.
+
+    Kept because tests and one call site (public_router, which has nowhere to
+    surface an "adjusted" notice to an anonymous visitor) only need the text.
+    """
+    return render_theme(preset_key, **kwargs).css  # type: ignore[arg-type]
 
 
 def _alpha(hex_colour: str, a: float) -> str:

@@ -127,6 +127,7 @@ def create_app() -> FastAPI:
     from app.domains.customers.router    import router as customers_router
     from app.domains.pricing.router      import router as pricing_router
     from app.domains.payments.router     import router as payments_router
+    from app.domains.payments.config_router import router as payments_config_router
     from app.domains.damage.router       import router as damage_router
     from app.domains.maintenance.router  import router as maintenance_router
     from app.domains.corporate.router    import router as corporate_router
@@ -173,6 +174,8 @@ def create_app() -> FastAPI:
     app.include_router(checkout_router,       prefix=f"{PREFIX}/checkout",      tags=["checkout"])
     app.include_router(customers_router,      prefix=f"{PREFIX}/customers",     tags=["customers"])
     app.include_router(pricing_router,        prefix=f"{PREFIX}/pricing",       tags=["pricing"])
+    # Config first: /payments/config must not be swallowed by /payments/{payment_id}.
+    app.include_router(payments_config_router, prefix=f"{PREFIX}/payments/config", tags=["payments"])
     app.include_router(payments_router,       prefix=f"{PREFIX}/payments",      tags=["payments"])
     app.include_router(damage_router,         prefix=f"{PREFIX}/damage",        tags=["damage"])
     app.include_router(maintenance_router,    prefix=f"{PREFIX}/maintenance",   tags=["maintenance"])

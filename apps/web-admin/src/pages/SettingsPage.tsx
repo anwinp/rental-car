@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react'
 import { useAuth } from '@rcm/ui/auth'
 import type { ReactNode } from 'react'
 import { describeApiError } from '../apiError'
+import { PaymentSettings } from '../components/PaymentSettings'
 
 
 function LLMSettingsSection() {
@@ -343,6 +344,14 @@ export function SettingsPage() {
         <div className="pt-4 flex justify-end" style={{ borderTop: '1px solid var(--border-sub)' }}>
           <button className="btn-primary">Save Changes</button>
         </div>
+      </SectionCard>
+
+      {/* Payments */}
+      <SectionCard
+        title="Payments"
+        description="How this workspace charges renters. Money goes to your own account, not ours."
+      >
+        <PaymentSettings />
       </SectionCard>
 
       {/* My Account */}

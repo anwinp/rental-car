@@ -25,7 +25,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -299,6 +299,41 @@ async def put_config(
     log.info("tenant_payment_config_saved", tenant_id=str(claims.tenant_id),
              provider=provider.key, mode=mode, secret_changed=secret_changed)
     return _to_out(await _row(session, str(claims.tenant_id)))
+
+
+class ConnectStartOut(BaseModel):
+    url: str
+
+
+@router.post("/connect/start", response_model=ConnectStartOut,
+             summary="Begin Stripe-hosted account setup")
+async def connect_start(
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+    claims: UserClaims = Depends(require_permission("admin", "config")),
+) -> ConnectStartOut:
+    """Create the connected account if needed and hand back an onboarding link.
+
+    The return URL is derived from the host this request arrived on, never from
+    the request body. A caller-supplied return URL would let anyone turn our
+    onboarding into an open redirect carrying a Stripe session.
+    """
+    from app.domains.payments.connect import ConnectError, start_onboarding
+
+    host = request.headers.get("host") or ""
+    if not host or "/" in host or "\\" in host:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Bad host header.")
+    return_base = f"https://{host}"
+
+    try:
+        url = await start_onboarding(session, str(claims.tenant_id), return_base)
+    except ConnectError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    if not url:
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY, "Stripe did not return an onboarding link.")
+    log.info("connect_onboarding_started", tenant_id=str(claims.tenant_id))
+    return ConnectStartOut(url=url)
 
 
 @router.post("/verify", response_model=ConfigOut,

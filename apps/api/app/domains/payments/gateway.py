@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from datetime import datetime
 from decimal import Decimal
 from enum import Enum
 from typing import Optional
@@ -27,7 +28,34 @@ class PreAuthResult:
     status: str
     amount_authorized: Decimal
     currency: str
-    auth_expiry_days: int
+
+    # When the hold actually dies, as the gateway reports it.
+    #
+    # Not a number of days computed by us. Vehicle rental qualifies for extended
+    # authorisations, but whether one is granted depends on the card network,
+    # the issuer and the merchant category, and the window is 27-30 days rather
+    # than a round number. Stripe returns `capture_before` on the charge and
+    # says it is authoritative because network rules change without notice.
+    #
+    # None means the gateway did not tell us. Callers must then assume the
+    # short window, because guessing long is the failure that strands a capture.
+    expires_at: Optional[datetime] = None
+
+    # Whether the extension and future increases were actually granted, as
+    # opposed to requested. A rental cannot be extended on a hold that did not
+    # get incremental authorisation, and the counter needs to know that before
+    # promising it.
+    extended_authorization: bool = False
+    incremental_authorization: bool = False
+
+    # Carried so the payment record can show which card is on the hold. The
+    # previous code built a stub dict here, so every stored payment had a null
+    # last4 and brand.
+    card_last4: Optional[str] = None
+    card_brand: Optional[str] = None
+    card_exp_month: Optional[int] = None
+    card_exp_year: Optional[int] = None
+
     iclient_transaction_id: Optional[str] = None
 
 

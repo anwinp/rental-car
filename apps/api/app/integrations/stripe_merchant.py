@@ -94,14 +94,25 @@ class StripeMerchantApi:
         metadata: dict | None = None,
         confirm: bool = True,
         idempotency_key: str | None = None,
+        rental_hold: bool = False,
     ) -> dict[str, Any]:
-        """capture_method='manual' → an authorisation hold, not a charge."""
+        """capture_method='manual' → an authorisation hold, not a charge.
+
+        `rental_hold` asks the card networks for the two things a vehicle rental
+        needs and an ordinary sale does not: a validity window longer than the
+        default seven days, and permission to raise the amount later when a
+        rental is extended. Both are requested `if_available` — an issuer may
+        refuse, and the response says which were granted.
+        """
         await self._guard()
         params: dict[str, Any] = {
             "amount": amount_cents,
             "currency": currency.lower(),
             "capture_method": capture_method,
             "metadata": metadata or {},
+            # Without this the charge comes back as an id and the authorisation
+            # deadline — which lives on the charge — cannot be read.
+            "expand": ["latest_charge"],
         }
         if payment_method_id:
             params["payment_method"] = payment_method_id
@@ -110,13 +121,46 @@ class StripeMerchantApi:
             params["automatic_payment_methods"] = {
                 "enabled": True, "allow_redirects": "never",
             }
+
+        rental_options = {
+            "card": {
+                "request_extended_authorization": "if_available",
+                "request_incremental_authorization": "if_available",
+            }
+        }
         try:
             intent = await self._stripe.payment_intents.create_async(
-                params, options=self._options(idempotency_key),
+                {**params, "payment_method_options": rental_options}
+                if rental_hold else params,
+                options=self._options(idempotency_key),
             )
             await self.circuit.record_success()
             return dict(intent)
         except stripe.StripeError as exc:
+            # Asking for card features the account cannot use rejects the whole
+            # PaymentIntent — no hold at all, which is worse than a short one.
+            # Eligibility depends on the account's pricing plan and category, so
+            # it cannot be known from here; the honest move is to ask, and fall
+            # back to an ordinary hold when the answer is no.
+            #
+            # A fresh idempotency key is required: Stripe refuses to reuse one
+            # with different parameters.
+            if rental_hold and "not eligible for the requested card features" in str(exc):
+                log.info("rental_hold_features_unavailable",
+                         detail="account cannot use extended or incremental "
+                                "authorisation; falling back to a standard hold")
+                try:
+                    intent = await self._stripe.payment_intents.create_async(
+                        params,
+                        options=self._options(
+                            f"{idempotency_key}:basic" if idempotency_key else None
+                        ),
+                    )
+                    await self.circuit.record_success()
+                    return dict(intent)
+                except stripe.StripeError as retry_exc:
+                    await self.circuit.record_failure()
+                    raise self._translate(retry_exc) from retry_exc
             await self.circuit.record_failure()
             raise self._translate(exc) from exc
 
@@ -128,7 +172,7 @@ class StripeMerchantApi:
     ) -> dict[str, Any]:
         """Capture an authorisation, optionally for less than was held."""
         await self._guard()
-        params: dict[str, Any] = {}
+        params: dict[str, Any] = {"expand": ["latest_charge"]}
         if amount_to_capture_cents is not None:
             params["amount_to_capture"] = amount_to_capture_cents
         try:

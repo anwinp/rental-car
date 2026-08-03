@@ -320,9 +320,9 @@ controls.
 | Phase | What | Why there |
 |---|---|---|
 | 0 ✅ | Remove the global `stripe.api_key`; per-request client | Everything else is unsafe until this is done |
-| 1 ◐ | `tenant_payment_config` + provider registry + settings UI; BYO credentials done, managed onboarding still to build | Decision 4 needs the front door; decision 2 needs BYO immediately |
+| 1 ✅ | `tenant_payment_config` + provider registry + settings UI; BYO credentials **and** Stripe Connect onboarding | Decision 4 needs the front door; decision 2 needs BYO immediately |
 | 2 ✅ | Verify-before-live gate | Stops a tenant going live with a config that has never worked |
-| 3 | Deposit policy per vehicle class; fix `auth_expiry_days` to use extended authorisation | The 7-day bug bites on any rental over a week |
+| 3 ◐ | Extended authorisation done; deposit policy per vehicle class still to enforce at the counter | The 7-day bug bites on any rental over a week |
 | 4 | Stripe Terminal for card-present at the counter (AU: eftpos, Tap to Pay) | Better rates and far better auth success on deposit holds |
 | 5 | Adyen adapter | Global coverage, and enterprise tenants with existing contracts |
 | 6 | Tyro `terminal_local`, incl. certification | Only for tenants who already have Tyro; needs a certification project |

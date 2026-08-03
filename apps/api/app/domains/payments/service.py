@@ -42,6 +42,9 @@ from app.domains.payments.gateway import PaymentGateway
 log = structlog.get_logger()
 
 _REFUND_APPROVAL_THRESHOLD_CENTS = 50000  # $500.00 USD
+# The default card authorisation window. Vehicle rental usually qualifies for
+# an extended one, but that is granted per transaction by the issuer, so this is
+# only the fallback for when the gateway does not tell us — never the assumption.
 _PRE_AUTH_EXPIRY_DAYS = 7
 _MIN_CAPTURE_AMOUNT = Decimal("0.50")
 
@@ -96,14 +99,21 @@ class PaymentService:
                 "customer_id": str(data.customer_id),
             },
         )
-        # Build a minimal intent-like dict for downstream compatibility
-        intent = {
-            "id": preauth_result.gateway_payment_id,
-            "client_secret": None,
-            "payment_method_details": {},
-        }
-
-        auth_expiry_at = datetime.now(timezone.utc) + timedelta(days=_PRE_AUTH_EXPIRY_DAYS)
+        # When the hold really dies, as the gateway reported it. Falling back to
+        # the short default rather than the extended one is deliberate: if we do
+        # not know, the safe assumption is the window that expires soonest.
+        # Recording 30 days for a hold that lapses at 7 means the warning job
+        # stays quiet until three weeks after the money is gone.
+        auth_expiry_at = preauth_result.expires_at or (
+            datetime.now(timezone.utc) + timedelta(days=_PRE_AUTH_EXPIRY_DAYS)
+        )
+        if not preauth_result.extended_authorization:
+            log.info(
+                "preauth_short_window",
+                reservation_id=str(data.reservation_id),
+                expires_at=auth_expiry_at.isoformat(),
+                reason="extended authorisation was not granted for this card",
+            )
 
         payment = await repo.create(
             reservation_id=str(data.reservation_id),
@@ -113,11 +123,13 @@ class PaymentService:
             amount=data.deposit_amount,
             currency=data.currency.upper(),
             gateway="STRIPE",
-            gateway_payment_id=intent.get("id", ""),
-            card_last4=intent.get("payment_method_details", {}).get("card", {}).get("last4"),
-            card_brand=intent.get("payment_method_details", {}).get("card", {}).get("brand"),
-            card_expiry_month=intent.get("payment_method_details", {}).get("card", {}).get("exp_month"),
-            card_expiry_year=intent.get("payment_method_details", {}).get("card", {}).get("exp_year"),
+            gateway_payment_id=preauth_result.gateway_payment_id,
+            # Previously read off a stub dict built two lines above, so every
+            # stored payment had a null card.
+            card_last4=preauth_result.card_last4,
+            card_brand=preauth_result.card_brand,
+            card_expiry_month=preauth_result.card_exp_month,
+            card_expiry_year=preauth_result.card_exp_year,
             authorized_at=datetime.now(timezone.utc),
             auth_expiry_at=auth_expiry_at,
         )
@@ -138,8 +150,8 @@ class PaymentService:
 
         return PreAuthResponse(
             payment_id=UUID(payment.payment_id),
-            stripe_payment_intent_id=intent.get("id", ""),
-            client_secret=intent.get("client_secret"),
+            stripe_payment_intent_id=preauth_result.gateway_payment_id,
+            client_secret=None,
             status="AUTHORIZED",  # type: ignore[arg-type]
             amount_authorized=data.deposit_amount,
             currency=data.currency.upper(),
@@ -275,14 +287,18 @@ class PaymentService:
                 new_total_amount=payment.amount,
                 idempotency_key=str(_uuid.uuid4()),
             )
-            new_expiry = datetime.now(timezone.utc) + timedelta(days=_PRE_AUTH_EXPIRY_DAYS)
+            # An increment raises the amount; it does not restart the clock.
+            # Writing a fresh expiry here silenced the warning job for another
+            # week while the original hold carried on expiring on schedule.
+            new_expiry = incr_result.expires_at or payment.auth_expiry_at
             await repo.update(
                 payment_id,
                 network_txn_id=incr_result.gateway_auth_code,
                 auth_expiry_at=new_expiry,
             )
             await self._session.commit()
-            log.info("preauth_renewed", payment_id=payment_id, new_expiry=new_expiry.isoformat())
+            log.info("preauth_renewed", payment_id=payment_id,
+                     new_expiry=new_expiry.isoformat() if new_expiry else None)
         finally:
             await redis.delete(lock_key)
 

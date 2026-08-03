@@ -20,10 +20,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+import structlog
+
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.payments.gateway import PaymentGateway
+
+log = structlog.get_logger()
 
 
 @dataclass(frozen=True)
@@ -94,7 +98,7 @@ async def resolve_credentials(tenant_id: str, session: AsyncSession) -> GatewayC
     ).mappings().first()
 
     if not row:
-        return _platform_credentials()
+        return await _platform_credentials(session)
 
     provider = row["provider"]
     secrets = row["secrets_enc"] or {}
@@ -102,10 +106,9 @@ async def resolve_credentials(tenant_id: str, session: AsyncSession) -> GatewayC
     if row["onboarding"] == "managed":
         # Our key, their account. The connected account is what makes the
         # charge land on them rather than on us.
-        base = _platform_credentials()
         return GatewayCredentials(
             provider=provider,
-            api_key=base.api_key,
+            api_key=await platform_api_key(session),
             stripe_account=row["connected_account_id"],
             is_live=row["is_live"],
         )
@@ -132,17 +135,49 @@ async def resolve_credentials(tenant_id: str, session: AsyncSession) -> GatewayC
     )
 
 
-def _platform_credentials() -> GatewayCredentials:
+async def platform_api_key(session: AsyncSession) -> str:
+    """The platform's own Stripe key, decrypted at the point of use.
+
+    Reads `platform_billing_config` — the key an operator entered in the console
+    — before the environment variable. Those had drifted: the env value in
+    production is the literal placeholder from `.env.example`, while the working
+    key is the console one. Anything that reached for settings.stripe_secret_key
+    was reaching for a string that authenticates against nothing.
+
+    The environment remains a fallback so a deployment can be configured without
+    the console, but it is second.
+    """
     from app.core.config import settings
 
+    try:
+        row = (
+            await session.execute(
+                text("SELECT secret_key_enc FROM platform_billing_config WHERE id = 1")
+            )
+        ).mappings().first()
+        if row and row["secret_key_enc"]:
+            from app.core.secrets_box import decrypt
+
+            return decrypt(row["secret_key_enc"], name="stripe_secret_key")
+    except Exception as exc:  # noqa: BLE001 — fall through to the environment
+        log.warning("platform_stripe_key_unreadable", error=str(exc)[:200])
+
+    key = settings.stripe_secret_key.get_secret_value()
+    if not key or key.endswith("placeholder"):
+        raise PaymentsNotConfigured(
+            "The platform has no usable Stripe credentials configured."
+        )
+    return key
+
+
+async def _platform_credentials(session: AsyncSession) -> GatewayCredentials:
     if not PLATFORM_FALLBACK_ALLOWED:
         raise PaymentsNotConfigured(
             "This workspace has not set up payments yet."
         )
-    key = settings.stripe_secret_key.get_secret_value()
-    if not key:
-        raise PaymentsNotConfigured("No payment credentials are configured.")
-    return GatewayCredentials(provider="stripe", api_key=key, is_live=True)
+    return GatewayCredentials(
+        provider="stripe", api_key=await platform_api_key(session), is_live=True,
+    )
 
 
 async def get_gateway_for_tenant(tenant_id: str, session: AsyncSession) -> PaymentGateway:

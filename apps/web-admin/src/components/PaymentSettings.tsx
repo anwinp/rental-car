@@ -107,7 +107,23 @@ export function PaymentSettings() {
       setError('Could not load payment settings.')
     }
   }
-  useEffect(() => { void load() }, [])
+  useEffect(() => {
+    void (async () => {
+      await load()
+      // Coming back from Stripe. Onboarding finishing does not mean the account
+      // can charge — Stripe may still be waiting on documents — so this checks
+      // rather than assuming, and strips the marker so a refresh does not repeat.
+      const params = new URLSearchParams(window.location.search)
+      if (params.get('connect') === 'return') {
+        window.history.replaceState({}, '', window.location.pathname)
+        await call('/verify', { method: 'POST' }, 'Back from Stripe — checked.')
+      } else if (params.get('connect') === 'refresh') {
+        window.history.replaceState({}, '', window.location.pathname)
+        setError('That Stripe link had expired. Start the connection again.')
+      }
+    })()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   async function call(path: string, init: RequestInit, ok: string) {
     setBusy(true); setError(''); setNotice('')
@@ -143,6 +159,14 @@ export function PaymentSettings() {
 
   async function verify() {
     await call('/verify', { method: 'POST' }, 'Connection checked.')
+  }
+
+  async function connect() {
+    const body = await call('/connect/start', { method: 'POST' },
+      'Opening Stripe…') as { url?: string } | null
+    // Stripe's onboarding link is single-use and short-lived, so it is followed
+    // immediately rather than stored or opened in a background tab.
+    if (body?.url) window.location.href = body.url
   }
 
   async function setLive(live: boolean) {
@@ -252,20 +276,53 @@ export function PaymentSettings() {
         })}
       </div>
 
-      {/* Managed onboarding has nothing to fill in. Saying so is better than an
-          empty form that looks broken. */}
+      {/* Managed onboarding has nothing to fill in — the whole flow is a
+          redirect and a return. */}
       {selected?.onboarding === 'managed' && (
         <div className="rounded-xl p-4" style={{ border: '1px solid var(--border)' }}>
           <p className="text-[13px]" style={{ color: 'var(--text-2)' }}>
             {selected.label} sets your account up for you — there is nothing to
             type here. You will be taken to {selected.label} to confirm your
             business details, and payouts go straight to your own bank account.
+            We never see your {selected.label} password or keys.
           </p>
-          <p className="mt-2 text-[11.5px]" style={{ color: 'var(--text-3)' }}>
-            Connecting is not available yet in this build. Choose
-            “{providers.find((p) => p.key === 'stripe_keys')?.label}” if you
-            already have an account and can paste its keys.
-          </p>
+          {config.connected_account_id && (
+            <p className="mt-2 font-mono text-[11px]" style={{ color: 'var(--text-3)' }}>
+              Account {config.connected_account_id}
+              {verified ? ' · ready' : ' · setup not finished'}
+            </p>
+          )}
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button type="button" onClick={() => void connect()} disabled={busy}
+                    className="rounded-lg px-4 py-2 text-[13px] font-semibold text-white disabled:opacity-50"
+                    style={{ background: 'var(--accent)' }}>
+              {config.connected_account_id
+                ? `Continue setup on ${selected.label}`
+                : `Connect ${selected.label}`}
+            </button>
+            {config.connected_account_id && (
+              <>
+                <button type="button" onClick={() => void verify()} disabled={busy}
+                        className="rounded-lg px-4 py-2 text-[13px] disabled:opacity-50"
+                        style={{ border: '1px solid var(--border)', color: 'var(--text-2)' }}>
+                  Check the connection
+                </button>
+                <button type="button" onClick={() => void setLive(!config.is_live)}
+                        disabled={busy || (!verified && !config.is_live)}
+                        title={!verified && !config.is_live
+                          ? 'Check the connection first' : undefined}
+                        className="rounded-lg px-4 py-2 text-[13px] font-semibold disabled:opacity-40"
+                        style={config.is_live
+                          ? { border: '1px solid rgba(176,52,31,0.5)', color: '#fca5a5' }
+                          : { background: '#059669', color: '#fff' }}>
+                  {config.is_live ? 'Stop taking payments' : 'Start taking payments'}
+                </button>
+                <button type="button" onClick={() => void disconnect()} disabled={busy}
+                        className="ml-auto rounded-lg px-3 py-2 text-[12px] text-red-300 disabled:opacity-40"
+                        style={{ border: '1px solid rgba(176,52,31,0.4)' }}>Remove</button>
+              </>
+            )}
+          </div>
         </div>
       )}
 

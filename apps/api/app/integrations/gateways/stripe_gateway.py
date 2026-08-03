@@ -1,4 +1,9 @@
-"""StripeGateway — thin adapter wrapping StripeClient to satisfy PaymentGateway ABC."""
+"""StripeGateway — adapts StripeMerchantApi to the PaymentGateway ABC.
+
+Credentials are constructor arguments, not ambient process state. `stripe_account`
+is what will make a charge land on the tenant's own connected account in Phase 1;
+it is threaded through now so that becomes a caller change rather than a rewrite.
+"""
 from __future__ import annotations
 
 import datetime
@@ -9,13 +14,15 @@ from app.domains.payments.gateway import (
     CaptureResult, PaymentGateway, PaymentStatusResult,
     PreAuthResult, RefundResult, VoidResult,
 )
-from app.integrations.stripe_client import StripeClient
+from app.integrations.stripe_merchant import StripeMerchantApi
 
 
 class StripeGateway(PaymentGateway):
 
-    def __init__(self) -> None:
-        self._client = StripeClient()
+    def __init__(self, *, api_key: str, stripe_account: str | None = None) -> None:
+        self._client = StripeMerchantApi(
+            api_key=api_key, stripe_account=stripe_account,
+        )
 
     async def create_preauth(
         self, amount: Decimal, currency: str, customer_ref: str,
@@ -44,6 +51,7 @@ class StripeGateway(PaymentGateway):
         result = await self._client.capture_payment_intent(
             payment_intent_id=preauth_id,
             amount_to_capture_cents=int(amount * 100),
+            idempotency_key=idempotency_key,
         )
         charge_id = ""
         charges = result.get("charges", {}).get("data", [])
@@ -61,6 +69,7 @@ class StripeGateway(PaymentGateway):
         result = await self._client.create_incremental_auth(
             payment_intent_id=preauth_id,
             new_amount_cents=int(new_total_amount * 100),
+            idempotency_key=idempotency_key,
         )
         return PreAuthResult(
             gateway_payment_id=preauth_id,
@@ -82,6 +91,7 @@ class StripeGateway(PaymentGateway):
             charge_id=charge_id,
             amount_cents=int(amount * 100),
             reason=reason,
+            idempotency_key=idempotency_key,
         )
         return RefundResult(
             gateway_refund_id=result.get("id", ""),
@@ -90,4 +100,24 @@ class StripeGateway(PaymentGateway):
         )
 
     async def get_status(self, transaction_id: str) -> PaymentStatusResult:
-        raise NotImplementedError("StripeGateway.get_status: add stripe.PaymentIntent.retrieve() to StripeClient")
+        intent = await self._client.retrieve_payment_intent(transaction_id)
+        raw = str(intent.get("status", ""))
+        return PaymentStatusResult(
+            gateway_payment_id=transaction_id,
+            status=_STATUS_MAP.get(raw, "UNKNOWN"),
+            raw_status=raw,
+        )
+
+
+# Stripe's PaymentIntent vocabulary mapped onto ours. Anything unlisted stays
+# UNKNOWN rather than being guessed at — a wrong status on a payment is worse
+# than an unrecognised one.
+_STATUS_MAP = {
+    "requires_capture": "AUTHORIZED",
+    "succeeded": "CAPTURED",
+    "canceled": "VOIDED",
+    "processing": "PENDING",
+    "requires_payment_method": "FAILED",
+    "requires_confirmation": "PENDING",
+    "requires_action": "PENDING",
+}

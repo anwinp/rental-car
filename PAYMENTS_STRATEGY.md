@@ -279,14 +279,25 @@ from the processor and must not be hardcoded anywhere:
 
 ## 7. Security
 
-**The concurrency landmine.** `stripe.api_key = ...` is a **process-global
-assignment**. The moment credentials are per-tenant, two concurrent requests
-race: tenant B's key can overwrite the global while tenant A's charge is in
-flight, and the money lands in the wrong company's account. Under async workers
-that is not theoretical. The installed SDK (10.12.0) exposes
-`stripe.StripeClient(api_key=...)` for per-instance keys — verified present.
-**Nothing per-tenant may ship until the global assignment is gone.** Our own class
-is also named `StripeClient`, shadowing the SDK's; rename it while fixing.
+**The concurrency landmine — fixed in Phase 0.** `stripe.api_key = ...` was a
+process-global assignment. With per-tenant credentials, two concurrent requests
+race: tenant B's key overwrites the global while tenant A's charge is in flight,
+and the money lands in the wrong company's account.
+
+That was demonstrated rather than assumed. `tests/test_stripe_credential_isolation.py`
+interleaves two requests the way an event loop does and prints which key each
+would charge with:
+
+```
+old client   A charges with sk_test_TENANT_B   (should be sk_test_TENANT_A)
+current      A charges with sk_test_TENANT_A   (should be sk_test_TENANT_A)
+```
+
+The test refuses to pass if the legacy shape *fails* to leak, so it cannot
+quietly stop testing anything. `StripeMerchantApi` now builds its own
+`stripe.StripeClient` per instance and carries `api_key` and `stripe_account` in
+per-request options; `tests/payment_credential_lint.py` fails the build on any
+module-level payment credential assignment.
 
 **Secrets at rest.** Reuse `secrets_box.py`. Secrets are write-only over the API —
 a `hint()` of the last four characters is all that ever comes back.
@@ -308,7 +319,7 @@ controls.
 
 | Phase | What | Why there |
 |---|---|---|
-| 0 | Remove the global `stripe.api_key`; per-request client | Everything else is unsafe until this is done |
+| 0 ✅ | Remove the global `stripe.api_key`; per-request client | Everything else is unsafe until this is done |
 | 1 | `tenant_payment_config` + provider registry + settings UI; Stripe managed onboarding **and** BYO credentials | Decision 4 needs the front door; decision 2 needs BYO immediately |
 | 2 | Verify-before-live gate | Stops a tenant going live with a config that has never worked |
 | 3 | Deposit policy per vehicle class; fix `auth_expiry_days` to use extended authorisation | The 7-day bug bites on any rental over a week |

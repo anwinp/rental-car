@@ -48,9 +48,12 @@ _MIN_CAPTURE_AMOUNT = Decimal("0.50")
 
 class PaymentService:
     """
-    Orchestrates Stripe API calls with local Payment record management.
-    All Stripe calls are made through StripeClient which wraps the SDK with
-    circuit-breaker + retry.
+    Orchestrates gateway calls with local Payment record management.
+
+    The gateway is resolved per tenant through `gateway_factory`, which is also
+    where its credentials come from — this class never sees an API key and must
+    not acquire one, so that whose money is moving stays a property of the
+    resolved gateway rather than of ambient process state.
     """
 
     def __init__(self, session: AsyncSession) -> None:

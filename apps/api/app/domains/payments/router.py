@@ -20,7 +20,7 @@ from app.domains.payments.schemas import (
     VoidRequest,
 )
 from app.domains.payments.service import PaymentService
-from app.integrations.stripe_client import StripeClient
+from app.integrations.stripe_merchant import StripeMerchantApi
 
 log = structlog.get_logger()
 
@@ -126,10 +126,12 @@ async def stripe_webhook(
     """
     raw_body = await request.body()
 
-    stripe_client = StripeClient()
     from app.core.config import settings
     try:
-        event = stripe_client.construct_webhook_event(
+        # Verification is pure computation over the raw body and this
+        # endpoint's own secret. The old code built a client to do it, and
+        # building a client is what set the process-global API key.
+        event = StripeMerchantApi.construct_webhook_event(
             payload=raw_body,
             sig_header=stripe_signature,
             webhook_secret=settings.stripe_webhook_secret.get_secret_value(),

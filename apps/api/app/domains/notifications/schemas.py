@@ -35,7 +35,6 @@ class NotificationTemplateCreate(BaseModel):
     subject: Optional[str] = Field(default=None, max_length=255)
     body_html: Optional[str] = Field(default=None)
     body_text: Optional[str] = Field(default=None)
-    merge_variables: list[str] = Field(default_factory=list)
     is_active: bool = True
 
 
@@ -44,7 +43,6 @@ class NotificationTemplateUpdate(BaseModel):
     subject: Optional[str] = Field(default=None, max_length=255)
     body_html: Optional[str] = None
     body_text: Optional[str] = None
-    merge_variables: Optional[list[str]] = None
     is_active: Optional[bool] = None
 
 
@@ -78,7 +76,6 @@ class NotificationTemplateResponse(BaseModel):
     subject: Optional[str] = None
     body_html: Optional[str] = None
     body_text: Optional[str] = None
-    merge_variables: Optional[list[str]] = None
     is_active: bool
     created_at: datetime
     updated_at: datetime

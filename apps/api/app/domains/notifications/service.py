@@ -326,7 +326,6 @@ class NotificationService:
             subject=data.subject,
             body_html=data.body_html,
             body_text=data.body_text,
-            merge_variables=data.merge_variables or [],
             is_active=data.is_active,
         )
         self._session.add(template)

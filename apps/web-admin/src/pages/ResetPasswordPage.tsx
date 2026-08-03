@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { Shell } from './ForgotPasswordPage'
+import { describeApiError } from '../apiError'
 
 /**
  * Redeem a reset link and choose a new password.
@@ -54,8 +55,7 @@ export function ResetPasswordPage() {
       }
       const body = await res.json().catch(() => ({}))
       setError(
-        (body as { detail?: string }).detail ??
-          'That link is no longer valid. Request a new one.',
+        describeApiError(body, res.status),
       )
     } catch {
       setError('Could not reach the server.')

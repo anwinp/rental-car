@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import Boolean, DateTime, Integer, Text, func
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -42,8 +42,15 @@ class NotificationTemplate(Base):
     body_html: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     body_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
-    # Merge variable names declared by this template for validation
-    merge_variables: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
+    # There is no merge_variables column. One was declared here and never
+    # existed in the database, which made this model unusable in both
+    # directions: creating a template raised UndefinedColumnError, and so did
+    # every SELECT, because the ORM names each column explicitly. Templated
+    # notifications could not be created or sent at all.
+    #
+    # It is not added back as a migration because nothing read it. Rendering
+    # uses the runtime `merge_vars` context passed by the caller, which is a
+    # different thing that happens to be similarly named.
 
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
 

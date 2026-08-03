@@ -9,6 +9,8 @@ from sqlalchemy import DateTime, Numeric, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
+from app.core.pg_types import pg_enum
+
 
 class Base(DeclarativeBase):
     pass
@@ -45,11 +47,11 @@ class Payment(Base):
     # Canonical values: PREAUTH | CAPTURE | INCREMENTAL_AUTH | REFUND | VOID |
     #                   CHARGEBACK | CHARGEBACK_REVERSAL
 
-    payment_method: Mapped[str] = mapped_column(Text, nullable=False)
+    payment_method: Mapped[str] = mapped_column(pg_enum("payment_method"), nullable=False)
     # Canonical values: CREDIT_CARD | DEBIT_CARD | DIGITAL_WALLET |
     #                   CASH | DIRECT_BILL | ACH | WIRE | FUEL_CARD
 
-    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="PENDING")
+    status: Mapped[str] = mapped_column(pg_enum("payment_status"), nullable=False, server_default="PENDING")
     # Canonical values: PENDING | AUTHORIZED | CAPTURED | REFUNDED |
     #                   PARTIALLY_REFUNDED | VOIDED | DECLINED | EXPIRED
 

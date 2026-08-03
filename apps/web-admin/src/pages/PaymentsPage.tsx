@@ -1,6 +1,7 @@
 import { tenantId } from '../tenant'
 import { useState, useMemo, type FormEvent } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { describeApiError } from '../apiError'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -85,7 +86,7 @@ async function getJSON(path: string) {
   })
   if (!res.ok) {
     const body = await res.json().catch(() => ({}))
-    throw new Error((body as { detail?: string }).detail ?? `HTTP ${res.status}`)
+    throw new Error(describeApiError(body, res.status))
   }
   return res.json()
 }
@@ -99,7 +100,7 @@ async function postJSON(path: string, body: unknown) {
   })
   if (!res.ok) {
     const data = await res.json().catch(() => ({}))
-    throw new Error((data as { detail?: string }).detail ?? `HTTP ${res.status}`)
+    throw new Error(describeApiError(data, res.status))
   }
   return res.json()
 }

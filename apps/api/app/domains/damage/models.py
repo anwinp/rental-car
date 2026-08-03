@@ -9,6 +9,8 @@ from sqlalchemy import Boolean, DateTime, Date, Integer, Numeric, SmallInteger, 
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
+from app.core.pg_types import pg_enum
+
 
 class Base(DeclarativeBase):
     pass
@@ -59,7 +61,7 @@ class DamageClaim(Base):
     # ── Damage details ────────────────────────────────────────────────────────
     damage_zone: Mapped[str] = mapped_column(Text, nullable=False)
     damage_type: Mapped[str] = mapped_column(Text, nullable=False)
-    severity: Mapped[str] = mapped_column(Text, nullable=False, server_default="GRADE_2_MINOR")
+    severity: Mapped[str] = mapped_column(pg_enum("damage_severity"), nullable=False, server_default="GRADE_2_MINOR")
     damage_description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # JSONB arrays of photo records: [{zone, type, severity, photo_urls}]
@@ -112,7 +114,7 @@ class DamageClaim(Base):
     subrogation_recovery: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 2), nullable=True)
 
     # ── Status & assignment ───────────────────────────────────────────────────
-    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="OPEN")
+    status: Mapped[str] = mapped_column(pg_enum("claim_status"), nullable=False, server_default="OPEN")
     assigned_to: Mapped[Optional[str]] = mapped_column(UUID(as_uuid=False), nullable=True)
 
     # Inspector / adjuster

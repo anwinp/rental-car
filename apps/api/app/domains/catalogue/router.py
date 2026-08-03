@@ -83,9 +83,55 @@ class ExtraOut(BaseModel):
     is_active: bool
 
 
+class VehicleClassPatch(BaseModel):
+    """A partial update. Every field is optional; absent means "leave alone".
+
+    Separate from VehicleClassIn because PATCH with a required body is not a
+    PATCH. The admin UI toggles a single flag — "hide this class" sends
+    {"is_active": false} — and against the create model that was a 422 naming
+    sipp_prefix and name, so hiding a class never worked.
+    """
+    sipp_prefix: Optional[str] = Field(default=None, min_length=1, max_length=1)
+    name: Optional[str] = Field(default=None, min_length=1, max_length=80)
+    description: Optional[str] = Field(default=None, max_length=500)
+    sort_order: Optional[int] = Field(default=None, ge=0, le=999)
+    is_active: Optional[bool] = None
+
+
+class ExtraPatch(BaseModel):
+    """A partial update — see VehicleClassPatch.
+
+    The price editor sends {"default_price": 12.5} on its own, which the create
+    model rejected for missing code and name.
+    """
+    code: Optional[str] = Field(default=None, min_length=1, max_length=20)
+    name: Optional[str] = Field(default=None, min_length=1, max_length=80)
+    extra_type: Optional[str] = Field(default=None, max_length=30)
+    pricing_type: Optional[str] = Field(default=None, max_length=20)
+    default_price: Optional[float] = Field(default=None, ge=0)
+    tax_treatment: Optional[str] = Field(default=None, max_length=30)
+    is_active: Optional[bool] = None
+
+
 class SimpleResult(BaseModel):
     ok: bool = True
     message: str
+
+
+def _set_clause(body: BaseModel, columns: dict[str, str]) -> tuple[str, dict]:
+    """Build a SET clause from the fields the caller actually sent.
+
+    `exclude_unset` rather than checking for None, because a field set to null
+    is a caller asking to clear it and must not be confused with one that was
+    never mentioned.
+    """
+    sent = body.model_dump(exclude_unset=True)
+    parts, params = [], {}
+    for field, expr in columns.items():
+        if field in sent:
+            parts.append(f"{field} = {expr}")
+            params[field] = sent[field]
+    return ", ".join(parts), params
 
 
 # ── Vehicle classes ──────────────────────────────────────────────────────────
@@ -173,33 +219,33 @@ async def create_vehicle_class(
               summary="Rename or reconfigure a vehicle class")
 async def update_vehicle_class(
     class_id: uuid.UUID,
-    body: VehicleClassIn,
+    body: VehicleClassPatch,
     session: AsyncSession = Depends(get_session),
     claims: UserClaims = Depends(require_permission("vehicles", "update")),
 ) -> SimpleResult:
+    sets, params = _set_clause(body, {
+        "sipp_prefix": "upper(:sipp_prefix)",
+        "name": ":name",
+        "description": ":description",
+        "sort_order": ":sort_order",
+        "is_active": ":is_active",
+    })
+    if not sets:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Nothing to update.")
+
     result = await session.execute(
         text(
-            """
-            UPDATE vehicle_classes
-               SET sipp_prefix = upper(:sipp), name = :name,
-                   description = :descr, sort_order = :sort,
-                   is_active = :active, updated_at = now()
-             WHERE class_id = :id AND tenant_id = :t
-            """
+            f"UPDATE vehicle_classes SET {sets}, updated_at = now() "
+            " WHERE class_id = :id AND tenant_id = :t"
         ),
-        {
-            "t": str(claims.tenant_id),
-            "id": str(class_id), "sipp": body.sipp_prefix, "name": body.name,
-            "descr": body.description, "sort": body.sort_order,
-            "active": body.is_active,
-        },
+        {"t": str(claims.tenant_id), "id": str(class_id), **params},
     )
     if result.rowcount == 0:
         # Not found, or owned by another workspace — indistinguishable on
         # purpose, so this cannot be used to probe for other tenants' ids.
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No such vehicle class.")
     await session.commit()
-    return SimpleResult(message=f"Updated {body.name}.")
+    return SimpleResult(message=f"Updated {body.name or 'the class'}.")
 
 
 @router.delete("/vehicle-classes/{class_id}", response_model=SimpleResult,
@@ -373,32 +419,33 @@ async def create_extra(
               summary="Update an extra")
 async def update_extra(
     extra_id: uuid.UUID,
-    body: ExtraIn,
+    body: ExtraPatch,
     session: AsyncSession = Depends(get_session),
     claims: UserClaims = Depends(require_permission("vehicles", "update")),
 ) -> SimpleResult:
+    sets, params = _set_clause(body, {
+        "code": "upper(:code)",
+        "name": ":name",
+        "extra_type": ":extra_type",
+        "pricing_type": ":pricing_type",
+        "default_price": ":default_price",
+        "tax_treatment": ":tax_treatment",
+        "is_active": ":is_active",
+    })
+    if not sets:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Nothing to update.")
+
     result = await session.execute(
         text(
-            """
-            UPDATE extras_catalog
-               SET code = upper(:code), name = :name, extra_type = :etype,
-                   pricing_type = :ptype, default_price = :price,
-                   tax_treatment = :tax, is_active = :active, updated_at = now()
-             WHERE extra_id = :id AND tenant_id = :t
-            """
+            f"UPDATE extras_catalog SET {sets}, updated_at = now() "
+            " WHERE extra_id = :id AND tenant_id = :t"
         ),
-        {
-            "t": str(claims.tenant_id),
-            "id": str(extra_id), "code": body.code, "name": body.name,
-            "etype": body.extra_type, "ptype": body.pricing_type,
-            "price": body.default_price, "tax": body.tax_treatment,
-            "active": body.is_active,
-        },
+        {"t": str(claims.tenant_id), "id": str(extra_id), **params},
     )
     if result.rowcount == 0:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No such extra.")
     await session.commit()
-    return SimpleResult(message=f"Updated {body.name}.")
+    return SimpleResult(message=f"Updated {body.name or 'the extra'}.")
 
 
 @router.delete("/extras/{extra_id}", response_model=SimpleResult,

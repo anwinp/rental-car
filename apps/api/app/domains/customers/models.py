@@ -8,6 +8,8 @@ from sqlalchemy import Boolean, DateTime, Date, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
+from app.core.pg_types import pg_enum
+
 
 class Base(DeclarativeBase):
     pass
@@ -55,7 +57,7 @@ class Customer(Base):
     # ── Account status ────────────────────────────────────────────────────────
     account_status: Mapped[str] = mapped_column(Text, nullable=False, server_default="ACTIVE")
     account_type: Mapped[str] = mapped_column(Text, nullable=False, server_default="INDIVIDUAL")
-    kyc_status: Mapped[str] = mapped_column(Text, nullable=False, server_default="UNVERIFIED")
+    kyc_status: Mapped[str] = mapped_column(pg_enum("kyc_status"), nullable=False, server_default="UNVERIFIED")
     corporate_account_id: Mapped[Optional[str]] = mapped_column(
         UUID(as_uuid=False), nullable=True
     )
@@ -78,7 +80,8 @@ class Customer(Base):
     preferred_class_id: Mapped[Optional[str]] = mapped_column(
         UUID(as_uuid=False), nullable=True
     )
-    preferred_transmission: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    preferred_transmission: Mapped[Optional[str]] = mapped_column(
+        pg_enum("transmission_type"), nullable=True)
     comm_opt_email: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
     comm_opt_sms: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
     comm_opt_marketing: Mapped[bool] = mapped_column(

@@ -1,6 +1,7 @@
 import { tenantHeaders } from '../tenant'
 import { useState, type FormEvent } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { describeApiError } from '../apiError'
 
 
 type Reservation = {
@@ -68,7 +69,7 @@ async function cancelReservation(reservationId: string, reason: string, waiveFee
   })
   if (!res.ok) {
     const e = await res.json().catch(() => ({}))
-    throw new Error((e as { detail?: string }).detail ?? `Cancel failed: ${res.status}`)
+    throw new Error(describeApiError(e, res.status))
   }
 }
 
@@ -89,7 +90,7 @@ async function modifyReservation(
   })
   if (!res.ok) {
     const e = await res.json().catch(() => ({}))
-    throw new Error((e as { detail?: string }).detail ?? `Modify failed: ${res.status}`)
+    throw new Error(describeApiError(e, res.status))
   }
 }
 

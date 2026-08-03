@@ -3,6 +3,7 @@ import { ChangePassword, ActiveSessions } from '../components/AccountSecurity'
 import { useState, useEffect } from 'react'
 import { useAuth } from '@rcm/ui/auth'
 import type { ReactNode } from 'react'
+import { describeApiError } from '../apiError'
 
 
 function LLMSettingsSection() {
@@ -50,7 +51,7 @@ function LLMSettingsSection() {
         setStatus({ type: 'success', msg: 'API key saved successfully.' })
       } else {
         const err = await res.json().catch(() => ({}))
-        setStatus({ type: 'error', msg: (err as { detail?: string }).detail || 'Failed to save key.' })
+        setStatus({ type: 'error', msg: describeApiError(err, res.status) })
       }
     } catch {
       setStatus({ type: 'error', msg: 'Network error — please try again.' })
@@ -206,7 +207,7 @@ function DataExportSection() {
       })
       if (!res.ok) {
         const err = await res.json().catch(() => ({}))
-        setError((err as { detail?: string }).detail || 'The export could not be produced.')
+        setError(describeApiError(err, res.status))
         return
       }
       // Read the filename the server chose — it carries the workspace slug and

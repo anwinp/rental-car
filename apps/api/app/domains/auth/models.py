@@ -8,6 +8,8 @@ from sqlalchemy import Boolean, DateTime, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
+from app.core.pg_types import pg_enum
+
 
 class Base(DeclarativeBase):
     pass
@@ -41,7 +43,7 @@ class StaffUser(Base):
     # ── Profile ───────────────────────────────────────────────────────────────
     first_name: Mapped[str] = mapped_column(Text, nullable=False)
     last_name: Mapped[str] = mapped_column(Text, nullable=False)
-    role: Mapped[str] = mapped_column(Text, nullable=False)  # user_role enum stored as TEXT
+    role: Mapped[str] = mapped_column(pg_enum("user_role"), nullable=False)
 
     # ── Status ────────────────────────────────────────────────────────────────
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")

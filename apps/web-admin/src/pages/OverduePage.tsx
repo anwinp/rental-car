@@ -1,6 +1,7 @@
 import { tenantId } from '../tenant'
 import { useState, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { describeApiError } from '../apiError'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -64,7 +65,7 @@ async function fetchJSON<T>(path: string, opts?: RequestInit): Promise<T> {
   })
   if (!res.ok) {
     const body = await res.json().catch(() => ({}))
-    throw new Error((body as { detail?: string }).detail ?? `HTTP ${res.status}`)
+    throw new Error(describeApiError(body, res.status))
   }
   return res.json() as Promise<T>
 }

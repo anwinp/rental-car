@@ -9,6 +9,8 @@ from sqlalchemy import Boolean, DateTime, Integer, Numeric, SmallInteger, String
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
+from app.core.pg_types import pg_enum
+
 
 class Base(DeclarativeBase):
     pass
@@ -91,11 +93,11 @@ class Vehicle(Base):
     # ── Powertrain ───────────────────────────────────────────────────────────
     # Using Text instead of enum types so we avoid SQLAlchemy enum migration issues;
     # DB CHECK constraints enforce valid values.
-    transmission: Mapped[str] = mapped_column(Text, nullable=False, server_default="AUTOMATIC")
+    transmission: Mapped[str] = mapped_column(pg_enum("transmission_type"), nullable=False, server_default="AUTOMATIC")
     drive_type: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     engine_displacement_l: Mapped[Optional[Decimal]] = mapped_column(Numeric(4, 2), nullable=True)
     cylinder_count: Mapped[Optional[int]] = mapped_column(SmallInteger, nullable=True)
-    fuel_type: Mapped[str] = mapped_column(Text, nullable=False, server_default="GASOLINE")
+    fuel_type: Mapped[str] = mapped_column(pg_enum("fuel_type"), nullable=False, server_default="GASOLINE")
     fuel_tank_capacity_gal: Mapped[Optional[Decimal]] = mapped_column(Numeric(6, 2), nullable=True)
     battery_capacity_kwh: Mapped[Optional[Decimal]] = mapped_column(Numeric(6, 2), nullable=True)
     epa_range_miles: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
@@ -116,7 +118,7 @@ class Vehicle(Base):
     home_location_id: Mapped[str] = mapped_column(UUID(as_uuid=False), nullable=False)
     current_location_id: Mapped[Optional[str]] = mapped_column(UUID(as_uuid=False), nullable=True)
     # status stores vehicle_status enum values (13 values, GAP-003)
-    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="STAGING")
+    status: Mapped[str] = mapped_column(pg_enum("vehicle_status"), nullable=False, server_default="STAGING")
     odometer_current: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     odometer_unit: Mapped[str] = mapped_column(Text, nullable=False, server_default="MILES")
     fuel_level_pct: Mapped[Optional[int]] = mapped_column(SmallInteger, nullable=True)
@@ -130,11 +132,11 @@ class Vehicle(Base):
     residual_value: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2), nullable=True)
     book_value: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2), nullable=True)
     depreciation_method: Mapped[str] = mapped_column(
-        Text, nullable=False, server_default="STRAIGHT_LINE"
+        pg_enum("depreciation_method"), nullable=False, server_default="STRAIGHT_LINE"
     )
     useful_life_months: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     estimated_life_miles: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    fleet_type: Mapped[str] = mapped_column(Text, nullable=False, server_default="OWNED")
+    fleet_type: Mapped[str] = mapped_column(pg_enum("fleet_type"), nullable=False, server_default="OWNED")
     lease_reference: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     target_disposal_miles: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     target_disposal_months: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
@@ -186,8 +188,8 @@ class VehicleStatusLog(Base):
     )
     tenant_id: Mapped[str] = mapped_column(UUID(as_uuid=False), nullable=False)
     vehicle_id: Mapped[str] = mapped_column(UUID(as_uuid=False), nullable=False)
-    previous_status: Mapped[str] = mapped_column(Text, nullable=False)
-    new_status: Mapped[str] = mapped_column(Text, nullable=False)
+    previous_status: Mapped[str] = mapped_column(pg_enum("vehicle_status"), nullable=False)
+    new_status: Mapped[str] = mapped_column(pg_enum("vehicle_status"), nullable=False)
     reason_code: Mapped[str] = mapped_column(Text, nullable=False)
     reason_detail: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     linked_record_type: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -219,7 +221,7 @@ class VehicleBlock(Base):
     tenant_id: Mapped[str] = mapped_column(UUID(as_uuid=False), nullable=False)
     vehicle_id: Mapped[str] = mapped_column(UUID(as_uuid=False), nullable=False)
     # block_type stores vehicle_block_type enum values
-    block_type: Mapped[str] = mapped_column(Text, nullable=False)
+    block_type: Mapped[str] = mapped_column(pg_enum("vehicle_block_type"), nullable=False)
     start_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     end_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     reservation_id: Mapped[Optional[str]] = mapped_column(UUID(as_uuid=False), nullable=True)

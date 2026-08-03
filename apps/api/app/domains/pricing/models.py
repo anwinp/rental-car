@@ -17,8 +17,10 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+
+from app.core.pg_types import pg_enum
 
 
 class Base(DeclarativeBase):
@@ -39,14 +41,17 @@ class RateCode(Base):
     rate_code_id: Mapped[str] = mapped_column(
         UUID(as_uuid=False), primary_key=True, server_default=func.uuid_generate_v4()
     )
-    tenant_id: Mapped[str] = mapped_column(
-        UUID(as_uuid=False), ForeignKey("tenants.tenant_id"), nullable=False
-    )
+    # No ORM-level ForeignKey — `tenants` is in another domain's registry.
+    # Same failure as the locations FK below: NoReferencedTableError on every
+    # insert, so POST /pricing/rate-codes had never once succeeded. The
+    # constraint is real and enforced in Postgres; it just cannot be expressed
+    # here. See the longer note on RateScheduleItem.location_id.
+    tenant_id: Mapped[str] = mapped_column(UUID(as_uuid=False), nullable=False)
     code: Mapped[str] = mapped_column(Text, nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False)
 
     # rate_type uses DB enum rate_type — stored as text for ORM compatibility
-    rate_type: Mapped[str] = mapped_column(Text, nullable=False)
+    rate_type: Mapped[str] = mapped_column(pg_enum("rate_type"), nullable=False)
 
     market_segment: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     currency: Mapped[str] = mapped_column(String(3), nullable=False, server_default="USD")
@@ -69,14 +74,17 @@ class RateCode(Base):
     location_scope: Mapped[str] = mapped_column(
         Text, nullable=False, server_default="ALL"
     )
+    # uuid[] in Postgres, not JSONB — unlike blackout_dates above, which really
+    # is JSONB. Declaring these as JSONB made asyncpg bind them as `$n::JSONB`
+    # and Postgres refused the cast, so creating a rate code always failed.
     location_ids: Mapped[list] = mapped_column(
-        JSONB, nullable=False, server_default="[]"
+        ARRAY(UUID(as_uuid=False)), nullable=False, server_default="{}"
     )
     vehicle_class_scope: Mapped[str] = mapped_column(
         Text, nullable=False, server_default="ALL"
     )
     vehicle_class_ids: Mapped[list] = mapped_column(
-        JSONB, nullable=False, server_default="[]"
+        ARRAY(UUID(as_uuid=False)), nullable=False, server_default="{}"
     )
 
     min_rental_days: Mapped[int] = mapped_column(
@@ -249,10 +257,9 @@ class ExtrasCatalog(Base):
     extra_id: Mapped[str] = mapped_column(
         UUID(as_uuid=False), primary_key=True, server_default=func.uuid_generate_v4()
     )
-    # NULL = system reference extra
-    tenant_id: Mapped[Optional[str]] = mapped_column(
-        UUID(as_uuid=False), ForeignKey("tenants.tenant_id"), nullable=True
-    )
+    # NULL = system reference extra. No ORM-level ForeignKey — cross-registry,
+    # same as RateCode.tenant_id above.
+    tenant_id: Mapped[Optional[str]] = mapped_column(UUID(as_uuid=False), nullable=True)
     code: Mapped[str] = mapped_column(Text, nullable=False)
     name: Mapped[str] = mapped_column(Text, nullable=False)
 

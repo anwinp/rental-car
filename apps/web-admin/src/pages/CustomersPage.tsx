@@ -1,5 +1,6 @@
 import { tenantId } from '../tenant'
 import { useState, useEffect, useCallback, type FormEvent } from 'react'
+import { describeApiError } from '../apiError'
 
 // ── API helper ────────────────────────────────────────────────────────────────
 async function fetchJSON(path: string, opts?: RequestInit) {
@@ -14,7 +15,7 @@ async function fetchJSON(path: string, opts?: RequestInit) {
   })
   if (!res.ok) {
     const body = await res.json().catch(() => ({}))
-    throw new Error((body as { detail?: string }).detail ?? `HTTP ${res.status}`)
+    throw new Error(describeApiError(body, res.status))
   }
   return res.json()
 }

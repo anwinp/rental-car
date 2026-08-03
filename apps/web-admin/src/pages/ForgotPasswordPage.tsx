@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from 'react'
+import { describeApiError } from '../apiError'
 
 /**
  * Password recovery for staff.
@@ -40,8 +41,7 @@ export function ForgotPasswordPage() {
       }
       const body = await res.json().catch(() => ({}))
       setError(
-        (body as { detail?: string }).detail ??
-          'Could not send the reset email. Try again in a moment.',
+        describeApiError(body, res.status),
       )
     } catch {
       setError('Could not reach the server.')

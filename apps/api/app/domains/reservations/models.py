@@ -19,6 +19,8 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
+from app.core.pg_types import pg_enum
+
 
 class Base(DeclarativeBase):
     pass
@@ -44,7 +46,7 @@ class Reservation(Base):
     confirmation_number: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
 
     # reservation_status DB enum stored as text
-    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="QUOTE")
+    status: Mapped[str] = mapped_column(pg_enum("reservation_status"), nullable=False, server_default="QUOTE")
 
     # Version counter incremented on each modification
     version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
@@ -193,7 +195,7 @@ class ReservationVersion(Base):
     )
     version_number: Mapped[int] = mapped_column(Integer, nullable=False)
 
-    status_at_version: Mapped[str] = mapped_column(Text, nullable=False)
+    status_at_version: Mapped[str] = mapped_column(pg_enum("reservation_status"), nullable=False)
     pickup_location_id: Mapped[str] = mapped_column(UUID(as_uuid=False), nullable=False)
     dropoff_location_id: Mapped[str] = mapped_column(UUID(as_uuid=False), nullable=False)
     pickup_datetime: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

@@ -1,23 +1,35 @@
 from __future__ import annotations
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 from uuid import UUID
 from pydantic import BaseModel
 
+# These mirror the CHECK constraints on public.tasks. They are spelled out here
+# so a wrong value is a 422 naming the accepted set, rather than the 500 that
+# an unvalidated string produced when Postgres rejected the INSERT.
+TaskType = Literal[
+    "PICKUP_PREP", "RETURN_INSPECTION", "CUSTOMER_DROPOFF", "DOC_COLLECTION",
+    "HANDOVER", "MAINTENANCE", "TURNAROUND", "RECALL_HOLD", "INSPECTION",
+    "HOLD", "STAGING", "CHARGING", "GENERAL",
+]
+TaskPriority = Literal["HIGH", "MEDIUM", "LOW"]
+TaskStatus = Literal["TODO", "IN_PROGRESS", "BLOCKED", "DONE"]
+
+
 class TaskCreate(BaseModel):
-    task_type: str
+    task_type: TaskType
     title: str
     notes: Optional[str] = None
     due_datetime: Optional[datetime] = None
-    priority: str = "MEDIUM"
+    priority: TaskPriority = "MEDIUM"
     assignee_id: Optional[UUID] = None
     vehicle_id: Optional[UUID] = None
     reservation_id: Optional[UUID] = None
     location_id: Optional[UUID] = None
 
 class TaskUpdate(BaseModel):
-    status: Optional[str] = None
-    priority: Optional[str] = None
+    status: Optional[TaskStatus] = None
+    priority: Optional[TaskPriority] = None
     notes: Optional[str] = None
     due_datetime: Optional[datetime] = None
     assignee_id: Optional[UUID] = None

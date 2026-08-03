@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useAuth } from '@rcm/ui/auth'
 import { UserRole } from '@rcm/shared-types'
+import { throwApiError } from '../apiError'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -55,8 +56,7 @@ async function apiCreateLocation(payload: Record<string, unknown>): Promise<Loca
     body: JSON.stringify(payload),
   })
   if (!res.ok) {
-    const err = await res.json().catch(() => ({})) as { detail?: string }
-    throw new Error(err?.detail ?? `Error ${res.status}`)
+    await throwApiError(res)
   }
   return res.json()
 }
@@ -69,8 +69,7 @@ async function apiUpdateLocation(id: string, payload: Record<string, unknown>): 
     body: JSON.stringify(payload),
   })
   if (!res.ok) {
-    const err = await res.json().catch(() => ({})) as { detail?: string }
-    throw new Error(err?.detail ?? `Error ${res.status}`)
+    await throwApiError(res)
   }
   return res.json()
 }
@@ -81,8 +80,7 @@ async function apiDeactivateLocation(id: string): Promise<Location> {
     credentials: 'include',
   })
   if (!res.ok) {
-    const err = await res.json().catch(() => ({})) as { detail?: string }
-    throw new Error(err?.detail ?? `Error ${res.status}`)
+    await throwApiError(res)
   }
   return res.json()
 }
@@ -327,14 +325,19 @@ function LocationModal({
               </div>
             </div>
 
-            {apiError && (
-              <div className="rounded-lg px-3.5 py-3 text-[13px]" style={{ background: 'var(--danger-bg)', color: 'var(--danger)', border: '1px solid rgba(244,114,114,0.25)' }}>
-                {apiError}
-              </div>
-            )}
           </div>
 
-          <div className="flex justify-end gap-2.5 px-6 py-4 shrink-0" style={{ borderTop: '1px solid var(--border)' }}>
+          {/* The error belongs beside the button that caused it. It used to be
+              the last element inside the scrolling form body, so on a form
+              taller than the modal it rendered below the fold: you pressed Add
+              Location, nothing visibly happened, and the reason was off-screen.
+              This row is outside the scroll container, so it is always seen. */}
+          <div className="flex items-center justify-end gap-2.5 px-6 py-4 shrink-0" style={{ borderTop: '1px solid var(--border)' }}>
+            {apiError && (
+              <p className="mr-auto text-[12px] leading-snug" style={{ color: 'var(--danger)' }} role="alert">
+                {apiError}
+              </p>
+            )}
             <button type="button" onClick={onClose} className="btn-secondary">Cancel</button>
             <button type="submit" disabled={isPending} className="btn-primary disabled:opacity-50">
               {isPending ? 'Saving…' : editId ? 'Save Changes' : 'Add Location'}

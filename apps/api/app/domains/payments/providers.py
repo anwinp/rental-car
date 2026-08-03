@@ -85,9 +85,9 @@ class Provider:
 REGISTRY: dict[str, Provider] = {
     "stripe": Provider(
         key="stripe",
-        label="Stripe",
-        blurb="Take cards online and at the counter. Stripe handles your "
-              "account setup and pays out to your bank.",
+        label="Stripe (one-click setup)",
+        blurb="Stripe creates and verifies your account for you, and pays out "
+              "to your bank.",
         kind="server_rest",
         onboarding="managed",
         # Nothing to type: the tenant is redirected to Stripe and comes back.
@@ -100,12 +100,23 @@ REGISTRY: dict[str, Provider] = {
             separate_deposit_auth=True,
             card_present="stripe_terminal",
         ),
+        # Managed onboarding creates the connected account through *our* Stripe
+        # account, which means it only works once Connect is signed up for on
+        # the platform side. Until then the button would 409, and a control that
+        # cannot work is worse than one that explains itself. Nothing else in
+        # the design depends on this: a tenant supplying their own keys never
+        # touches our account at all.
+        available=False,
+        unavailable_reason=(
+            "One-click setup is not switched on yet. Use the option below to "
+            "connect the Stripe account you already have."
+        ),
     ),
     "stripe_keys": Provider(
         key="stripe_keys",
-        label="Stripe (own API keys)",
-        blurb="Already have a Stripe account you manage yourself? Paste its "
-              "keys instead of connecting.",
+        label="Stripe",
+        blurb="Connect your own Stripe account. Payments go straight to you — "
+              "we never hold your money.",
         kind="server_rest",
         onboarding="credentials",
         fields=(

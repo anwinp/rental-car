@@ -4,7 +4,7 @@ from __future__ import annotations
 import csv
 import io
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 from uuid import UUID
 
@@ -434,6 +434,88 @@ async def search_fleet(
 
 
 # ── Availability ──────────────────────────────────────────────────────────────
+
+
+@router.get(
+    "/availability/grid",
+    summary="Availability for every class at one location",
+)
+async def get_availability_grid(
+    location_id: str | None = Query(default=None),
+    pickup_dt: datetime | None = Query(default=None),
+    dropoff_dt: datetime | None = Query(default=None),
+    session: AsyncSession = Depends(get_session),
+    claims: UserClaims = Depends(get_current_user),
+) -> dict:
+    """Every class and how many are free over a window, for one location or all.
+
+    Two callers wanted this and neither had it. The counter's availability grid
+    was calling `/fleet/availability/{locationId}`, which is not a route and
+    returned 404 on every render. The OTA channel inbox was calling
+    `/reservations/availability`, which is not a route either — and worse, it
+    collided with `/reservations/{reservation_id}`, so "availability" was parsed
+    as a UUID and came back 422.
+
+    `/availability` below answers for a single class, which is the right shape
+    for a booking flow and the wrong one for a grid.
+
+    location_id is optional because an OTA lead does not carry one: the channel
+    tells you a class and some dates, and the question is whether the fleet can
+    cover it anywhere. Answering that by looping the per-class endpoint would be
+    locations × classes round trips, so this is one grouped query instead —
+    written to match get_available_count exactly: the same bookable statuses and
+    the same half-open interval overlap, so the grid and the booking flow cannot
+    disagree about whether a car is free.
+
+    The window defaults to the next 24 hours, because a counter agent asking
+    "what have we got?" means now, not a date range they have to supply.
+    """
+    start = pickup_dt or datetime.now(timezone.utc)
+    end = dropoff_dt or (start + timedelta(days=1))
+    if end <= start:
+        raise HTTPException(
+            status_code=422, detail="dropoff_dt must be after pickup_dt.")
+
+    from sqlalchemy import text as sqlt
+
+    rows = (await session.execute(sqlt("""
+        SELECT vc.class_id, vc.name, vc.sipp_prefix,
+               count(v.vehicle_id) AS available_count
+          FROM vehicle_classes vc
+          LEFT JOIN vehicles v
+            ON v.vehicle_class_id = vc.class_id
+           AND v.tenant_id = :tid
+           AND v.deleted_at IS NULL
+           AND v.status::text IN ('AVAILABLE', 'ON_RENT', 'RETURNING')
+           AND (CAST(:loc AS uuid) IS NULL OR v.home_location_id = CAST(:loc AS uuid))
+           AND NOT EXISTS (
+                 SELECT 1 FROM vehicle_blocks b
+                  WHERE b.vehicle_id = v.vehicle_id
+                    AND b.deleted_at IS NULL
+                    AND tstzrange(b.start_time, b.end_time, '[)')
+                     && tstzrange(:start, :end, '[)')
+               )
+         WHERE vc.tenant_id = :tid AND vc.is_active
+         GROUP BY vc.class_id, vc.name, vc.sipp_prefix, vc.sort_order
+         ORDER BY vc.sort_order, vc.name
+    """), {"tid": str(claims.tenant_id), "loc": location_id,
+           "start": start, "end": end})).mappings().all()
+
+    return {
+        "locationId": location_id,
+        "pickupDt": start.isoformat(),
+        "dropoffDt": end.isoformat(),
+        "classes": [
+            {
+                "classId": str(r["class_id"]),
+                "classCode": _derive_class_code(r["name"], r["sipp_prefix"]),
+                "className": r["name"],
+                "availableCount": r["available_count"],
+            }
+            for r in rows
+        ],
+        "updatedAt": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 @router.get(

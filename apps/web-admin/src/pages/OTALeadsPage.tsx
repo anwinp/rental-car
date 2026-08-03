@@ -67,11 +67,33 @@ export default function OTALeadsPage() {
   async function checkAvailability(lead: OTALead) {
     if (!lead.pickup_date || !lead.return_date) return
     try {
-      const res = await fetch(
-        `/api/v1/reservations/availability?pickup_date=${lead.pickup_date}&return_date=${lead.return_date}&vehicle_class_name=${encodeURIComponent(lead.vehicle_class_requested)}`,
-        { credentials: 'include', headers: HEADERS },
+      // Was /reservations/availability, which is not a route — and it collided
+      // with /reservations/{reservation_id}, so the word "availability" was
+      // parsed as a UUID and this always came back 422. A lead carries no
+      // location, so this asks across the whole fleet.
+      const p = new URLSearchParams({
+        pickup_dt: `${lead.pickup_date}T00:00:00Z`,
+        dropoff_dt: `${lead.return_date}T00:00:00Z`,
+      })
+      const res = await fetch(`/api/v1/fleet/availability/grid?${p}`,
+        { credentials: 'include', headers: HEADERS })
+      if (!res.ok) return
+      const body = await res.json() as {
+        classes: { classCode: string; className: string; availableCount: number }[]
+      }
+      // The channel sends a class as free text ("SUV", "Intermediate"), so
+      // match on name or SIPP code rather than an id the OTA does not know.
+      const wanted = lead.vehicle_class_requested.trim().toLowerCase()
+      const hit = body.classes.find(
+        c => c.className.toLowerCase() === wanted || c.classCode.toLowerCase() === wanted,
       )
-      if (res.ok) { const data = await res.json(); setAvailability(prev => ({ ...prev, [lead.lead_id]: data as AvailCheck })) }
+      setAvailability(prev => ({
+        ...prev,
+        [lead.lead_id]: {
+          available: (hit?.availableCount ?? 0) > 0,
+          available_count: hit?.availableCount ?? 0,
+        },
+      }))
     } catch {}
   }
 

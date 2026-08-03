@@ -1,6 +1,5 @@
 import { useEffect } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { apiClient } from '@rcm/api-client'
 import { Skeleton } from '@rcm/ui'
 
 interface AvailabilityClass {
@@ -66,13 +65,16 @@ export function AvailabilityGrid({
   const { data, isLoading, isError } = useQuery({
     queryKey,
     queryFn: async () => {
-      const { data, error } = await (apiClient as never as {
-        GET: (path: string, opts: unknown) => Promise<{ data: unknown; error: unknown }>
-      }).GET('/fleet/availability/{locationId}', {
-        params: { path: { locationId } },
-      })
-      if (error) throw error
-      return data as AvailabilityData
+      // Was GET /fleet/availability/{locationId}, which is not a route — this
+      // 404'd on every render, so the grid only ever showed its error state.
+      // It typechecked because the call was made through `apiClient as never`,
+      // which is exactly what stops a wrong path from being caught.
+      const res = await fetch(
+        `/api/v1/fleet/availability/grid?location_id=${encodeURIComponent(locationId)}`,
+        { credentials: 'include' },
+      )
+      if (!res.ok) throw new Error(`Availability unavailable (${res.status})`)
+      return await res.json() as AvailabilityData
     },
     refetchInterval: 30_000,
     staleTime: 25_000,
